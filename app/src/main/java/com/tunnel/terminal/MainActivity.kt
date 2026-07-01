@@ -30,9 +30,8 @@ class MainActivity : ComponentActivity() {
     private var activeExecutorId by mutableStateOf(0)
     private val aiAgent = AIAgent()
     
-    // State untuk AI
     private val chatMessages = mutableStateListOf<ChatMessage>()
-    private var apiKey by mutableStateOf("")
+    private var aiSettings by mutableStateOf(AISettings()) // State untuk pengaturan AI
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -78,13 +77,9 @@ class MainActivity : ComponentActivity() {
                 ModalDrawerSheet(modifier = Modifier.fillMaxHeight(0.9f).background(Color(0xFF1A1A1A))) {
                     AIChatPanel(
                         messages = chatMessages,
-                        apiKey = apiKey,
-                        onApiKeyChanged = { apiKey = it },
-                        onSendPrompt = { prompt -> 
-                            scope.launch {
-                                handleAIPrompt(prompt)
-                            }
-                        },
+                        settings = aiSettings,
+                        onSettingsChanged = { newSettings -> aiSettings = newSettings },
+                        onSendPrompt = { prompt -> scope.launch { handleAIPrompt(prompt) } },
                         onRunCommand = { cmd ->
                             shellExecutors.find { it.id == activeExecutorId }?.executeCommand(cmd)
                             scope.launch { drawerState.close() }
@@ -105,7 +100,6 @@ class MainActivity : ComponentActivity() {
             val terminalHistory by activeExecutor.output.collectAsState()
             var inputText by remember(activeExecutorId) { mutableStateOf("") }
             val scrollState = rememberScrollState()
-
             val tabsData = shellExecutors.mapIndexed { index, executor -> Pair(executor.id, index + 1) }
 
             LaunchedEffect(terminalHistory.size) { scrollState.animateScrollTo(scrollState.maxValue) }
@@ -120,8 +114,7 @@ class MainActivity : ComponentActivity() {
 
             Column(modifier = Modifier.fillMaxSize()) {
                 TabBar(
-                    tabs = tabsData,
-                    activeTabId = activeExecutorId,
+                    tabs = tabsData, activeTabId = activeExecutorId,
                     onTabSelected = { id -> activeExecutorId = id },
                     onNewTab = { lifecycleScope.launch { createNewTab() } },
                     onTabClosed = { id -> closeTab(id) },
@@ -136,8 +129,7 @@ class MainActivity : ComponentActivity() {
                         Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                             Text("tunnel@android:~$ ", color = Color(0xFF00FF00), fontFamily = FontFamily.Monospace, fontSize = 14.sp)
                             BasicTextField(
-                                value = inputText,
-                                onValueChange = { inputText = it },
+                                value = inputText, onValueChange = { inputText = it },
                                 textStyle = TextStyle(color = Color.White, fontFamily = FontFamily.Monospace, fontSize = 14.sp),
                                 cursorBrush = SolidColor(Color.White),
                                 modifier = Modifier.fillMaxWidth().onPreviewKeyEvent { event ->
@@ -158,27 +150,21 @@ class MainActivity : ComponentActivity() {
 
     private suspend fun handleAIPrompt(prompt: String) {
         chatMessages.add(ChatMessage("user", prompt, false))
-        
         val activeExecutor = shellExecutors.find { it.id == activeExecutorId }
         val context = activeExecutor?.output?.value?.takeLast(5)?.joinToString("\n") ?: "Terminal kosong"
         
-        val response = aiAgent.askAI(apiKey, prompt, context)
+        // Gunakan setings yang dinamis
+        val response = aiAgent.askAI(aiSettings, prompt, context)
         
-        // Cek apakah response mengandung blok perintah bash ```bash ... ```
         val bashRegex = Regex("```bash\\n([\\s\\S]*?)\\n```")
         val match = bashRegex.find(response)
         
         if (match != null) {
             val command = match.groupValues[1].trim()
-            // Tampilkan teks penjelasan AI (jika ada sebelum blok kode)
             val explanation = response.substring(0, match.range.first).trim()
-            if (explanation.isNotEmpty()) {
-                chatMessages.add(ChatMessage("assistant", explanation, false))
-            }
-            // Tampilkan perintah dengan flag isCommand = true agar tombol Run muncul
+            if (explanation.isNotEmpty()) chatMessages.add(ChatMessage("assistant", explanation, false))
             chatMessages.add(ChatMessage("assistant", command, true))
         } else {
-            // Jika tidak ada blok bash, tampilkan sebagai teks biasa
             chatMessages.add(ChatMessage("assistant", response, false))
         }
     }

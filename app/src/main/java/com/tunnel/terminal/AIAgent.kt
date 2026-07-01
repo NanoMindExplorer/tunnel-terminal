@@ -13,23 +13,25 @@ import java.net.URL
 data class ChatMessage(val role: String, val content: String, val isCommand: Boolean = false)
 
 class AIAgent {
-    // Format OpenAI API (Bisa diganti Base URL ke OpenRouter, Groq, dll)
-    private val apiUrl = "https://api.openai.com/v1/chat/completions"
-    private val model = "gpt-3.5-turbo" // Bisa diubah ke gpt-4o-mini atau lainnya
-
-    suspend fun askAI(apiKey: String, userPrompt: String, terminalContext: String): String {
+    suspend fun askAI(settings: AISettings, userPrompt: String, terminalContext: String): String {
         return withContext(Dispatchers.IO) {
             try {
+                // Gabungkan base URL dengan endpoint standar
+                val apiUrl = "${settings.baseUrl.trimEnd('/')}/chat/completions"
                 val url = URL(apiUrl)
                 val connection = url.openConnection() as HttpURLConnection
                 connection.requestMethod = "POST"
                 connection.setRequestProperty("Content-Type", "application/json")
-                connection.setRequestProperty("Authorization", "Bearer $apiKey")
+                connection.setRequestProperty("Authorization", "Bearer ${settings.apiKey}")
+                
+                // Tambahan header untuk OpenRouter (Opsional, tidak berdampak jika pakai provider lain)
+                connection.setRequestProperty("HTTP-Referer", "https://github.com/NanoMindExplorer/tunnel-terminal")
+                connection.setRequestProperty("X-Title", "Tunnel Terminal")
+                
                 connection.connectTimeout = 30000
                 connection.readTimeout = 30000
                 connection.doOutput = true
 
-                // System prompt yang menginstruksikan AI bertindak sebagai Copilot
                 val systemPrompt = """
                     Anda adalah 'Tunnel AI', asisten terminal copilot untuk perangkat Android.
                     Tugas Anda adalah membantu menulis perintah shell, mendebug error, dan menjelaskan kode.
@@ -41,24 +43,20 @@ class AIAgent {
 
                 val messagesArray = JSONArray()
                 messagesArray.put(JSONObject().put("role", "system").put("content", systemPrompt))
-                
-                // Tambahkan konteks terminal
                 val contextPrompt = "Konteks Terminal Saat Ini:\n$terminalContext\n\nPermintaan Pengguna: $userPrompt"
                 messagesArray.put(JSONObject().put("role", "user").put("content", contextPrompt))
 
                 val requestBody = JSONObject()
-                    .put("model", model)
+                    .put("model", settings.modelName)
                     .put("messages", messagesArray)
                     .put("temperature", 0.7)
                     .toString()
 
-                // Kirim request
                 val writer = OutputStreamWriter(connection.outputStream)
                 writer.write(requestBody)
                 writer.flush()
                 writer.close()
 
-                // Baca response
                 val responseCode = connection.responseCode
                 val inputStream = if (responseCode in 200..299) connection.inputStream else connection.errorStream
                 val reader = BufferedReader(InputStreamReader(inputStream))
@@ -70,10 +68,9 @@ class AIAgent {
                 reader.close()
 
                 if (responseCode !in 200..299) {
-                    return@withContext "Error API ($responseCode): ${response.toString().take(200)}"
+                    return@withContext "Error API ($responseCode): ${response.toString().take(300)}"
                 }
 
-                // Parse JSON response
                 val jsonResponse = JSONObject(response.toString())
                 val aiMessage = jsonResponse.getJSONArray("choices")
                     .getJSONObject(0)
