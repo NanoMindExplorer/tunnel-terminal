@@ -14,6 +14,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
@@ -23,93 +24,43 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import kotlinx.coroutines.Dispatchers
+import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-import java.io.BufferedReader
-import java.io.InputStreamReader
 
 class MainActivity : ComponentActivity() {
+    private val shellExecutor = ShellExecutor()
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        
+        // Mulai shell saat aplikasi dibuka
+        shellExecutor.start()
+
         setContent {
             MaterialTheme {
                 Surface(modifier = Modifier.fillMaxSize(), color = Color.Black) {
-                    TerminalScreen()
+                    TerminalScreen(shellExecutor)
                 }
             }
         }
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        shellExecutor.destroy()
     }
 }
 
 @Composable
-fun TerminalScreen() {
-    val terminalHistory = remember { 
-        mutableStateListOf(
-            "Tunnel Terminal v1.0 (Phase 1)", 
-            "Mesin eksekusi aktif. Ketik 'ls', 'pwd', atau 'date' lalu tekan Enter.", 
-            ""
-        ) 
-    }
+fun TerminalScreen(shellExecutor: ShellExecutor) {
+    // Kumpulkan output dari ShellExecutor
+    val terminalHistory by shellExecutor.output.collectAsState()
     var inputText by remember { mutableStateOf("") }
     val scrollState = rememberScrollState()
-    val scope = rememberCoroutineScope()
 
     // Auto scroll ke bawah saat ada teks baru
     LaunchedEffect(terminalHistory.size) {
         scrollState.animateScrollTo(scrollState.maxValue)
-    }
-
-    fun executeCommand(command: String) {
-        // Tambahkan perintah yang diketik ke history
-        terminalHistory.add("tunnel@android:~$ $command")
-        inputText = ""
-
-        // Perintah bawaan (built-in)
-        if (command == "clear") {
-            terminalHistory.clear()
-            return
-        }
-
-        // Eksekusi perintah shell di background thread
-        scope.launch {
-            try {
-                val process = Runtime.getRuntime().exec(arrayOf("sh", "-c", command))
-                val reader = BufferedReader(InputStreamReader(process.inputStream))
-                val errorReader = BufferedReader(InputStreamReader(process.errorStream))
-                
-                // Baca output sukses
-                val output = withContext(Dispatchers.IO) {
-                    var text = ""
-                    var line = reader.readLine()
-                    while (line != null) {
-                        text += line + "\n"
-                        line = reader.readLine()
-                    }
-                    
-                    // Baca output error
-                    var error = ""
-                    line = errorReader.readLine()
-                    while (line != null) {
-                        error += line + "\n"
-                        line = errorReader.readLine()
-                    }
-                    
-                    Pair(text, error)
-                }
-                
-                // Tampilkan output ke layar
-                if (output.first.isNotEmpty()) {
-                    output.first.trim().split("\n").forEach { terminalHistory.add(it) }
-                }
-                if (output.second.isNotEmpty()) {
-                    output.second.trim().split("\n").forEach { terminalHistory.add(it) }
-                }
-                
-            } catch (e: Exception) {
-                terminalHistory.add("Error: ${e.message}")
-            }
-        }
     }
 
     Column(
@@ -118,7 +69,6 @@ fun TerminalScreen() {
             .padding(8.dp)
             .verticalScroll(scrollState)
     ) {
-        // Menampilkan History Terminal
         terminalHistory.forEach { line ->
             Text(
                 text = line,
@@ -128,11 +78,7 @@ fun TerminalScreen() {
             )
         }
 
-        // Area Input Pengguna
-        Row(
-            modifier = Modifier.fillMaxWidth(), 
-            verticalAlignment = Alignment.CenterVertically
-        ) {
+        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Text(
                 text = "tunnel@android:~$ ",
                 color = Color(0xFF00FF00),
@@ -147,14 +93,18 @@ fun TerminalScreen() {
                     fontFamily = FontFamily.Monospace,
                     fontSize = 14.sp
                 ),
-                cursorBrush = androidx.compose.ui.graphics.SolidColor(Color.White),
-                // Tangkap tombol Enter dari keyboard fisik/soft keyboard
+                cursorBrush = SolidColor(Color.White),
                 modifier = Modifier
                     .fillMaxWidth()
                     .onPreviewKeyEvent { event ->
                         if (event.key == Key.Enter && event.type == KeyEventType.KeyUp) {
-                            executeCommand(inputText)
-                            true // Konsumsi event
+                            if (inputText.trim() == "clear") {
+                                shellExecutor.clearScreen()
+                            } else {
+                                shellExecutor.executeCommand(inputText)
+                            }
+                            inputText = ""
+                            true
                         } else {
                             false
                         }
