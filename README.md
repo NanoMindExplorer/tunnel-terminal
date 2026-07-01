@@ -11,10 +11,10 @@ Tidak menggunakan trik Java `Runtime.exec()`. Tunnel Terminal menggunakan `forkp
 ### 2. AI Auto-Pilot (Agentic Workflow)
 Alih-alih sekadar memberi saran, AI bisa menjalankan rangkaian perintah secara otomatis. Cukup minta *"Setup server Node.js Express dan jalankan"*, AI akan menginstal, membuat file, dan menjalankannya secara berurutan.
 
-### 3. Multi-Provider AI (No Monopoly)
+### 3. Multi-Provider AI 
 Pengguna bebas memilih provider AI favorit mereka:
-- OpenAI (GPT-4o)
-- Anthropic Claude (via OpenRouter)
+- OpenAI 
+- Anthropic Claude
 - Google Gemini
 - DeepSeek Coder
 - Groq (Llama 3)
