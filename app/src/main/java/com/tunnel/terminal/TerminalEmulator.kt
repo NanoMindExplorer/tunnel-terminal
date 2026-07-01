@@ -61,7 +61,7 @@ class TerminalEmulator {
     }
 
     private fun printText(text: String) {
-        for (ch in text.toCharArray()) { // Perbaikan: Gunakan toCharArray() agar tipe Char terdeteksi
+        for (ch in text.toCharArray()) {
             when (ch) {
                 '\n' -> { cursorCol = 0; cursorRow++ }
                 '\r' -> cursorCol = 0
