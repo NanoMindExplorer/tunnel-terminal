@@ -53,7 +53,7 @@ class TerminalEmulator {
             printText(textBefore)
             val params = match.groupValues[1]
             val command = match.groupValues[2]
-            handleAnsiCommand(params, command)
+            handleAnsiCommand(params, command.first()) // PERBAIKAN: Konversi String ke Char menggunakan .first()
             lastIndex = match.range.last + 1
         }
         val remainingText = data.substring(lastIndex)
