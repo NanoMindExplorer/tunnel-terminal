@@ -3,6 +3,7 @@ package com.tunnel.terminal
 import android.content.Context
 import android.content.Intent
 import android.os.Bundle
+import android.view.KeyEvent
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.*
@@ -36,6 +37,11 @@ class MainActivity : ComponentActivity() {
     
     private lateinit var snippetManager: SnippetManager
     private val snippetsState = mutableStateListOf<Snippet>()
+
+    // State untuk Command History
+    private var currentCommandBuffer = ""
+    private val commandHistory = mutableListOf<String>()
+    private var historyIndex = -1
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -106,13 +112,53 @@ class MainActivity : ComponentActivity() {
         stopService(Intent(this, TerminalForegroundService::class.java))
     }
 
+    // Intercept Tombol Volume Fisik untuk Navigasi History
+    override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
+        if (keyCode == KeyEvent.KEYCODE_VOLUME_UP) {
+            navigateHistory(forward = false)
+            return true // Cegah suara volume sistem
+        } else if (keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) {
+            navigateHistory(forward = true)
+            return true // Cegah suara volume sistem
+        }
+        return super.onKeyDown(keyCode, event)
+    }
+
+    override fun onKeyUp(keyCode: Int, event: KeyEvent?): Boolean {
+        if (keyCode == KeyEvent.KEYCODE_VOLUME_UP || keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) {
+            return true // Cegah popup UI volume sistem
+        }
+        return super.onKeyUp(keyCode, event)
+    }
+
+    private fun navigateHistory(forward: Boolean) {
+        if (commandHistory.isEmpty()) return
+        val activeExecutor = shellExecutors.find { it.id == activeExecutorId } ?: return
+        
+        if (forward) {
+            if (historyIndex > 0) historyIndex--
+            else if (historyIndex == 0) historyIndex = -1
+        } else {
+            if (historyIndex < commandHistory.size - 1) historyIndex++
+        }
+
+        // Kirim Ctrl+U ke shell untuk menghapus baris saat ini
+        activeExecutor.writeRaw("\u0015")
+        currentCommandBuffer = ""
+
+        if (historyIndex != -1) {
+            val cmd = commandHistory[commandHistory.size - 1 - historyIndex]
+            currentCommandBuffer = cmd
+            activeExecutor.writeRaw(cmd)
+        }
+    }
+
     @OptIn(ExperimentalMaterial3Api::class)
     @Composable
     fun TerminalApp() {
         val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
         val scope = rememberCoroutineScope()
 
-        // State untuk Modifier Keys
         var isCtrlActive by remember { mutableStateOf(false) }
         var isAltActive by remember { mutableStateOf(false) }
 
@@ -163,7 +209,6 @@ class MainActivity : ComponentActivity() {
             val screenDirty by activeExecutor.screenDirty.collectAsState()
             val tabsData = shellExecutors.mapIndexed { index, executor -> Pair(executor.id, index + 1) }
             var hiddenInput by remember { mutableStateOf("") }
-            var currentCommandBuffer by remember { mutableStateOf("") }
 
             LaunchedEffect(activeExecutor.lastCommandOutput.value) {
                 val lastOut = activeExecutor.lastCommandOutput.value.lowercase()
@@ -179,14 +224,20 @@ class MainActivity : ComponentActivity() {
                     "ESC" -> "\u001B"
                     "TAB" -> "\t"
                     "↑" -> "\u001B[A"; "↓" -> "\u001B[B"; "→" -> "\u001B[C"; "←" -> "\u001B[D"
-                    "CTRL" -> { isCtrlActive = !isCtrlActive; "" } // Toggle CTRL
-                    "ALT" -> { isAltActive = !isAltActive; "" }    // Toggle ALT
+                    "CTRL" -> { isCtrlActive = !isCtrlActive; "" }
+                    "ALT" -> { isAltActive = !isAltActive; "" }
                     else -> key
                 }
                 if (ansiCode.isNotEmpty()) activeExecutor.writeRaw(ansiCode)
             }
 
             fun processInput(input: String) {
+                val cmd = input.trim().replace("\n", "")
+                if (cmd.isNotEmpty()) {
+                    commandHistory.add(cmd)
+                }
+                historyIndex = -1
+
                 if (input.startsWith("open ")) {
                     val fileName = input.removePrefix("open ").trim()
                     val file = File(filesDir, fileName)
@@ -197,17 +248,15 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
-            // Fungsi cerdas untuk menerjemahkan karakter biasa menjadi Control Character
             fun handleChar(char: Char): String {
                 if (isCtrlActive) {
-                    isCtrlActive = false // Reset CTRL setelah dipakai
-                    // Rumus ASCII: Ctrl + char = char - 'a' + 1 (misal: 'c' menjadi 3, 'd' menjadi 4)
+                    isCtrlActive = false
                     val controlChar = (char.lowercaseChar() - 'a' + 1).toChar()
                     return controlChar.toString()
                 }
                 if (isAltActive) {
-                    isAltActive = false // Reset ALT setelah dipakai
-                    return "\u001B$char" // Alt diikuti karakter
+                    isAltActive = false
+                    return "\u001B$char"
                 }
                 return char.toString()
             }
@@ -242,7 +291,6 @@ class MainActivity : ComponentActivity() {
                                         if (currentCommandBuffer.isNotEmpty()) currentCommandBuffer = currentCommandBuffer.dropLast(1)
                                         activeExecutor.writeRaw(typed)
                                     } else {
-                                        // Terjemahkan setiap karakter yang diketik
                                         val translated = typed.map { handleChar(it) }.joinToString("")
                                         currentCommandBuffer += translated
                                         activeExecutor.writeRaw(translated)
@@ -261,7 +309,6 @@ class MainActivity : ComponentActivity() {
                             }
                         )
                     }
-                    // Kirim state CTRL/ALT ke UI agar warna tombol berubah
                     ExtraKeysBar(
                         isCtrlActive = isCtrlActive,
                         isAltActive = isAltActive,

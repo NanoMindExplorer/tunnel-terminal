@@ -32,8 +32,9 @@ class ShellExecutor {
             if (masterFd < 0) return@withContext
 
             pfd = ParcelFileDescriptor.adoptFd(masterFd)
-            emulator.process("Tunnel Terminal v3.0 (Dynamic Resize)\n")
-            emulator.process("NDK PTY + AI Copilot Active.\n\n")
+            emulator.process("Tunnel Terminal v3.1 (History & Volume Keys)\n")
+            emulator.process("NDK PTY + AI Copilot Active.\n")
+            emulator.process("Tip: Use Volume Up/Down to navigate command history.\n\n")
             _screenDirty.value++
             
             Thread.sleep(100)
@@ -44,9 +45,7 @@ class ShellExecutor {
 
     fun resizeTerminal(newRows: Int, newCols: Int, fontSize: Float) {
         if (masterFd < 0) return
-        // Update ukuran di C++ (kirim sinyal SIGWINCH ke proses shell)
         TerminalJni.resize(masterFd, newRows, newCols)
-        // Update ukuran di emulator Kotlin
         emulator.resize(newRows, newCols, androidx.compose.ui.unit.sp(fontSize))
         _screenDirty.value++
     }
