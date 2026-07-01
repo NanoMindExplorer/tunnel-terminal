@@ -12,12 +12,14 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.input.key.*
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
@@ -40,7 +42,6 @@ class MainActivity : ComponentActivity() {
         
         val serviceIntent = Intent(this, TerminalForegroundService::class.java)
         startForegroundService(serviceIntent)
-
         lifecycleScope.launch { createNewTab() }
 
         setContent {
@@ -74,14 +75,12 @@ class MainActivity : ComponentActivity() {
 
     private fun saveSnippet(title: String, command: String) {
         snippetManager.add(title, command)
-        snippetsState.clear()
-        snippetsState.addAll(snippetManager.snippets)
+        snippetsState.clear(); snippetsState.addAll(snippetManager.snippets)
     }
 
     private fun deleteSnippet(index: Int) {
         snippetManager.remove(index)
-        snippetsState.clear()
-        snippetsState.addAll(snippetManager.snippets)
+        snippetsState.clear(); snippetsState.addAll(snippetManager.snippets)
     }
 
     private suspend fun createNewTab() {
@@ -122,6 +121,12 @@ class MainActivity : ComponentActivity() {
                             shellExecutors.find { it.id == activeExecutorId }?.executeCommand(cmd)
                             scope.launch { drawerState.close() }
                         },
+                        onRunAutoPilot = { commands ->
+                            scope.launch {
+                                runAutoPilot(commands)
+                                drawerState.close()
+                            }
+                        },
                         onSaveSnippet = { title, cmd -> saveSnippet(title, cmd) },
                         onRunSnippet = { cmd ->
                             shellExecutors.find { it.id == activeExecutorId }?.executeCommand(cmd)
@@ -143,8 +148,6 @@ class MainActivity : ComponentActivity() {
 
             val screenDirty by activeExecutor.screenDirty.collectAsState()
             val tabsData = shellExecutors.mapIndexed { index, executor -> Pair(executor.id, index + 1) }
-            
-            // Hidden text field to capture keyboard input
             var hiddenInput by remember { mutableStateOf("") }
 
             LaunchedEffect(activeExecutor.lastCommandOutput.value) {
@@ -158,19 +161,11 @@ class MainActivity : ComponentActivity() {
 
             fun handleExtraKey(key: String) {
                 val ansiCode = when (key) {
-                    "ESC" -> "\u001B"
-                    "TAB" -> "\t"
-                    "↑" -> "\u001B[A"
-                    "↓" -> "\u001B[B"
-                    "→" -> "\u001B[C"
-                    "←" -> "\u001B[D"
-                    "CTRL" -> "" // Butuh kombinasi tombol, diabaikan sementara
-                    "ALT" -> ""
+                    "ESC" -> "\u001B"; "TAB" -> "\t"
+                    "↑" -> "\u001B[A"; "↓" -> "\u001B[B"; "→" -> "\u001B[C"; "←" -> "\u001B[D"
                     else -> key
                 }
-                if (ansiCode.isNotEmpty()) {
-                    activeExecutor.writeRaw(ansiCode)
-                }
+                if (ansiCode.isNotEmpty()) activeExecutor.writeRaw(ansiCode)
             }
 
             Box(modifier = Modifier.fillMaxSize()) {
@@ -182,69 +177,62 @@ class MainActivity : ComponentActivity() {
                         onTabClosed = { closeTab(it) },
                         onOpenAI = { scope.launch { drawerState.open() } }
                     )
-
                     Box(modifier = Modifier.weight(1f)) {
-                        // Render Matriks Terminal
                         TerminalScreenView(emulator = activeExecutor.emulator, screenDirty = screenDirty)
-                        
-                        // BasicTextField transparan untuk menangkap keyboard Android
                         BasicTextField(
-                            value = hiddenInput,
-                            onValueChange = { 
-                                if (it.isNotEmpty()) {
-                                    // Langsung kirim keystroke ke PTY
-                                    activeExecutor.writeRaw(it)
-                                    hiddenInput = "" // Kosongkan kembali
-                                }
+                            value = hiddenInput, onValueChange = { 
+                                if (it.isNotEmpty()) { activeExecutor.writeRaw(it); hiddenInput = "" }
                             },
-                            textStyle = TextStyle(color = Color.Transparent), // Teks transparan
-                            cursorBrush = androidx.compose.ui.graphics.SolidColor(Color.Transparent), // Kursor transparan
+                            textStyle = TextStyle(color = Color.Transparent),
+                            cursorBrush = SolidColor(Color.Transparent),
                             modifier = Modifier.fillMaxSize().onPreviewKeyEvent { event ->
                                 if (event.key == Key.Enter && event.type == KeyEventType.KeyUp) {
-                                    activeExecutor.writeRaw("\n")
-                                    hiddenInput = ""
-                                    true
+                                    activeExecutor.writeRaw("\n"); hiddenInput = ""; true
                                 } else false
                             }
                         )
                     }
                     ExtraKeysBar(onKeyPressed = { handleExtraKey(it) })
                 }
-
                 FloatingActionButton(
-                    onClick = {
-                        scope.launch {
-                            handleAIPrompt("Perbaiki error ini.")
-                            drawerState.open()
-                        }
-                    },
+                    onClick = { scope.launch { handleAIPrompt("Perbaiki error ini."); drawerState.open() } },
                     modifier = Modifier.align(Alignment.BottomEnd).padding(16.dp).padding(bottom = 40.dp),
-                    containerColor = Color(0xFF6200EE),
-                    contentColor = Color.White
+                    containerColor = Color(0xFF6200EE), contentColor = Color.White
                 ) { Text("🛠", fontSize = 20.sp) }
             }
+        }
+    }
+
+    // LOGIKA REVOLUSIONER: AI AUTO-PILOT
+    private suspend fun runAutoPilot(commands: List<String>) {
+        val activeExecutor = shellExecutors.find { it.id == activeExecutorId } ?: return
+        for (cmd in commands) {
+            activeExecutor.executeCommand(cmd)
+            delay(3000) // Beri waktu 3 detik untuk sistem menyelesaikan perintah (misal: npm install)
         }
     }
 
     private suspend fun handleAIPrompt(prompt: String) {
         if (isProcessingAI) return
         isProcessingAI = true
-        
         chatMessages.add(ChatMessage("user", prompt, false))
         val activeExecutor = shellExecutors.find { it.id == activeExecutorId }
-        val context = if (activeExecutor?.lastCommandOutput?.value.isNullOrEmpty()) {
-            "Terminal kosong."
-        } else {
-            "Output perintah terakhir:\n${activeExecutor?.lastCommandOutput?.value}"
-        }
+        val context = if (activeExecutor?.lastCommandOutput?.value.isNullOrEmpty()) "Terminal kosong." else "Output terakhir:\n${activeExecutor?.lastCommandOutput?.value}"
         
         val response = aiAgent.askAI(aiSettings, prompt, context)
         val bashRegex = Regex("```bash\\n([\\s\\S]*?)\\n```")
-        val match = bashRegex.find(response)
+        val matches = bashRegex.findAll(response).toList()
         
-        if (match != null) {
-            val command = match.groupValues[1].trim()
-            val explanation = response.substring(0, match.range.first).trim()
+        if (matches.size > 1) {
+            // Jika AI memberikan lebih dari 1 perintah, aktifkan mode Auto-Pilot
+            val commands = matches.map { it.groupValues[1].trim() }
+            val explanation = response.substring(0, matches.first().range.first).trim()
+            if (explanation.isNotEmpty()) chatMessages.add(ChatMessage("assistant", explanation, false))
+            chatMessages.add(ChatMessage("assistant", "Rangkaian perintah siap dieksekusi.", false, commands = commands))
+        } else if (matches.size == 1) {
+            // Jika hanya 1 perintah
+            val command = matches[0].groupValues[1].trim()
+            val explanation = response.substring(0, matches[0].range.first).trim()
             if (explanation.isNotEmpty()) chatMessages.add(ChatMessage("assistant", explanation, false))
             chatMessages.add(ChatMessage("assistant", command, true))
         } else {
