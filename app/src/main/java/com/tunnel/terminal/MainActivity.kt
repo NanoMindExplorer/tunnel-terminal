@@ -5,6 +5,7 @@ import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.BasicTextField
@@ -159,7 +160,6 @@ class MainActivity : ComponentActivity() {
 
             LaunchedEffect(terminalHistory.size) {
                 scrollState.animateScrollTo(scrollState.maxValue)
-                // Auto debug menggunakan lastCommandOutput yang lebih akurat
                 val lastOut = activeExecutor.lastCommandOutput.value.lowercase()
                 if (lastOut.contains("error") || lastOut.contains("not found") || lastOut.contains("exception")) {
                     if (!isProcessingAI && chatMessages.lastOrNull()?.role != "assistant") {
@@ -240,7 +240,6 @@ class MainActivity : ComponentActivity() {
         chatMessages.add(ChatMessage("user", prompt, false))
         val activeExecutor = shellExecutors.find { it.id == activeExecutorId }
         
-        // SMART CONTEXT: Hanya kirim output perintah terakhir, bukan seluruh layar
         val context = if (activeExecutor?.lastCommandOutput?.value.isNullOrEmpty()) {
             "Tidak ada output sebelumnya. Terminal kosong."
         } else {

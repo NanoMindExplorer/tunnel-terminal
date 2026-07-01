@@ -8,7 +8,7 @@ data class Snippet(val title: String, val command: String)
 
 class SnippetManager(context: Context) {
     private val prefs = context.getSharedPreferences("TunnelSnippets", Context.MODE_PRIVATE)
-    private val _snippets = mutableStateListOf<Snippet>()
+    private val _snippets = mutableListOf<Snippet>()
     val snippets: List<Snippet> get() = _snippets
 
     init {
