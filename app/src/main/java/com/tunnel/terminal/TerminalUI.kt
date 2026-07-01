@@ -63,17 +63,28 @@ fun TabBar(
 }
 
 @Composable
-fun ExtraKeysBar(onKeyPressed: (String) -> Unit) {
+fun ExtraKeysBar(
+    isCtrlActive: Boolean,
+    isAltActive: Boolean,
+    onKeyPressed: (String) -> Unit
+) {
     val keys = listOf("ESC", "TAB", "CTRL", "ALT", "-", "/", "|", "↑", "↓", "←", "→")
     LazyRow(
         modifier = Modifier.fillMaxWidth().background(Color(0xFF2B2B2B)).padding(vertical = 4.dp),
         horizontalArrangement = Arrangement.spacedBy(4.dp), contentPadding = PaddingValues(horizontal = 4.dp)
     ) {
         items(keys) { key ->
+            val bgColor = when {
+                (key == "CTRL" && isCtrlActive) -> Color(0xFF6200EE)
+                (key == "ALT" && isAltActive) -> Color(0xFF6200EE)
+                else -> Color(0xFF3A3A3A)
+            }
+            val textColor = if (bgColor == Color(0xFF6200EE)) Color.White else Color.White
+            
             Box(
-                modifier = Modifier.background(Color(0xFF3A3A3A), RoundedCornerShape(4.dp)).clickable { onKeyPressed(key) }.padding(horizontal = 12.dp, vertical = 8.dp),
+                modifier = Modifier.background(bgColor, RoundedCornerShape(4.dp)).clickable { onKeyPressed(key) }.padding(horizontal = 12.dp, vertical = 8.dp),
                 contentAlignment = Alignment.Center
-            ) { Text(key, color = Color.White, fontSize = 12.sp, fontFamily = FontFamily.Monospace) }
+            ) { Text(key, color = textColor, fontSize = 12.sp, fontFamily = FontFamily.Monospace) }
         }
     }
 }
@@ -86,29 +97,23 @@ fun TerminalScreenView(
 ) {
     var fontSize by remember { mutableStateOf(12f) }
     
-    // Deteksi ukuran area yang tersedia (setelah keyboard muncul)
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(Color.Black)
             .onSizeChanged { size ->
-                // Hitung ulang baris dan kolom berdasarkan pixel yang tersedia
-                val charWidthPx = (fontSize * 0.6).roundToInt() // Estimasi lebar font monospace
-                val charHeightPx = (fontSize * 1.2).roundToInt() // Estimasi tinggi baris
-                
+                val charWidthPx = (fontSize * 0.6).roundToInt()
+                val charHeightPx = (fontSize * 1.2).roundToInt()
                 if (charWidthPx > 0 && charHeightPx > 0) {
                     val newCols = (size.width / charWidthPx).coerceAtLeast(20)
                     val newRows = (size.height / charHeightPx).coerceAtLeast(10)
                     onResize(newRows, newCols, fontSize)
                 }
             }
-            // Gestur Pinch to Zoom untuk mengubah ukuran font
             .pointerInput(Unit) {
                 detectTransformGestures { _, _, zoom, _ ->
                     val newFont = (fontSize * zoom).coerceIn(8f, 24f)
-                    if (newFont != fontSize) {
-                        fontSize = newFont
-                    }
+                    if (newFont != fontSize) { fontSize = newFont }
                 }
             }
     ) {
@@ -117,17 +122,10 @@ fun TerminalScreenView(
                 val annotatedString = buildAnnotatedString {
                     for (col in 0 until emulator.cols) {
                         val cell = emulator.getScreen()[row][col]
-                        withStyle(SpanStyle(color = cell.color)) {
-                            append(cell.char)
-                        }
+                        withStyle(SpanStyle(color = cell.color)) { append(cell.char) }
                     }
                 }
-                Text(
-                    text = annotatedString,
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = fontSize.sp,
-                    modifier = Modifier.fillMaxWidth()
-                )
+                Text(text = annotatedString, fontFamily = FontFamily.Monospace, fontSize = fontSize.sp, modifier = Modifier.fillMaxWidth())
             }
         }
     }
@@ -153,12 +151,7 @@ fun AIChatPanel(
         AlertDialog(
             onDismissRequest = { showSaveDialog = null },
             title = { Text("Simpan ke Workflow") },
-            text = {
-                Column {
-                    Text("Perintah: ${showSaveDialog}")
-                    OutlinedTextField(value = snippetTitle, onValueChange = { snippetTitle = it }, label = { Text("Nama Workflow") }, modifier = Modifier.fillMaxWidth().padding(top = 8.dp))
-                }
-            },
+            text = { Column { Text("Perintah: ${showSaveDialog}"); OutlinedTextField(value = snippetTitle, onValueChange = { snippetTitle = it }, label = { Text("Nama Workflow") }, modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) } },
             confirmButton = { Button(onClick = { if (snippetTitle.isNotEmpty()) onSaveSnippet(snippetTitle, showSaveDialog!!); snippetTitle = ""; showSaveDialog = null }) { Text("Simpan") } },
             dismissButton = { Button(onClick = { showSaveDialog = null }) { Text("Batal") } }
         )
@@ -183,9 +176,7 @@ fun AIChatPanel(
                     Text(msg.content, color = Color.White, fontSize = 14.sp, fontFamily = FontFamily.Monospace, modifier = Modifier.padding(bottom = 8.dp))
                     if (msg.commands.size > 1) {
                         Text("🚀 Rangkaian Auto-Pilot (${msg.commands.size} langkah):", color = Color(0xFFFFEB3B), fontSize = 12.sp, fontFamily = FontFamily.Monospace)
-                        Row(modifier = Modifier.padding(bottom = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Button(onClick = { onRunAutoPilot(msg.commands) }, colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00BCD4))) { Text("Run Auto-Pilot") }
-                        }
+                        Row(modifier = Modifier.padding(bottom = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) { Button(onClick = { onRunAutoPilot(msg.commands) }, colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00BCD4))) { Text("Run Auto-Pilot") } }
                     } else if (msg.isCommand) {
                         Row(modifier = Modifier.padding(bottom = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             Button(onClick = { onRunCommand(msg.content) }, colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF6200EE))) { Text("▶ Run") }
@@ -201,9 +192,8 @@ fun AIChatPanel(
             }
         } else if (selectedTab == 1) {
             Column(modifier = Modifier.weight(1f).padding(16.dp).verticalScroll(scrollState)) {
-                if (snippets.isEmpty()) {
-                    Text("Belum ada workflow tersimpan.", color = Color.Gray, fontSize = 14.sp)
-                } else {
+                if (snippets.isEmpty()) { Text("Belum ada workflow tersimpan.", color = Color.Gray, fontSize = 14.sp) }
+                else {
                     snippets.forEachIndexed { index, snippet ->
                         Card(modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp), colors = CardDefaults.cardColors(containerColor = Color(0xFF2B2B2B))) {
                             Column(modifier = Modifier.padding(12.dp)) {
@@ -224,9 +214,7 @@ fun AIChatPanel(
                 Box {
                     OutlinedTextField(value = settings.providerName, onValueChange = {}, readOnly = true, modifier = Modifier.fillMaxWidth().clickable { expandedProvider = true }, textStyle = TextStyle(color = Color.White, fontFamily = FontFamily.Monospace), trailingIcon = { Text("▼", color = Color.White) })
                     DropdownMenu(expanded = expandedProvider, onDismissRequest = { expandedProvider = false }) {
-                        AIProviders.presets.forEach { preset ->
-                            DropdownMenuItem(text = { Text(preset.providerName) }, onClick = { onSettingsChanged(preset.copy(apiKey = settings.apiKey)); expandedProvider = false })
-                        }
+                        AIProviders.presets.forEach { preset -> DropdownMenuItem(text = { Text(preset.providerName) }, onClick = { onSettingsChanged(preset.copy(apiKey = settings.apiKey)); expandedProvider = false }) }
                     }
                 }
                 Spacer(modifier = Modifier.height(16.dp))

@@ -32,7 +32,7 @@ class MainActivity : ComponentActivity() {
     private var aiSettings by mutableStateOf(AISettings())
     private var isProcessingAI by mutableStateOf(false)
     private var pendingSetupStorage by mutableStateOf(false)
-    private var editingFile by mutableStateOf<String?>(null) // State untuk Editor
+    private var editingFile by mutableStateOf<String?>(null)
     
     private lateinit var snippetManager: SnippetManager
     private val snippetsState = mutableStateListOf<Snippet>()
@@ -112,7 +112,10 @@ class MainActivity : ComponentActivity() {
         val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
         val scope = rememberCoroutineScope()
 
-        // Tampilkan Editor jika ada file yang sedang diedit
+        // State untuk Modifier Keys
+        var isCtrlActive by remember { mutableStateOf(false) }
+        var isAltActive by remember { mutableStateOf(false) }
+
         if (editingFile != null) {
             TunnelEditorDialog(
                 filePath = editingFile!!,
@@ -173,34 +176,40 @@ class MainActivity : ComponentActivity() {
 
             fun handleExtraKey(key: String) {
                 val ansiCode = when (key) {
-                    "ESC" -> "\u001B"; "TAB" -> "\t"
+                    "ESC" -> "\u001B"
+                    "TAB" -> "\t"
                     "↑" -> "\u001B[A"; "↓" -> "\u001B[B"; "→" -> "\u001B[C"; "←" -> "\u001B[D"
+                    "CTRL" -> { isCtrlActive = !isCtrlActive; "" } // Toggle CTRL
+                    "ALT" -> { isAltActive = !isAltActive; "" }    // Toggle ALT
                     else -> key
                 }
                 if (ansiCode.isNotEmpty()) activeExecutor.writeRaw(ansiCode)
             }
 
             fun processInput(input: String) {
-                // Tangkap perintah 'open <file>'
                 if (input.startsWith("open ")) {
                     val fileName = input.removePrefix("open ").trim()
-                    val file = File(filesDir, fileName) // Coba di direktori internal dulu
-                    if (file.exists()) {
-                        editingFile = file.absolutePath
-                        activeExecutor.writeRaw("echo 'Opening ${file.name} in Tunnel Editor...'\n")
-                    } else {
-                        // Coba path absolut
-                        val absFile = File(fileName)
-                        if (absFile.exists()) {
-                            editingFile = absFile.absolutePath
-                            activeExecutor.writeRaw("echo 'Opening ${absFile.name} in Tunnel Editor...'\n")
-                        } else {
-                            activeExecutor.writeRaw("echo 'File not found: $fileName'\n")
-                        }
-                    }
+                    val file = File(filesDir, fileName)
+                    if (file.exists()) { editingFile = file.absolutePath; activeExecutor.writeRaw("echo 'Opening ${file.name} in Tunnel Editor...'\n") }
+                    else { val absFile = File(fileName); if (absFile.exists()) { editingFile = absFile.absolutePath; activeExecutor.writeRaw("echo 'Opening ${absFile.name} in Tunnel Editor...'\n") } else { activeExecutor.writeRaw("echo 'File not found: $fileName'\n") } }
                 } else {
                     activeExecutor.writeRaw(input)
                 }
+            }
+
+            // Fungsi cerdas untuk menerjemahkan karakter biasa menjadi Control Character
+            fun handleChar(char: Char): String {
+                if (isCtrlActive) {
+                    isCtrlActive = false // Reset CTRL setelah dipakai
+                    // Rumus ASCII: Ctrl + char = char - 'a' + 1 (misal: 'c' menjadi 3, 'd' menjadi 4)
+                    val controlChar = (char.lowercaseChar() - 'a' + 1).toChar()
+                    return controlChar.toString()
+                }
+                if (isAltActive) {
+                    isAltActive = false // Reset ALT setelah dipakai
+                    return "\u001B$char" // Alt diikuti karakter
+                }
+                return char.toString()
             }
 
             Box(modifier = Modifier.fillMaxSize()) {
@@ -217,9 +226,7 @@ class MainActivity : ComponentActivity() {
                         TerminalScreenView(
                             emulator = activeExecutor.emulator,
                             screenDirty = screenDirty,
-                            onResize = { rows, cols, fontSize ->
-                                activeExecutor.resizeTerminal(rows, cols, fontSize)
-                            }
+                            onResize = { rows, cols, fontSize -> activeExecutor.resizeTerminal(rows, cols, fontSize) }
                         )
                         
                         BasicTextField(
@@ -228,18 +235,17 @@ class MainActivity : ComponentActivity() {
                                     val typed = it
                                     hiddenInput = ""
                                     
-                                    // Buffer perintah untuk deteksi 'open'
                                     if (typed == "\n" || typed == "\r") {
                                         processInput(currentCommandBuffer + "\n")
                                         currentCommandBuffer = ""
                                     } else if (typed == "\u007F") { // Backspace
-                                        if (currentCommandBuffer.isNotEmpty()) {
-                                            currentCommandBuffer = currentCommandBuffer.dropLast(1)
-                                        }
+                                        if (currentCommandBuffer.isNotEmpty()) currentCommandBuffer = currentCommandBuffer.dropLast(1)
                                         activeExecutor.writeRaw(typed)
                                     } else {
-                                        currentCommandBuffer += typed
-                                        activeExecutor.writeRaw(typed)
+                                        // Terjemahkan setiap karakter yang diketik
+                                        val translated = typed.map { handleChar(it) }.joinToString("")
+                                        currentCommandBuffer += translated
+                                        activeExecutor.writeRaw(translated)
                                     }
                                 }
                             },
@@ -255,7 +261,12 @@ class MainActivity : ComponentActivity() {
                             }
                         )
                     }
-                    ExtraKeysBar(onKeyPressed = { handleExtraKey(it) })
+                    // Kirim state CTRL/ALT ke UI agar warna tombol berubah
+                    ExtraKeysBar(
+                        isCtrlActive = isCtrlActive,
+                        isAltActive = isAltActive,
+                        onKeyPressed = { handleExtraKey(it) }
+                    )
                 }
                 FloatingActionButton(
                     onClick = { scope.launch { handleAIPrompt("Perbaiki error ini."); drawerState.open() } },
@@ -268,10 +279,7 @@ class MainActivity : ComponentActivity() {
 
     private suspend fun runAutoPilot(commands: List<String>) {
         val activeExecutor = shellExecutors.find { it.id == activeExecutorId } ?: return
-        for (cmd in commands) {
-            activeExecutor.executeCommand(cmd)
-            delay(3000)
-        }
+        for (cmd in commands) { activeExecutor.executeCommand(cmd); delay(3000) }
     }
 
     private suspend fun handleAIPrompt(prompt: String) {
