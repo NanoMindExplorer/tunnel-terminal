@@ -235,7 +235,7 @@ class MainActivity : ComponentActivity() {
                         ==========================================
                     """.trimIndent()
                     activeExecutor.emulator.process(helpText + "\n")
-                    activeExecutor.screenDirty.value++
+                    activeExecutor.triggerScreenUpdate()
                     return
                 }
 

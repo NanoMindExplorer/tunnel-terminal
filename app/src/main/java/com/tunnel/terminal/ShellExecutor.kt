@@ -26,8 +26,12 @@ class ShellExecutor {
     var isAlive by mutableStateOf(true)
         private set
 
+    // Ubah ke MutableStateFlow agar bisa di-update
     private val _screenDirty = MutableStateFlow(0)
     val screenDirty: StateFlow<Int> = _screenDirty.asStateFlow()
+
+    // Fungsi helper untuk memicu update UI
+    fun triggerScreenUpdate() { _screenDirty.value++ }
 
     private val _lastCommandOutput = MutableStateFlow("")
     val lastCommandOutput: StateFlow<String> = _lastCommandOutput.asStateFlow()
@@ -45,7 +49,7 @@ class ShellExecutor {
             pfd = ParcelFileDescriptor.adoptFd(masterFd)
             emulator.process("Tunnel Terminal v3.2 (Lifecycle Guard)\n")
             emulator.process("NDK PTY + AI Copilot Active.\n\n")
-            _screenDirty.value++
+            triggerScreenUpdate()
             
             Thread.sleep(100)
             writeRaw("PS1='tunnel@android:~$ '\n")
@@ -81,19 +85,19 @@ class ShellExecutor {
             outputBuffer.append(text)
             if (outputBuffer.length > 2000) outputBuffer = StringBuilder(outputBuffer.substring(outputBuffer.length - 2000))
             _lastCommandOutput.value = outputBuffer.toString()
-            _screenDirty.value++
+            triggerScreenUpdate()
         }
         
         isAlive = false
         emulator.process("\n[Process Exited. Tap screen to restart session.]\n")
-        _screenDirty.value++
+        triggerScreenUpdate()
     }
 
     fun resizeTerminal(newRows: Int, newCols: Int, fontSize: Float) {
         if (masterFd < 0) return
         TerminalJni.resize(masterFd, newRows, newCols)
         emulator.resize(newRows, newCols, fontSize.sp)
-        _screenDirty.value++
+        triggerScreenUpdate()
     }
 
     fun executeCommand(command: String) { if (isAlive) writeRaw(command + "\n") }
@@ -106,7 +110,7 @@ class ShellExecutor {
         emulator.process("\u001B[2J\u001B[H")
         outputBuffer.clear()
         _lastCommandOutput.value = ""
-        _screenDirty.value++
+        triggerScreenUpdate()
     }
 
     fun destroy() {
