@@ -1,11 +1,9 @@
-# 🚀 Tunnel Terminal
+# Tunnel Terminal
 
 **Tunnel Terminal** adalah aplikasi terminal Android tingkat lanjut (melampaui Termux) yang menggabungkan kekuatan mesin C/C++ NDK (Pseudo-Terminal) dengan AI Copilot Multi-Provider untuk pengembang modern.
 
 ![Architecture](https://img.shields.io/badge/Architecture-NDK%20%2B%20Jetpack%20Compose-purple)
 ![AI](https://img.shields.io/badge/AI-AutoPilot%20Agent-cyan)
-
-## 🌟 Fitur Revolusioner
 
 ### 1. True Linux Terminal (C++ NDK PTY)
 Tidak menggunakan trik Java `Runtime.exec()`. Tunnel Terminal menggunakan `forkpty()` dari C/C++ untuk membuat sesi terminal asli di kernel Linux Android. Mendukung penuh aplikasi TUI seperti `vim`, `nano`, dan `htop`.
@@ -39,8 +37,3 @@ Aplikasi ini dirancang untuk dibangun sepenuhnya menggunakan GitHub Actions CI/C
 3. Download *artifact* APK hasil build terbaru.
 4. Instal di perangkat Android Anda (min SDK 24 / Android 7.0+).
 
-## 🤝 Kontribusi
-Proyek ini dibangun dengan filosofi *full-code*, tanpa *mockup*, dan kejujuran teknis. Kontribusi untuk menambahkan fitur atau mengoptimasi mesin emulator sangat diterima.
-
----
-*Built with ❤️ by NanoMindExplorer*
