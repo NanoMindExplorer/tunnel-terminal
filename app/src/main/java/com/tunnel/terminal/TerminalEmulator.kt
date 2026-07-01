@@ -61,15 +61,15 @@ class TerminalEmulator {
     }
 
     private fun printText(text: String) {
-        for (c in text) { // Ubah char menjadi c
-            when (c) {
+        for (ch in text.toCharArray()) { // Perbaikan: Gunakan toCharArray() agar tipe Char terdeteksi
+            when (ch) {
                 '\n' -> { cursorCol = 0; cursorRow++ }
                 '\r' -> cursorCol = 0
                 '\b' -> if (cursorCol > 0) cursorCol--
                 '\t' -> cursorCol = ((cursorCol / 4) + 1) * 4
                 else -> {
                     if (cursorRow < rows && cursorCol < cols) {
-                        screen[cursorRow][cursorCol].char = c
+                        screen[cursorRow][cursorCol].char = ch
                         screen[cursorRow][cursorCol].color = currentColor
                     }
                     cursorCol++
