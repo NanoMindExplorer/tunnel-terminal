@@ -7,7 +7,6 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -68,23 +67,39 @@ fun ExtraKeysBar(
     isAltActive: Boolean,
     onKeyPressed: (String) -> Unit
 ) {
-    val keys = listOf("ESC", "TAB", "CTRL", "ALT", "-", "/", "|", "↑", "↓", "←", "→")
-    LazyRow(
-        modifier = Modifier.fillMaxWidth().background(Color(0xFF2B2B2B)).padding(vertical = 4.dp),
-        horizontalArrangement = Arrangement.spacedBy(4.dp), contentPadding = PaddingValues(horizontal = 4.dp)
-    ) {
-        items(keys) { key ->
-            val bgColor = when {
-                (key == "CTRL" && isCtrlActive) -> Color(0xFF6200EE)
-                (key == "ALT" && isAltActive) -> Color(0xFF6200EE)
-                else -> Color(0xFF3A3A3A)
+    // Baris 1: Kontrol Dasar
+    val controlKeys = listOf("ESC", "TAB", "CTRL", "ALT", "↑", "↓", "←", "→", "BKSP", "DEL")
+    // Baris 2: Simbol Penting
+    val symbolKeys = listOf("~", "*", "$", "\"", "'", ";", "&", "|", "-", "/", "(", ")")
+    
+    Column(modifier = Modifier.fillMaxWidth().background(Color(0xFF2B2B2B))) {
+        LazyRow(
+            modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+            horizontalArrangement = Arrangement.spacedBy(4.dp), contentPadding = PaddingValues(horizontal = 4.dp)
+        ) {
+            items(symbolKeys) { key ->
+                Box(
+                    modifier = Modifier.background(Color(0xFF2A2A2A), RoundedCornerShape(4.dp)).clickable { onKeyPressed(key) }.padding(horizontal = 12.dp, vertical = 6.dp),
+                    contentAlignment = Alignment.Center
+                ) { Text(key, color = Color(0xFF00BCD4), fontSize = 14.sp, fontFamily = FontFamily.Monospace) }
             }
-            val textColor = if (bgColor == Color(0xFF6200EE)) Color.White else Color.White
-            
-            Box(
-                modifier = Modifier.background(bgColor, RoundedCornerShape(4.dp)).clickable { onKeyPressed(key) }.padding(horizontal = 12.dp, vertical = 8.dp),
-                contentAlignment = Alignment.Center
-            ) { Text(key, color = textColor, fontSize = 12.sp, fontFamily = FontFamily.Monospace) }
+        }
+        
+        LazyRow(
+            modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+            horizontalArrangement = Arrangement.spacedBy(4.dp), contentPadding = PaddingValues(horizontal = 4.dp)
+        ) {
+            items(controlKeys) { key ->
+                val bgColor = when {
+                    (key == "CTRL" && isCtrlActive) -> Color(0xFF6200EE)
+                    (key == "ALT" && isAltActive) -> Color(0xFF6200EE)
+                    else -> Color(0xFF3A3A3A)
+                }
+                Box(
+                    modifier = Modifier.background(bgColor, RoundedCornerShape(4.dp)).clickable { onKeyPressed(key) }.padding(horizontal = 12.dp, vertical = 8.dp),
+                    contentAlignment = Alignment.Center
+                ) { Text(key, color = Color.White, fontSize = 12.sp, fontFamily = FontFamily.Monospace) }
+            }
         }
     }
 }
@@ -93,6 +108,8 @@ fun ExtraKeysBar(
 fun TerminalScreenView(
     emulator: TerminalEmulator,
     screenDirty: Int,
+    isAlive: Boolean,
+    onRestartSession: () -> Unit,
     onResize: (rows: Int, cols: Int, fontSize: Float) -> Unit
 ) {
     var fontSize by remember { mutableStateOf(12f) }
@@ -128,6 +145,16 @@ fun TerminalScreenView(
                 Text(text = annotatedString, fontFamily = FontFamily.Monospace, fontSize = fontSize.sp, modifier = Modifier.fillMaxWidth())
             }
         }
+
+        // Overlay jika sesi mati (karena mengetik 'exit')
+        if (!isAlive) {
+            Box(
+                modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.8f)).clickable { onRestartSession() },
+                contentAlignment = Alignment.Center
+            ) {
+                Text("Session Exited.\nTap anywhere to restart.", color = Color.White, fontFamily = FontFamily.Monospace, fontSize = 16.sp)
+            }
+        }
     }
 }
 
@@ -142,7 +169,7 @@ fun AIChatPanel(
 ) {
     var inputText by remember { mutableStateOf("") }
     var selectedTab by remember { mutableStateOf(0) }
-    val scrollState = rememberScrollState()
+    val scrollState = androidx.compose.foundation.rememberScrollState()
     var expandedProvider by remember { mutableStateOf(false) }
     var showSaveDialog by remember { mutableStateOf<String?>(null) }
     var snippetTitle by remember { mutableStateOf("") }

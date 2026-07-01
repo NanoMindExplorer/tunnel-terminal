@@ -1,6 +1,9 @@
 package com.tunnel.terminal
 
 import android.os.ParcelFileDescriptor
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -19,6 +22,10 @@ class ShellExecutor {
 
     val emulator = TerminalEmulator()
     
+    // State untuk melacak apakah proses shell hidup atau mati
+    var isAlive by mutableStateOf(true)
+        private set
+
     private val _screenDirty = MutableStateFlow(0)
     val screenDirty: StateFlow<Int> = _screenDirty.asStateFlow()
 
@@ -28,13 +35,16 @@ class ShellExecutor {
 
     suspend fun start() {
         withContext(Dispatchers.IO) {
+            isAlive = true
             masterFd = TerminalJni.createSession(24, 80)
-            if (masterFd < 0) return@withContext
+            if (masterFd < 0) {
+                isAlive = false
+                return@withContext
+            }
 
             pfd = ParcelFileDescriptor.adoptFd(masterFd)
-            emulator.process("Tunnel Terminal v3.1 (History & Volume Keys)\n")
-            emulator.process("NDK PTY + AI Copilot Active.\n")
-            emulator.process("Tip: Use Volume Up/Down to navigate command history.\n\n")
+            emulator.process("Tunnel Terminal v3.2 (Lifecycle Guard)\n")
+            emulator.process("NDK PTY + AI Copilot Active.\n\n")
             _screenDirty.value++
             
             Thread.sleep(100)
@@ -43,11 +53,11 @@ class ShellExecutor {
         }
     }
 
-    fun resizeTerminal(newRows: Int, newCols: Int, fontSize: Float) {
-        if (masterFd < 0) return
-        TerminalJni.resize(masterFd, newRows, newCols)
-        emulator.resize(newRows, newCols, androidx.compose.ui.unit.sp(fontSize))
-        _screenDirty.value++
+    // Fungsi untuk memulai ulang sesi yang sudah mati
+    suspend fun restart() {
+        destroy()
+        emulator = TerminalEmulator() // Reset layar
+        start()
     }
 
     private fun readLoop() {
@@ -74,11 +84,23 @@ class ShellExecutor {
             _lastCommandOutput.value = outputBuffer.toString()
             _screenDirty.value++
         }
+        
+        // Jika keluar dari while loop, berarti proses shell (sh) telah di-exit
+        isAlive = false
+        emulator.process("\n[Process Exited. Tap screen to restart session.]\n")
+        _screenDirty.value++
     }
 
-    fun executeCommand(command: String) { writeRaw(command + "\n") }
-    fun writeRaw(data: String) {
+    fun resizeTerminal(newRows: Int, newCols: Int, fontSize: Float) {
         if (masterFd < 0) return
+        TerminalJni.resize(masterFd, newRows, newCols)
+        emulator.resize(newRows, newCols, androidx.compose.ui.unit.sp(fontSize))
+        _screenDirty.value++
+    }
+
+    fun executeCommand(command: String) { if (isAlive) writeRaw(command + "\n") }
+    fun writeRaw(data: String) {
+        if (masterFd < 0 || !isAlive) return
         TerminalJni.write(masterFd, data.toByteArray(StandardCharsets.UTF_8))
     }
 
@@ -91,6 +113,7 @@ class ShellExecutor {
 
     fun destroy() {
         try {
+            isAlive = false
             if (masterFd >= 0) TerminalJni.close(masterFd)
             pfd?.close()
         } catch (e: Exception) { }

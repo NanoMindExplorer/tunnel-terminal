@@ -38,7 +38,6 @@ class MainActivity : ComponentActivity() {
     private lateinit var snippetManager: SnippetManager
     private val snippetsState = mutableStateListOf<Snippet>()
 
-    // State untuk Command History
     private var currentCommandBuffer = ""
     private val commandHistory = mutableListOf<String>()
     private var historyIndex = -1
@@ -112,40 +111,24 @@ class MainActivity : ComponentActivity() {
         stopService(Intent(this, TerminalForegroundService::class.java))
     }
 
-    // Intercept Tombol Volume Fisik untuk Navigasi History
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
-        if (keyCode == KeyEvent.KEYCODE_VOLUME_UP) {
-            navigateHistory(forward = false)
-            return true // Cegah suara volume sistem
-        } else if (keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) {
-            navigateHistory(forward = true)
-            return true // Cegah suara volume sistem
-        }
+        if (keyCode == KeyEvent.KEYCODE_VOLUME_UP) { navigateHistory(forward = false); return true }
+        else if (keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) { navigateHistory(forward = true); return true }
         return super.onKeyDown(keyCode, event)
     }
 
     override fun onKeyUp(keyCode: Int, event: KeyEvent?): Boolean {
-        if (keyCode == KeyEvent.KEYCODE_VOLUME_UP || keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) {
-            return true // Cegah popup UI volume sistem
-        }
+        if (keyCode == KeyEvent.KEYCODE_VOLUME_UP || keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) return true
         return super.onKeyUp(keyCode, event)
     }
 
     private fun navigateHistory(forward: Boolean) {
         if (commandHistory.isEmpty()) return
         val activeExecutor = shellExecutors.find { it.id == activeExecutorId } ?: return
-        
-        if (forward) {
-            if (historyIndex > 0) historyIndex--
-            else if (historyIndex == 0) historyIndex = -1
-        } else {
-            if (historyIndex < commandHistory.size - 1) historyIndex++
-        }
-
-        // Kirim Ctrl+U ke shell untuk menghapus baris saat ini
+        if (forward) { if (historyIndex > 0) historyIndex-- else if (historyIndex == 0) historyIndex = -1 }
+        else { if (historyIndex < commandHistory.size - 1) historyIndex++ }
         activeExecutor.writeRaw("\u0015")
         currentCommandBuffer = ""
-
         if (historyIndex != -1) {
             val cmd = commandHistory[commandHistory.size - 1 - historyIndex]
             currentCommandBuffer = cmd
@@ -165,10 +148,7 @@ class MainActivity : ComponentActivity() {
         if (editingFile != null) {
             TunnelEditorDialog(
                 filePath = editingFile!!,
-                onDismiss = { 
-                    editingFile = null
-                    shellExecutors.find { it.id == activeExecutorId }?.writeRaw("echo 'File closed.'\n")
-                }
+                onDismiss = { editingFile = null; shellExecutors.find { it.id == activeExecutorId }?.writeRaw("echo 'File closed.'\n") }
             )
         }
 
@@ -180,18 +160,10 @@ class MainActivity : ComponentActivity() {
                         messages = chatMessages, settings = aiSettings, snippets = snippetsState,
                         onSettingsChanged = { saveAISettings(it) },
                         onSendPrompt = { prompt -> scope.launch { handleAIPrompt(prompt) } },
-                        onRunCommand = { cmd ->
-                            shellExecutors.find { it.id == activeExecutorId }?.executeCommand(cmd)
-                            scope.launch { drawerState.close() }
-                        },
-                        onRunAutoPilot = { commands ->
-                            scope.launch { runAutoPilot(commands); drawerState.close() }
-                        },
+                        onRunCommand = { cmd -> shellExecutors.find { it.id == activeExecutorId }?.executeCommand(cmd); scope.launch { drawerState.close() } },
+                        onRunAutoPilot = { commands -> scope.launch { runAutoPilot(commands); drawerState.close() } },
                         onSaveSnippet = { title, cmd -> saveSnippet(title, cmd) },
-                        onRunSnippet = { cmd ->
-                            shellExecutors.find { it.id == activeExecutorId }?.executeCommand(cmd)
-                            scope.launch { drawerState.close() }
-                        },
+                        onRunSnippet = { cmd -> shellExecutors.find { it.id == activeExecutorId }?.executeCommand(cmd); scope.launch { drawerState.close() } },
                         onDeleteSnippet = { deleteSnippet(it) },
                         onClose = { scope.launch { drawerState.close() } }
                     )
@@ -224,18 +196,18 @@ class MainActivity : ComponentActivity() {
                     "ESC" -> "\u001B"
                     "TAB" -> "\t"
                     "↑" -> "\u001B[A"; "↓" -> "\u001B[B"; "→" -> "\u001B[C"; "←" -> "\u001B[D"
+                    "BKSP" -> "\u007F" // Backspace
+                    "DEL" -> "\u001B[3~" // Delete
                     "CTRL" -> { isCtrlActive = !isCtrlActive; "" }
                     "ALT" -> { isAltActive = !isAltActive; "" }
-                    else -> key
+                    else -> key // Untuk semua simbol seperti ~, *, $, dll
                 }
                 if (ansiCode.isNotEmpty()) activeExecutor.writeRaw(ansiCode)
             }
 
             fun processInput(input: String) {
                 val cmd = input.trim().replace("\n", "")
-                if (cmd.isNotEmpty()) {
-                    commandHistory.add(cmd)
-                }
+                if (cmd.isNotEmpty()) { commandHistory.add(cmd) }
                 historyIndex = -1
 
                 if (input.startsWith("open ")) {
@@ -249,15 +221,8 @@ class MainActivity : ComponentActivity() {
             }
 
             fun handleChar(char: Char): String {
-                if (isCtrlActive) {
-                    isCtrlActive = false
-                    val controlChar = (char.lowercaseChar() - 'a' + 1).toChar()
-                    return controlChar.toString()
-                }
-                if (isAltActive) {
-                    isAltActive = false
-                    return "\u001B$char"
-                }
+                if (isCtrlActive) { isCtrlActive = false; return (char.lowercaseChar() - 'a' + 1).toChar().toString() }
+                if (isAltActive) { isAltActive = false; return "\u001B$char" }
                 return char.toString()
             }
 
@@ -275,6 +240,10 @@ class MainActivity : ComponentActivity() {
                         TerminalScreenView(
                             emulator = activeExecutor.emulator,
                             screenDirty = screenDirty,
+                            isAlive = activeExecutor.isAlive,
+                            onRestartSession = { 
+                                scope.launch { activeExecutor.restart() } 
+                            },
                             onResize = { rows, cols, fontSize -> activeExecutor.resizeTerminal(rows, cols, fontSize) }
                         )
                         
@@ -283,37 +252,21 @@ class MainActivity : ComponentActivity() {
                                 if (it.isNotEmpty()) { 
                                     val typed = it
                                     hiddenInput = ""
-                                    
-                                    if (typed == "\n" || typed == "\r") {
-                                        processInput(currentCommandBuffer + "\n")
-                                        currentCommandBuffer = ""
-                                    } else if (typed == "\u007F") { // Backspace
-                                        if (currentCommandBuffer.isNotEmpty()) currentCommandBuffer = currentCommandBuffer.dropLast(1)
-                                        activeExecutor.writeRaw(typed)
-                                    } else {
-                                        val translated = typed.map { handleChar(it) }.joinToString("")
-                                        currentCommandBuffer += translated
-                                        activeExecutor.writeRaw(translated)
-                                    }
+                                    if (typed == "\n" || typed == "\r") { processInput(currentCommandBuffer + "\n"); currentCommandBuffer = "" }
+                                    else if (typed == "\u007F") { if (currentCommandBuffer.isNotEmpty()) currentCommandBuffer = currentCommandBuffer.dropLast(1); activeExecutor.writeRaw(typed) }
+                                    else { val translated = typed.map { handleChar(it) }.joinToString(""); currentCommandBuffer += translated; activeExecutor.writeRaw(translated) }
                                 }
                             },
                             textStyle = TextStyle(color = Color.Transparent),
                             cursorBrush = SolidColor(Color.Transparent),
                             modifier = Modifier.fillMaxSize().onPreviewKeyEvent { event ->
                                 if (event.key == Key.Enter && event.type == KeyEventType.KeyUp) {
-                                    processInput(currentCommandBuffer + "\n")
-                                    currentCommandBuffer = ""
-                                    hiddenInput = ""
-                                    true
+                                    processInput(currentCommandBuffer + "\n"); currentCommandBuffer = ""; hiddenInput = ""; true
                                 } else false
                             }
                         )
                     }
-                    ExtraKeysBar(
-                        isCtrlActive = isCtrlActive,
-                        isAltActive = isAltActive,
-                        onKeyPressed = { handleExtraKey(it) }
-                    )
+                    ExtraKeysBar(isCtrlActive = isCtrlActive, isAltActive = isAltActive, onKeyPressed = { handleExtraKey(it) })
                 }
                 FloatingActionButton(
                     onClick = { scope.launch { handleAIPrompt("Perbaiki error ini."); drawerState.open() } },
