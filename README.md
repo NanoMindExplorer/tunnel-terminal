@@ -1,6 +1,6 @@
 # Tunnel Terminal
 
-**Tunnel Terminal** adalah aplikasi terminal Android tingkat lanjut (melampaui Termux) yang menggabungkan kekuatan mesin C/C++ NDK (Pseudo-Terminal) dengan AI Copilot Multi-Provider untuk pengembang modern.
+**Tunnel Terminal** adalah aplikasi terminal Android tingkat lanjut yang menggabungkan kekuatan mesin C/C++ NDK (Pseudo-Terminal) dengan AI Copilot Multi-Provider untuk pengembang modern.
 
 ![Architecture](https://img.shields.io/badge/Architecture-NDK%20%2B%20Jetpack%20Compose-purple)
 ![AI](https://img.shields.io/badge/AI-AutoPilot%20Agent-cyan)
