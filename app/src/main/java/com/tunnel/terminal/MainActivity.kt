@@ -1,6 +1,7 @@
 package com.tunnel.terminal
 
 import android.content.Context
+import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -33,13 +34,17 @@ class MainActivity : ComponentActivity() {
     
     private val chatMessages = mutableStateListOf<ChatMessage>()
     private var aiSettings by mutableStateOf(AISettings())
+    private var isProcessingAI by mutableStateOf(false)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         
-        // Muat pengaturan AI dari SharedPreferences
         loadAISettings()
         
+        // Mulai Foreground Service agar tidak bisa di-kill Android
+        val serviceIntent = Intent(this, TerminalForegroundService::class.java)
+        startForegroundService(serviceIntent)
+
         lifecycleScope.launch { createNewTab() }
 
         setContent {
@@ -88,6 +93,8 @@ class MainActivity : ComponentActivity() {
     override fun onDestroy() {
         super.onDestroy()
         shellExecutors.forEach { it.destroy() }
+        // Hentikan service saat aplikasi benar-benar ditutup
+        stopService(Intent(this, TerminalForegroundService::class.java))
     }
 
     @OptIn(ExperimentalMaterial3Api::class)
@@ -103,7 +110,7 @@ class MainActivity : ComponentActivity() {
                     AIChatPanel(
                         messages = chatMessages,
                         settings = aiSettings,
-                        onSettingsChanged = { newSettings -> saveAISettings(newSettings) }, // Simpan otomatis saat diubah
+                        onSettingsChanged = { newSettings -> saveAISettings(newSettings) },
                         onSendPrompt = { prompt -> scope.launch { handleAIPrompt(prompt) } },
                         onRunCommand = { cmd ->
                             shellExecutors.find { it.id == activeExecutorId }?.executeCommand(cmd)
@@ -127,7 +134,18 @@ class MainActivity : ComponentActivity() {
             val scrollState = rememberScrollState()
             val tabsData = shellExecutors.mapIndexed { index, executor -> Pair(executor.id, index + 1) }
 
-            LaunchedEffect(terminalHistory.size) { scrollState.animateScrollTo(scrollState.maxValue) }
+            // Auto-Debug Logic: Jika 2 baris terakhir mengandung "error" atau "not found"
+            LaunchedEffect(terminalHistory.size) {
+                scrollState.animateScrollTo(scrollState.maxValue)
+                if (terminalHistory.size >= 2) {
+                    val lastLine = terminalHistory.last().lowercase()
+                    if (lastLine.contains("error") || lastLine.contains("not found") || lastLine.contains("exception")) {
+                        if (!isProcessingAI && chatMessages.lastOrNull()?.role != "assistant") {
+                            chatMessages.add(ChatMessage("assistant", "Saya mendeteksi ada error di terminal. Klik tombol Fix (🛠) di pojok kanan bawah untuk meminta solusi.", false))
+                        }
+                    }
+                }
+            }
 
             fun handleExtraKey(key: String) {
                 when (key) {
@@ -137,58 +155,71 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
-            Column(modifier = Modifier.fillMaxSize()) {
-                TabBar(
-                    tabs = tabsData, activeTabId = activeExecutorId,
-                    onTabSelected = { id -> activeExecutorId = id },
-                    onNewTab = { lifecycleScope.launch { createNewTab() } },
-                    onTabClosed = { id -> closeTab(id) },
-                    onOpenAI = { scope.launch { drawerState.open() } }
-                )
+            Box(modifier = Modifier.fillMaxSize()) {
+                Column(modifier = Modifier.fillMaxSize()) {
+                    TabBar(
+                        tabs = tabsData, activeTabId = activeExecutorId,
+                        onTabSelected = { id -> activeExecutorId = id },
+                        onNewTab = { lifecycleScope.launch { createNewTab() } },
+                        onTabClosed = { id -> closeTab(id) },
+                        onOpenAI = { scope.launch { drawerState.open() } }
+                    )
 
-                Box(modifier = Modifier.weight(1f)) {
-                    Column(modifier = Modifier.fillMaxSize().padding(8.dp).verticalScroll(scrollState)) {
-                        // Penerapan ANSI Parser di sini
-                        terminalHistory.forEach { line ->
-                            val styledSegments = AnsiParser.parse(line)
-                            Row {
-                                styledSegments.forEach { segment ->
-                                    Text(
-                                        segment.text,
-                                        color = segment.color,
-                                        fontFamily = FontFamily.Monospace,
-                                        fontSize = 14.sp
-                                    )
+                    Box(modifier = Modifier.weight(1f)) {
+                        Column(modifier = Modifier.fillMaxSize().padding(8.dp).verticalScroll(scrollState)) {
+                            terminalHistory.forEach { line ->
+                                val styledSegments = AnsiParser.parse(line)
+                                Row {
+                                    styledSegments.forEach { segment ->
+                                        Text(segment.text, color = segment.color, fontFamily = FontFamily.Monospace, fontSize = 14.sp)
+                                    }
                                 }
                             }
-                        }
-                        
-                        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                            Text("tunnel@android:~$ ", color = Color(0xFF00FF00), fontFamily = FontFamily.Monospace, fontSize = 14.sp)
-                            BasicTextField(
-                                value = inputText, onValueChange = { inputText = it },
-                                textStyle = TextStyle(color = Color.White, fontFamily = FontFamily.Monospace, fontSize = 14.sp),
-                                cursorBrush = SolidColor(Color.White),
-                                modifier = Modifier.fillMaxWidth().onPreviewKeyEvent { event ->
-                                    if (event.key == Key.Enter && event.type == KeyEventType.KeyUp) {
-                                        if (inputText.trim() == "clear") activeExecutor.clearScreen() else activeExecutor.executeCommand(inputText)
-                                        inputText = ""
-                                        true
-                                    } else false
-                                }
-                            )
+                            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                Text("tunnel@android:~$ ", color = Color(0xFF00FF00), fontFamily = FontFamily.Monospace, fontSize = 14.sp)
+                                BasicTextField(
+                                    value = inputText, onValueChange = { inputText = it },
+                                    textStyle = TextStyle(color = Color.White, fontFamily = FontFamily.Monospace, fontSize = 14.sp),
+                                    cursorBrush = SolidColor(Color.White),
+                                    modifier = Modifier.fillMaxWidth().onPreviewKeyEvent { event ->
+                                        if (event.key == Key.Enter && event.type == KeyEventType.KeyUp) {
+                                            if (inputText.trim() == "clear") activeExecutor.clearScreen() else activeExecutor.executeCommand(inputText)
+                                            inputText = ""
+                                            true
+                                        } else false
+                                    }
+                                )
+                            }
                         }
                     }
+                    ExtraKeysBar(onKeyPressed = { handleExtraKey(it) })
                 }
-                ExtraKeysBar(onKeyPressed = { handleExtraKey(it) })
+
+                // Floating Action Button (FAB) untuk Quick AI Fix
+                FloatingActionButton(
+                    onClick = {
+                        scope.launch {
+                            handleAIPrompt("Saya mendapat error di terminal. Tolong jelaskan dan berikan perintah untuk memperbaiknya.")
+                            drawerState.open()
+                        }
+                    },
+                    modifier = Modifier.align(Alignment.BottomEnd).padding(16.dp).padding(bottom = 40.dp),
+                    containerColor = Color(0xFF6200EE),
+                    contentColor = Color.White
+                ) {
+                    Text("🛠", fontSize = 20.sp)
+                }
             }
         }
     }
 
     private suspend fun handleAIPrompt(prompt: String) {
+        if (isProcessingAI) return
+        isProcessingAI = true
+        
         chatMessages.add(ChatMessage("user", prompt, false))
         val activeExecutor = shellExecutors.find { it.id == activeExecutorId }
-        val context = activeExecutor?.output?.value?.takeLast(5)?.joinToString("\n") ?: "Terminal kosong"
+        val context = activeExecutor?.output?.value?.takeLast(10)?.joinToString("\n") ?: "Terminal kosong"
         
         val response = aiAgent.askAI(aiSettings, prompt, context)
         
@@ -203,5 +234,7 @@ class MainActivity : ComponentActivity() {
         } else {
             chatMessages.add(ChatMessage("assistant", response, false))
         }
+        
+        isProcessingAI = false
     }
 }
