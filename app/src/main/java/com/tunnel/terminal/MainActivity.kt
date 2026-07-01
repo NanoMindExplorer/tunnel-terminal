@@ -21,6 +21,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import java.io.File
 
 class MainActivity : ComponentActivity() {
     private val shellExecutors = mutableStateListOf<ShellExecutor>()
@@ -31,6 +32,7 @@ class MainActivity : ComponentActivity() {
     private var aiSettings by mutableStateOf(AISettings())
     private var isProcessingAI by mutableStateOf(false)
     private var pendingSetupStorage by mutableStateOf(false)
+    private var editingFile by mutableStateOf<String?>(null) // State untuk Editor
     
     private lateinit var snippetManager: SnippetManager
     private val snippetsState = mutableStateListOf<Snippet>()
@@ -110,6 +112,17 @@ class MainActivity : ComponentActivity() {
         val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
         val scope = rememberCoroutineScope()
 
+        // Tampilkan Editor jika ada file yang sedang diedit
+        if (editingFile != null) {
+            TunnelEditorDialog(
+                filePath = editingFile!!,
+                onDismiss = { 
+                    editingFile = null
+                    shellExecutors.find { it.id == activeExecutorId }?.writeRaw("echo 'File closed.'\n")
+                }
+            )
+        }
+
         ModalNavigationDrawer(
             drawerState = drawerState,
             drawerContent = {
@@ -147,6 +160,7 @@ class MainActivity : ComponentActivity() {
             val screenDirty by activeExecutor.screenDirty.collectAsState()
             val tabsData = shellExecutors.mapIndexed { index, executor -> Pair(executor.id, index + 1) }
             var hiddenInput by remember { mutableStateOf("") }
+            var currentCommandBuffer by remember { mutableStateOf("") }
 
             LaunchedEffect(activeExecutor.lastCommandOutput.value) {
                 val lastOut = activeExecutor.lastCommandOutput.value.lowercase()
@@ -164,6 +178,29 @@ class MainActivity : ComponentActivity() {
                     else -> key
                 }
                 if (ansiCode.isNotEmpty()) activeExecutor.writeRaw(ansiCode)
+            }
+
+            fun processInput(input: String) {
+                // Tangkap perintah 'open <file>'
+                if (input.startsWith("open ")) {
+                    val fileName = input.removePrefix("open ").trim()
+                    val file = File(filesDir, fileName) // Coba di direktori internal dulu
+                    if (file.exists()) {
+                        editingFile = file.absolutePath
+                        activeExecutor.writeRaw("echo 'Opening ${file.name} in Tunnel Editor...'\n")
+                    } else {
+                        // Coba path absolut
+                        val absFile = File(fileName)
+                        if (absFile.exists()) {
+                            editingFile = absFile.absolutePath
+                            activeExecutor.writeRaw("echo 'Opening ${absFile.name} in Tunnel Editor...'\n")
+                        } else {
+                            activeExecutor.writeRaw("echo 'File not found: $fileName'\n")
+                        }
+                    }
+                } else {
+                    activeExecutor.writeRaw(input)
+                }
             }
 
             Box(modifier = Modifier.fillMaxSize()) {
@@ -187,13 +224,33 @@ class MainActivity : ComponentActivity() {
                         
                         BasicTextField(
                             value = hiddenInput, onValueChange = { 
-                                if (it.isNotEmpty()) { activeExecutor.writeRaw(it); hiddenInput = "" }
+                                if (it.isNotEmpty()) { 
+                                    val typed = it
+                                    hiddenInput = ""
+                                    
+                                    // Buffer perintah untuk deteksi 'open'
+                                    if (typed == "\n" || typed == "\r") {
+                                        processInput(currentCommandBuffer + "\n")
+                                        currentCommandBuffer = ""
+                                    } else if (typed == "\u007F") { // Backspace
+                                        if (currentCommandBuffer.isNotEmpty()) {
+                                            currentCommandBuffer = currentCommandBuffer.dropLast(1)
+                                        }
+                                        activeExecutor.writeRaw(typed)
+                                    } else {
+                                        currentCommandBuffer += typed
+                                        activeExecutor.writeRaw(typed)
+                                    }
+                                }
                             },
                             textStyle = TextStyle(color = Color.Transparent),
                             cursorBrush = SolidColor(Color.Transparent),
                             modifier = Modifier.fillMaxSize().onPreviewKeyEvent { event ->
                                 if (event.key == Key.Enter && event.type == KeyEventType.KeyUp) {
-                                    activeExecutor.writeRaw("\n"); hiddenInput = ""; true
+                                    processInput(currentCommandBuffer + "\n")
+                                    currentCommandBuffer = ""
+                                    hiddenInput = ""
+                                    true
                                 } else false
                             }
                         )
