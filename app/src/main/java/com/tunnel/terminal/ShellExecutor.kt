@@ -17,8 +17,12 @@ class ShellExecutor {
     private var pfd: ParcelFileDescriptor? = null
     val id: Int = System.currentTimeMillis().toInt()
 
-    private val _output = MutableStateFlow<List<String>>(emptyList())
-    val output: StateFlow<List<String>> = _output.asStateFlow()
+    // Emulator instance
+    val emulator = TerminalEmulator()
+    
+    // Trigger untuk memberi tahu UI bahwa layar perlu digambar ulang
+    private val _screenDirty = MutableStateFlow(0)
+    val screenDirty: StateFlow<Int> = _screenDirty.asStateFlow()
 
     private val _lastCommandOutput = MutableStateFlow("")
     val lastCommandOutput: StateFlow<String> = _lastCommandOutput.asStateFlow()
@@ -27,25 +31,18 @@ class ShellExecutor {
     suspend fun start() {
         withContext(Dispatchers.IO) {
             masterFd = TerminalJni.createSession(24, 80)
-            if (masterFd < 0) {
-                _output.value = _output.value + "Gagal memulai PTY (NDK Error)."
-                return@withContext
-            }
+            if (masterFd < 0) return@withContext
 
             pfd = ParcelFileDescriptor.adoptFd(masterFd)
             
-            _output.value = _output.value + "Tunnel Terminal v2.0 (NDK PTY Engine)"
-            _output.value = _output.value + "Mesin C/C++ Native berjalan. TUI didukung."
-            _output.value = _output.value + ""
-            
-            // Set prompt kustom
+            // Tulis MOTD langsung ke emulator screen
+            emulator.process("Tunnel Terminal v2.0 (True Emulator)\n")
+            emulator.process("NDK PTY Engine Aktif. TUI Supported.\n\n")
             Thread.sleep(100)
             TerminalJni.write(masterFd, "PS1='tunnel@android:~$ '\n".toByteArray())
+            _screenDirty.value++ // Update UI
 
-            // JALANKAN PEMBACAAN DI THREAD TERPISAH AGAR TIDAK BLOCKING (Anti-Deadlock)
-            Thread {
-                readLoop()
-            }.start()
+            Thread { readLoop() }.start()
         }
     }
 
@@ -62,23 +59,24 @@ class ShellExecutor {
         while (inputStream.read(buffer).also { bytesRead = it } != -1) {
             byteBuffer.position(0)
             byteBuffer.limit(bytesRead)
-            
             decoder.decode(byteBuffer, charBuffer, false)
             charBuffer.flip()
             
             val text = charBuffer.toString()
             charBuffer.clear()
+
+            // Kirim teks mentah ke emulator
+            emulator.process(text)
             
-            text.split("\n").forEach { line ->
-                if (line.isNotEmpty()) {
-                    _output.value = _output.value + line
-                    outputBuffer.append(line).append("\n")
-                    if (outputBuffer.length > 1000) {
-                        outputBuffer = StringBuilder(outputBuffer.substring(outputBuffer.length - 1000))
-                    }
-                    _lastCommandOutput.value = outputBuffer.toString()
-                }
+            // Buffer untuk AI
+            outputBuffer.append(text)
+            if (outputBuffer.length > 2000) {
+                outputBuffer = StringBuilder(outputBuffer.substring(outputBuffer.length - 2000))
             }
+            _lastCommandOutput.value = outputBuffer.toString()
+
+            // Tandai layar kotor agar UI Compose menggambar ulang
+            _screenDirty.value++
         }
     }
 
@@ -89,9 +87,10 @@ class ShellExecutor {
     }
 
     fun clearScreen() {
-        _output.value = emptyList()
+        emulator.process("\u001B[2J\u001B[H") // Kirim kode clear screen ANSI
         outputBuffer.clear()
         _lastCommandOutput.value = ""
+        _screenDirty.value++
     }
 
     fun destroy() {
