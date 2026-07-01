@@ -4,6 +4,7 @@ import android.os.ParcelFileDescriptor
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -20,9 +21,8 @@ class ShellExecutor {
     private var pfd: ParcelFileDescriptor? = null
     val id: Int = System.currentTimeMillis().toInt()
 
-    val emulator = TerminalEmulator()
+    var emulator = TerminalEmulator() // Ubah dari val ke var
     
-    // State untuk melacak apakah proses shell hidup atau mati
     var isAlive by mutableStateOf(true)
         private set
 
@@ -53,7 +53,6 @@ class ShellExecutor {
         }
     }
 
-    // Fungsi untuk memulai ulang sesi yang sudah mati
     suspend fun restart() {
         destroy()
         emulator = TerminalEmulator() // Reset layar
@@ -85,7 +84,6 @@ class ShellExecutor {
             _screenDirty.value++
         }
         
-        // Jika keluar dari while loop, berarti proses shell (sh) telah di-exit
         isAlive = false
         emulator.process("\n[Process Exited. Tap screen to restart session.]\n")
         _screenDirty.value++
@@ -94,7 +92,7 @@ class ShellExecutor {
     fun resizeTerminal(newRows: Int, newCols: Int, fontSize: Float) {
         if (masterFd < 0) return
         TerminalJni.resize(masterFd, newRows, newCols)
-        emulator.resize(newRows, newCols, androidx.compose.ui.unit.sp(fontSize))
+        emulator.resize(newRows, newCols, fontSize.sp)
         _screenDirty.value++
     }
 

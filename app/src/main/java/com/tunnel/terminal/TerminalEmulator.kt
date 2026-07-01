@@ -24,13 +24,11 @@ class TerminalEmulator {
 
     private val ansiRegex = Regex("\u001B\\[([;\\d]*)([A-Za-z])")
 
-    // Fungsi untuk mengatur ulang ukuran layar
     fun resize(newRows: Int, newCols: Int, newFontSize: TextUnit) {
         if (newRows <= 0 || newCols <= 0) return
         if (newRows == rows && newCols == cols && newFontSize == fontSize) return
         
         val newScreen = Array(newRows) { Array(newCols) { TerminalCell() } }
-        // Salin teks lama ke layar baru sebanyak mungkin
         for (r in 0 until minOf(rows, newRows)) {
             for (c in 0 until minOf(cols, newCols)) {
                 newScreen[r][c] = screen[r][c]
@@ -63,15 +61,15 @@ class TerminalEmulator {
     }
 
     private fun printText(text: String) {
-        for (char in text) {
-            when (char) {
+        for (c in text) { // Ubah char menjadi c
+            when (c) {
                 '\n' -> { cursorCol = 0; cursorRow++ }
                 '\r' -> cursorCol = 0
                 '\b' -> if (cursorCol > 0) cursorCol--
                 '\t' -> cursorCol = ((cursorCol / 4) + 1) * 4
                 else -> {
                     if (cursorRow < rows && cursorCol < cols) {
-                        screen[cursorRow][cursorCol].char = char
+                        screen[cursorRow][cursorCol].char = c
                         screen[cursorRow][cursorCol].color = currentColor
                     }
                     cursorCol++
@@ -79,10 +77,7 @@ class TerminalEmulator {
                 }
             }
             if (cursorRow >= rows) {
-                // Scroll up sederhana
-                for (i in 0 until rows - 1) {
-                    screen[i] = screen[i + 1].copyOf()
-                }
+                for (i in 0 until rows - 1) { screen[i] = screen[i + 1].copyOf() }
                 screen[rows - 1] = Array(cols) { TerminalCell() }
                 cursorRow = rows - 1
             }

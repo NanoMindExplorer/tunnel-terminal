@@ -6,6 +6,7 @@ import android.os.Bundle
 import android.view.KeyEvent
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material3.*
@@ -210,7 +211,6 @@ class MainActivity : ComponentActivity() {
                 if (cmd.isNotEmpty()) { commandHistory.add(cmd) }
                 historyIndex = -1
 
-                // Intercept perintah 'help'
                 if (cmd == "help") {
                     val helpText = """
                         ==========================================

@@ -6,7 +6,9 @@ import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -67,9 +69,7 @@ fun ExtraKeysBar(
     isAltActive: Boolean,
     onKeyPressed: (String) -> Unit
 ) {
-    // Baris 1: Kontrol Dasar
     val controlKeys = listOf("ESC", "TAB", "CTRL", "ALT", "↑", "↓", "←", "→", "BKSP", "DEL")
-    // Baris 2: Simbol Penting
     val symbolKeys = listOf("~", "*", "$", "\"", "'", ";", "&", "|", "-", "/", "(", ")")
     
     Column(modifier = Modifier.fillMaxWidth().background(Color(0xFF2B2B2B))) {
@@ -146,7 +146,6 @@ fun TerminalScreenView(
             }
         }
 
-        // Overlay jika sesi mati (karena mengetik 'exit')
         if (!isAlive) {
             Box(
                 modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.8f)).clickable { onRestartSession() },
@@ -169,7 +168,7 @@ fun AIChatPanel(
 ) {
     var inputText by remember { mutableStateOf("") }
     var selectedTab by remember { mutableStateOf(0) }
-    val scrollState = androidx.compose.foundation.rememberScrollState()
+    val scrollState = rememberScrollState()
     var expandedProvider by remember { mutableStateOf(false) }
     var showSaveDialog by remember { mutableStateOf<String?>(null) }
     var snippetTitle by remember { mutableStateOf("") }
