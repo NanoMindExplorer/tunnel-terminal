@@ -61,7 +61,7 @@ class TerminalEmulator {
     }
 
     private fun printText(text: String) {
-        for (ch in text.toCharArray()) {
+        for (ch in text) {
             when (ch) {
                 '\n' -> { cursorCol = 0; cursorRow++ }
                 '\r' -> cursorCol = 0

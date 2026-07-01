@@ -21,7 +21,7 @@ class ShellExecutor {
     private var pfd: ParcelFileDescriptor? = null
     val id: Int = System.currentTimeMillis().toInt()
 
-    var emulator = TerminalEmulator() // Ubah dari val ke var
+    var emulator = TerminalEmulator()
     
     var isAlive by mutableStateOf(true)
         private set
@@ -55,7 +55,7 @@ class ShellExecutor {
 
     suspend fun restart() {
         destroy()
-        emulator = TerminalEmulator() // Reset layar
+        emulator = TerminalEmulator()
         start()
     }
 
