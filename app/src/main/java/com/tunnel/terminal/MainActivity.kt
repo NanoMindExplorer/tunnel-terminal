@@ -1,5 +1,6 @@
 package com.tunnel.terminal
 
+import android.content.Context
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -31,10 +32,14 @@ class MainActivity : ComponentActivity() {
     private val aiAgent = AIAgent()
     
     private val chatMessages = mutableStateListOf<ChatMessage>()
-    private var aiSettings by mutableStateOf(AISettings()) // State untuk pengaturan AI
+    private var aiSettings by mutableStateOf(AISettings())
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        
+        // Muat pengaturan AI dari SharedPreferences
+        loadAISettings()
+        
         lifecycleScope.launch { createNewTab() }
 
         setContent {
@@ -44,6 +49,26 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    private fun loadAISettings() {
+        val prefs = getSharedPreferences("TunnelAIPrefs", Context.MODE_PRIVATE)
+        aiSettings = AISettings(
+            providerName = prefs.getString("providerName", "OpenAI")!!,
+            baseUrl = prefs.getString("baseUrl", "https://api.openai.com/v1")!!,
+            apiKey = prefs.getString("apiKey", "")!!,
+            modelName = prefs.getString("modelName", "gpt-4o-mini")!!
+        )
+    }
+
+    private fun saveAISettings(newSettings: AISettings) {
+        aiSettings = newSettings
+        val prefs = getSharedPreferences("TunnelAIPrefs", Context.MODE_PRIVATE).edit()
+        prefs.putString("providerName", newSettings.providerName)
+        prefs.putString("baseUrl", newSettings.baseUrl)
+        prefs.putString("apiKey", newSettings.apiKey)
+        prefs.putString("modelName", newSettings.modelName)
+        prefs.apply()
     }
 
     private suspend fun createNewTab() {
@@ -78,7 +103,7 @@ class MainActivity : ComponentActivity() {
                     AIChatPanel(
                         messages = chatMessages,
                         settings = aiSettings,
-                        onSettingsChanged = { newSettings -> aiSettings = newSettings },
+                        onSettingsChanged = { newSettings -> saveAISettings(newSettings) }, // Simpan otomatis saat diubah
                         onSendPrompt = { prompt -> scope.launch { handleAIPrompt(prompt) } },
                         onRunCommand = { cmd ->
                             shellExecutors.find { it.id == activeExecutorId }?.executeCommand(cmd)
@@ -123,9 +148,21 @@ class MainActivity : ComponentActivity() {
 
                 Box(modifier = Modifier.weight(1f)) {
                     Column(modifier = Modifier.fillMaxSize().padding(8.dp).verticalScroll(scrollState)) {
+                        // Penerapan ANSI Parser di sini
                         terminalHistory.forEach { line ->
-                            Text(line, color = Color(0xFF00FF00), fontFamily = FontFamily.Monospace, fontSize = 14.sp)
+                            val styledSegments = AnsiParser.parse(line)
+                            Row {
+                                styledSegments.forEach { segment ->
+                                    Text(
+                                        segment.text,
+                                        color = segment.color,
+                                        fontFamily = FontFamily.Monospace,
+                                        fontSize = 14.sp
+                                    )
+                                }
+                            }
                         }
+                        
                         Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                             Text("tunnel@android:~$ ", color = Color(0xFF00FF00), fontFamily = FontFamily.Monospace, fontSize = 14.sp)
                             BasicTextField(
@@ -153,7 +190,6 @@ class MainActivity : ComponentActivity() {
         val activeExecutor = shellExecutors.find { it.id == activeExecutorId }
         val context = activeExecutor?.output?.value?.takeLast(5)?.joinToString("\n") ?: "Terminal kosong"
         
-        // Gunakan setings yang dinamis
         val response = aiAgent.askAI(aiSettings, prompt, context)
         
         val bashRegex = Regex("```bash\\n([\\s\\S]*?)\\n```")
