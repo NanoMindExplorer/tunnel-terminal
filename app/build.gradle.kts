@@ -11,8 +11,8 @@ android {
         applicationId = "com.tunnel.terminal"
         minSdk = 24
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0-phase1"
+        versionCode = 2
+        versionName = "1.0-phase1.1"
     }
 
     buildTypes {
@@ -49,4 +49,7 @@ dependencies {
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-graphics")
     implementation("androidx.compose.material3:material3")
+    
+    // Tambahkan Coroutines untuk proses Async
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
 }
