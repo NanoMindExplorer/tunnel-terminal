@@ -196,11 +196,11 @@ class MainActivity : ComponentActivity() {
                     "ESC" -> "\u001B"
                     "TAB" -> "\t"
                     "↑" -> "\u001B[A"; "↓" -> "\u001B[B"; "→" -> "\u001B[C"; "←" -> "\u001B[D"
-                    "BKSP" -> "\u007F" // Backspace
-                    "DEL" -> "\u001B[3~" // Delete
+                    "BKSP" -> "\u007F"
+                    "DEL" -> "\u001B[3~"
                     "CTRL" -> { isCtrlActive = !isCtrlActive; "" }
                     "ALT" -> { isAltActive = !isAltActive; "" }
-                    else -> key // Untuk semua simbol seperti ~, *, $, dll
+                    else -> key
                 }
                 if (ansiCode.isNotEmpty()) activeExecutor.writeRaw(ansiCode)
             }
@@ -209,6 +209,35 @@ class MainActivity : ComponentActivity() {
                 val cmd = input.trim().replace("\n", "")
                 if (cmd.isNotEmpty()) { commandHistory.add(cmd) }
                 historyIndex = -1
+
+                // Intercept perintah 'help'
+                if (cmd == "help") {
+                    val helpText = """
+                        ==========================================
+                        TUNNEL TERMINAL - AI NATIVE DEV ENVIRONMENT
+                        ==========================================
+                        Built-in Commands:
+                        - help           : Tampilkan menu bantuan ini
+                        - setup-storage  : Buat jembatan ke /sdcard ( ~/storage/shared )
+                        - open <file>    : Edit file di Tunnel Editor UI (Touch Friendly)
+                        - clear          : Bersihkan layar terminal
+
+                        AI Copilot Features (Klik tombol AI di kanan atas):
+                        - Multi-Provider (OpenAI, Claude, DeepSeek, Gemini, Ollama)
+                        - Auto-Debug     : Klik tombol 🛠 untuk minta AI baca error
+                        - Auto-Pilot     : Minta AI menyelesaikan tugas berurutan
+                        - Workflows      : Simpan perintah AI ke tombol快捷 (Snippets)
+
+                        Shortcuts & UX:
+                        - Volume Up/Down : Navigasi riwayat perintah (History)
+                        - CTRL + C       : Hentikan proses yang berjalan (Kill)
+                        - Pinch Screen   : Zoom In/Out ukuran font terminal
+                        ==========================================
+                    """.trimIndent()
+                    activeExecutor.emulator.process(helpText + "\n")
+                    activeExecutor.screenDirty.value++
+                    return
+                }
 
                 if (input.startsWith("open ")) {
                     val fileName = input.removePrefix("open ").trim()
@@ -241,9 +270,7 @@ class MainActivity : ComponentActivity() {
                             emulator = activeExecutor.emulator,
                             screenDirty = screenDirty,
                             isAlive = activeExecutor.isAlive,
-                            onRestartSession = { 
-                                scope.launch { activeExecutor.restart() } 
-                            },
+                            onRestartSession = { scope.launch { activeExecutor.restart() } },
                             onResize = { rows, cols, fontSize -> activeExecutor.resizeTerminal(rows, cols, fontSize) }
                         )
                         
