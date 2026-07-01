@@ -35,13 +35,19 @@ class MainActivity : ComponentActivity() {
     private val chatMessages = mutableStateListOf<ChatMessage>()
     private var aiSettings by mutableStateOf(AISettings())
     private var isProcessingAI by mutableStateOf(false)
+    
+    // Inisialisasi Snippet Manager
+    private lateinit var snippetManager: SnippetManager
+    private val snippetsState = mutableStateListOf<Snippet>()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         
+        snippetManager = SnippetManager(this)
+        snippetsState.addAll(snippetManager.snippets)
+        
         loadAISettings()
         
-        // Mulai Foreground Service agar tidak bisa di-kill Android
         val serviceIntent = Intent(this, TerminalForegroundService::class.java)
         startForegroundService(serviceIntent)
 
@@ -76,6 +82,18 @@ class MainActivity : ComponentActivity() {
         prefs.apply()
     }
 
+    private fun saveSnippet(title: String, command: String) {
+        snippetManager.add(title, command)
+        snippetsState.clear()
+        snippetsState.addAll(snippetManager.snippets)
+    }
+
+    private fun deleteSnippet(index: Int) {
+        snippetManager.remove(index)
+        snippetsState.clear()
+        snippetsState.addAll(snippetManager.snippets)
+    }
+
     private suspend fun createNewTab() {
         val newExecutor = ShellExecutor()
         newExecutor.start()
@@ -93,7 +111,6 @@ class MainActivity : ComponentActivity() {
     override fun onDestroy() {
         super.onDestroy()
         shellExecutors.forEach { it.destroy() }
-        // Hentikan service saat aplikasi benar-benar ditutup
         stopService(Intent(this, TerminalForegroundService::class.java))
     }
 
@@ -110,12 +127,19 @@ class MainActivity : ComponentActivity() {
                     AIChatPanel(
                         messages = chatMessages,
                         settings = aiSettings,
+                        snippets = snippetsState,
                         onSettingsChanged = { newSettings -> saveAISettings(newSettings) },
                         onSendPrompt = { prompt -> scope.launch { handleAIPrompt(prompt) } },
                         onRunCommand = { cmd ->
                             shellExecutors.find { it.id == activeExecutorId }?.executeCommand(cmd)
                             scope.launch { drawerState.close() }
                         },
+                        onSaveSnippet = { title, cmd -> saveSnippet(title, cmd) },
+                        onRunSnippet = { cmd ->
+                            shellExecutors.find { it.id == activeExecutorId }?.executeCommand(cmd)
+                            scope.launch { drawerState.close() }
+                        },
+                        onDeleteSnippet = { index -> deleteSnippet(index) },
                         onClose = { scope.launch { drawerState.close() } }
                     )
                 }
@@ -134,7 +158,6 @@ class MainActivity : ComponentActivity() {
             val scrollState = rememberScrollState()
             val tabsData = shellExecutors.mapIndexed { index, executor -> Pair(executor.id, index + 1) }
 
-            // Auto-Debug Logic: Jika 2 baris terakhir mengandung "error" atau "not found"
             LaunchedEffect(terminalHistory.size) {
                 scrollState.animateScrollTo(scrollState.maxValue)
                 if (terminalHistory.size >= 2) {
@@ -195,7 +218,6 @@ class MainActivity : ComponentActivity() {
                     ExtraKeysBar(onKeyPressed = { handleExtraKey(it) })
                 }
 
-                // Floating Action Button (FAB) untuk Quick AI Fix
                 FloatingActionButton(
                     onClick = {
                         scope.launch {
