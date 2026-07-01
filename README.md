@@ -30,10 +30,3 @@ Pengguna bebas memilih provider AI favorit mereka:
 ### 5. Storage Access Framework
 Ketik `setup-storage` untuk membuat jembatan ke `/sdcard`. Anda bisa mengerjakan proyek web yang bisa diakses langsung oleh aplikasi File Manager HP atau dibagikan ke PC.
 
-## 🛠️ Build From Source
-Aplikasi ini dirancang untuk dibangun sepenuhnya menggunakan GitHub Actions CI/CD.
-1. Clone repositori ini.
-2. Buka tab **Actions** di GitHub.
-3. Download *artifact* APK hasil build terbaru.
-4. Instal di perangkat Android Anda (min SDK 24 / Android 7.0+).
-
