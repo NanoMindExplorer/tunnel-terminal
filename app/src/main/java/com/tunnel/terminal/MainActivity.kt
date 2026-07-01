@@ -36,7 +36,6 @@ class MainActivity : ComponentActivity() {
     private var aiSettings by mutableStateOf(AISettings())
     private var isProcessingAI by mutableStateOf(false)
     
-    // Inisialisasi Snippet Manager
     private lateinit var snippetManager: SnippetManager
     private val snippetsState = mutableStateListOf<Snippet>()
 
@@ -160,12 +159,11 @@ class MainActivity : ComponentActivity() {
 
             LaunchedEffect(terminalHistory.size) {
                 scrollState.animateScrollTo(scrollState.maxValue)
-                if (terminalHistory.size >= 2) {
-                    val lastLine = terminalHistory.last().lowercase()
-                    if (lastLine.contains("error") || lastLine.contains("not found") || lastLine.contains("exception")) {
-                        if (!isProcessingAI && chatMessages.lastOrNull()?.role != "assistant") {
-                            chatMessages.add(ChatMessage("assistant", "Saya mendeteksi ada error di terminal. Klik tombol Fix (🛠) di pojok kanan bawah untuk meminta solusi.", false))
-                        }
+                // Auto debug menggunakan lastCommandOutput yang lebih akurat
+                val lastOut = activeExecutor.lastCommandOutput.value.lowercase()
+                if (lastOut.contains("error") || lastOut.contains("not found") || lastOut.contains("exception")) {
+                    if (!isProcessingAI && chatMessages.lastOrNull()?.role != "assistant") {
+                        chatMessages.add(ChatMessage("assistant", "Saya mendeteksi error pada output perintah terakhir. Klik 🛠 untuk meminta solusi.", false))
                     }
                 }
             }
@@ -221,7 +219,7 @@ class MainActivity : ComponentActivity() {
                 FloatingActionButton(
                     onClick = {
                         scope.launch {
-                            handleAIPrompt("Saya mendapat error di terminal. Tolong jelaskan dan berikan perintah untuk memperbaiknya.")
+                            handleAIPrompt("Perbaiki error ini.")
                             drawerState.open()
                         }
                     },
@@ -241,7 +239,13 @@ class MainActivity : ComponentActivity() {
         
         chatMessages.add(ChatMessage("user", prompt, false))
         val activeExecutor = shellExecutors.find { it.id == activeExecutorId }
-        val context = activeExecutor?.output?.value?.takeLast(10)?.joinToString("\n") ?: "Terminal kosong"
+        
+        // SMART CONTEXT: Hanya kirim output perintah terakhir, bukan seluruh layar
+        val context = if (activeExecutor?.lastCommandOutput?.value.isNullOrEmpty()) {
+            "Tidak ada output sebelumnya. Terminal kosong."
+        } else {
+            "Output perintah terakhir di terminal:\n${activeExecutor?.lastCommandOutput?.value}"
+        }
         
         val response = aiAgent.askAI(aiSettings, prompt, context)
         
