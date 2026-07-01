@@ -1,36 +1,63 @@
 package com.tunnel.terminal
 
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.unit.TextUnit
+import androidx.compose.ui.unit.sp
 
-// Merepresentasikan satu sel karakter di layar
 data class TerminalCell(
     var char: Char = ' ',
     var color: Color = Color(0xFF00FF00)
 )
 
-class TerminalEmulator(val rows: Int = 24, val cols: Int = 80) {
-    val screen = Array(rows) { Array(cols) { TerminalCell() } }
+class TerminalEmulator {
+    var rows: Int = 24
+        private set
+    var cols: Int = 80
+        private set
+    var fontSize: TextUnit = 12.sp
+        private set
+
+    private var screen = Array(rows) { Array(cols) { TerminalCell() } }
     var cursorRow = 0
     var cursorCol = 0
     var currentColor = Color(0xFF00FF00)
 
     private val ansiRegex = Regex("\u001B\\[([;\\d]*)([A-Za-z])")
 
-    // Fungsi utama untuk memproses output dari C++ PTY
+    // Fungsi untuk mengatur ulang ukuran layar
+    fun resize(newRows: Int, newCols: Int, newFontSize: TextUnit) {
+        if (newRows <= 0 || newCols <= 0) return
+        if (newRows == rows && newCols == cols && newFontSize == fontSize) return
+        
+        val newScreen = Array(newRows) { Array(newCols) { TerminalCell() } }
+        // Salin teks lama ke layar baru sebanyak mungkin
+        for (r in 0 until minOf(rows, newRows)) {
+            for (c in 0 until minOf(cols, newCols)) {
+                newScreen[r][c] = screen[r][c]
+            }
+        }
+        
+        screen = newScreen
+        rows = newRows
+        cols = newCols
+        fontSize = newFontSize
+        
+        if (cursorRow >= rows) cursorRow = rows - 1
+        if (cursorCol >= cols) cursorCol = cols - 1
+    }
+
+    fun getScreen(): Array<Array<TerminalCell>> = screen
+
     fun process(data: String) {
         var lastIndex = 0
         ansiRegex.findAll(data).forEach { match ->
-            // Proses teks biasa sebelum kode ANSI
             val textBefore = data.substring(lastIndex, match.range.first)
             printText(textBefore)
-
-            // Proses kode ANSI
             val params = match.groupValues[1]
             val command = match.groupValues[2]
             handleAnsiCommand(params, command)
             lastIndex = match.range.last + 1
         }
-        // Proses sisa teks setelah ANSI terakhir
         val remainingText = data.substring(lastIndex)
         printText(remainingText)
     }
@@ -51,40 +78,43 @@ class TerminalEmulator(val rows: Int = 24, val cols: Int = 80) {
                     if (cursorCol >= cols) { cursorCol = 0; cursorRow++ }
                 }
             }
-            if (cursorRow >= rows) cursorRow = rows - 1 // Sederhanakan scroll down
+            if (cursorRow >= rows) {
+                // Scroll up sederhana
+                for (i in 0 until rows - 1) {
+                    screen[i] = screen[i + 1].copyOf()
+                }
+                screen[rows - 1] = Array(cols) { TerminalCell() }
+                cursorRow = rows - 1
+            }
         }
     }
 
     private fun handleAnsiCommand(params: String, command: Char) {
         val paramList = if (params.isEmpty()) listOf(0) else params.split(";").mapNotNull { it.toIntOrNull() ?: 0 }
         when (command) {
-            'm' -> handleColor(paramList) // Warna
-            'H', 'f' -> { // Pindah kursor (row;col)
+            'm' -> handleColor(paramList)
+            'H', 'f' -> {
                 cursorRow = (paramList.getOrElse(0) { 1 } - 1).coerceIn(0, rows - 1)
                 cursorCol = (paramList.getOrElse(1) { 1 } - 1).coerceIn(0, cols - 1)
             }
-            'A' -> cursorRow = (cursorRow - paramList[0]).coerceAtLeast(0) // Atas
-            'B' -> cursorRow = (cursorRow + paramList[0]).coerceAtMost(rows - 1) // Bawah
-            'C' -> cursorCol = (cursorCol + paramList[0]).coerceAtMost(cols - 1) // Kanan
-            'D' -> cursorCol = (cursorCol - paramList[0]).coerceAtLeast(0) // Kiri
-            'J' -> { // Clear Screen
+            'A' -> cursorRow = (cursorRow - paramList[0]).coerceAtLeast(0)
+            'B' -> cursorRow = (cursorRow + paramList[0]).coerceAtMost(rows - 1)
+            'C' -> cursorCol = (cursorCol + paramList[0]).coerceAtMost(cols - 1)
+            'D' -> cursorCol = (cursorCol - paramList[0]).coerceAtLeast(0)
+            'J' -> {
                 if (paramList[0] == 2 || paramList[0] == 0) {
                     screen.forEach { row -> row.forEach { cell -> cell.char = ' ' } }
                     cursorRow = 0; cursorCol = 0
                 }
             }
-            'K' -> { // Clear Line
-                if (cursorRow < rows) {
-                    for (i in cursorCol until cols) screen[cursorRow][i].char = ' '
-                }
-            }
+            'K' -> { if (cursorRow < rows) { for (i in cursorCol until cols) screen[cursorRow][i].char = ' ' } }
         }
     }
 
     private fun handleColor(params: List<Int>) {
         params.forEach { code ->
             when (code) {
-                0 -> currentColor = Color(0xFF00FF00) // Reset
+                0 -> currentColor = Color(0xFF00FF00)
                 30 -> currentColor = Color.Black
                 31 -> currentColor = Color(0xFFFF5252)
                 32 -> currentColor = Color(0xFF00FF00)

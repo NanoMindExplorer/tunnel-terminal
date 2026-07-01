@@ -32,16 +32,23 @@ class ShellExecutor {
             if (masterFd < 0) return@withContext
 
             pfd = ParcelFileDescriptor.adoptFd(masterFd)
-            
-            emulator.process("Tunnel Terminal v3.0 (Beyond Termux)\n")
+            emulator.process("Tunnel Terminal v3.0 (Dynamic Resize)\n")
             emulator.process("NDK PTY + AI Copilot Active.\n\n")
             _screenDirty.value++
             
             Thread.sleep(100)
             writeRaw("PS1='tunnel@android:~$ '\n")
-
             Thread { readLoop() }.start()
         }
+    }
+
+    fun resizeTerminal(newRows: Int, newCols: Int, fontSize: Float) {
+        if (masterFd < 0) return
+        // Update ukuran di C++ (kirim sinyal SIGWINCH ke proses shell)
+        TerminalJni.resize(masterFd, newRows, newCols)
+        // Update ukuran di emulator Kotlin
+        emulator.resize(newRows, newCols, androidx.compose.ui.unit.sp(fontSize))
+        _screenDirty.value++
     }
 
     private fun readLoop() {
@@ -59,28 +66,18 @@ class ShellExecutor {
             byteBuffer.limit(bytesRead)
             decoder.decode(byteBuffer, charBuffer, false)
             charBuffer.flip()
-            
             val text = charBuffer.toString()
             charBuffer.clear()
 
             emulator.process(text)
-            
             outputBuffer.append(text)
-            if (outputBuffer.length > 2000) {
-                outputBuffer = StringBuilder(outputBuffer.substring(outputBuffer.length - 2000))
-            }
+            if (outputBuffer.length > 2000) outputBuffer = StringBuilder(outputBuffer.substring(outputBuffer.length - 2000))
             _lastCommandOutput.value = outputBuffer.toString()
-
             _screenDirty.value++
         }
     }
 
-    // Mengirim perintah biasa (dengan Enter)
-    fun executeCommand(command: String) {
-        writeRaw(command + "\n")
-    }
-
-    // Mengirim karakter mentah (untuk panah, ctrl, dll)
+    fun executeCommand(command: String) { writeRaw(command + "\n") }
     fun writeRaw(data: String) {
         if (masterFd < 0) return
         TerminalJni.write(masterFd, data.toByteArray(StandardCharsets.UTF_8))

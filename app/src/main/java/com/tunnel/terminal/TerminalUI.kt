@@ -2,10 +2,10 @@ package com.tunnel.terminal
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
@@ -13,6 +13,8 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
@@ -21,6 +23,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlin.math.roundToInt
 
 @Composable
 fun TabBar(
@@ -76,19 +79,56 @@ fun ExtraKeysBar(onKeyPressed: (String) -> Unit) {
 }
 
 @Composable
-fun TerminalScreenView(emulator: TerminalEmulator, screenDirty: Int) {
-    val scrollState = rememberScrollState()
-    Column(modifier = Modifier.fillMaxSize().padding(8.dp).verticalScroll(scrollState)) {
-        for (row in 0 until emulator.rows) {
-            val annotatedString = buildAnnotatedString {
-                for (col in 0 until emulator.cols) {
-                    val cell = emulator.screen[row][col]
-                    withStyle(SpanStyle(color = cell.color)) {
-                        append(cell.char)
+fun TerminalScreenView(
+    emulator: TerminalEmulator,
+    screenDirty: Int,
+    onResize: (rows: Int, cols: Int, fontSize: Float) -> Unit
+) {
+    var fontSize by remember { mutableStateOf(12f) }
+    
+    // Deteksi ukuran area yang tersedia (setelah keyboard muncul)
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black)
+            .onSizeChanged { size ->
+                // Hitung ulang baris dan kolom berdasarkan pixel yang tersedia
+                val charWidthPx = (fontSize * 0.6).roundToInt() // Estimasi lebar font monospace
+                val charHeightPx = (fontSize * 1.2).roundToInt() // Estimasi tinggi baris
+                
+                if (charWidthPx > 0 && charHeightPx > 0) {
+                    val newCols = (size.width / charWidthPx).coerceAtLeast(20)
+                    val newRows = (size.height / charHeightPx).coerceAtLeast(10)
+                    onResize(newRows, newCols, fontSize)
+                }
+            }
+            // Gestur Pinch to Zoom untuk mengubah ukuran font
+            .pointerInput(Unit) {
+                detectTransformGestures { _, _, zoom, _ ->
+                    val newFont = (fontSize * zoom).coerceIn(8f, 24f)
+                    if (newFont != fontSize) {
+                        fontSize = newFont
                     }
                 }
             }
-            Text(text = annotatedString, fontFamily = FontFamily.Monospace, fontSize = 14.sp, modifier = Modifier.fillMaxWidth())
+    ) {
+        Column(modifier = Modifier.fillMaxSize().padding(4.dp)) {
+            for (row in 0 until emulator.rows) {
+                val annotatedString = buildAnnotatedString {
+                    for (col in 0 until emulator.cols) {
+                        val cell = emulator.getScreen()[row][col]
+                        withStyle(SpanStyle(color = cell.color)) {
+                            append(cell.char)
+                        }
+                    }
+                }
+                Text(
+                    text = annotatedString,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = fontSize.sp,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
         }
     }
 }
@@ -141,15 +181,12 @@ fun AIChatPanel(
                     val color = if (msg.role == "user") Color(0xFF00FF00) else Color.White
                     Text("${if (msg.role == "user") "Anda" else "AI"}:", color = color, fontSize = 14.sp, fontFamily = FontFamily.Monospace)
                     Text(msg.content, color = Color.White, fontSize = 14.sp, fontFamily = FontFamily.Monospace, modifier = Modifier.padding(bottom = 8.dp))
-                    
                     if (msg.commands.size > 1) {
-                        // UI untuk Auto-Pilot (Multiple Commands)
                         Text("🚀 Rangkaian Auto-Pilot (${msg.commands.size} langkah):", color = Color(0xFFFFEB3B), fontSize = 12.sp, fontFamily = FontFamily.Monospace)
                         Row(modifier = Modifier.padding(bottom = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             Button(onClick = { onRunAutoPilot(msg.commands) }, colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00BCD4))) { Text("Run Auto-Pilot") }
                         }
                     } else if (msg.isCommand) {
-                        // UI untuk Single Command
                         Row(modifier = Modifier.padding(bottom = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             Button(onClick = { onRunCommand(msg.content) }, colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF6200EE))) { Text("▶ Run") }
                             Button(onClick = { showSaveDialog = msg.content }, colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF333333))) { Text("💾 Save") }

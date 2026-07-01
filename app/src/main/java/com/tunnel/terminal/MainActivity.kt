@@ -1,15 +1,10 @@
 package com.tunnel.terminal
 
-import android.Manifest
 import android.content.Context
 import android.content.Intent
-import android.content.pm.PackageManager
 import android.os.Bundle
-import android.os.Environment
 import androidx.activity.ComponentActivity
-import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material3.*
@@ -23,11 +18,9 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import java.io.File
 
 class MainActivity : ComponentActivity() {
     private val shellExecutors = mutableStateListOf<ShellExecutor>()
@@ -111,61 +104,11 @@ class MainActivity : ComponentActivity() {
         stopService(Intent(this, TerminalForegroundService::class.java))
     }
 
-    private fun setupStorage() {
-        val activeExecutor = shellExecutors.find { it.id == activeExecutorId } ?: return
-        try {
-            val storageDir = File(filesDir, "storage")
-            storageDir.mkdirs()
-            
-            // Buat symlink ke /sdcard (Penyimpanan Eksternal Utama)
-            val sharedDir = File(storageDir, "shared")
-            if (!sharedDir.exists()) {
-                val sdcard = Environment.getExternalStorageDirectory().absolutePath
-                ProcessBuilder("ln", "-s", sdcard, sharedDir.absolutePath).start().waitFor()
-            }
-            activeExecutor.writeRaw("echo 'Storage bridge created successfully at ~/storage/shared'\n")
-            activeExecutor.writeRaw("echo 'You can now access /sdcard via ~/storage/shared'\n")
-        } catch (e: Exception) {
-            activeExecutor.writeRaw("echo 'Error creating storage bridge: ${e.message}'\n")
-        }
-    }
-
     @OptIn(ExperimentalMaterial3Api::class)
     @Composable
     fun TerminalApp() {
         val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
         val scope = rememberCoroutineScope()
-
-        // Launcher untuk izin penyimpanan
-        val storagePermissionLauncher = rememberLauncherForActivityResult(
-            ActivityResultContracts.RequestMultiplePermissions()
-        ) { permissions ->
-            val granted = permissions.values.any { it }
-            if (granted) {
-                setupStorage()
-            } else {
-                shellExecutors.find { it.id == activeExecutorId }?.writeRaw("echo 'Storage permission denied. Cannot access /sdcard.'\n")
-            }
-            pendingSetupStorage = false
-        }
-
-        // Cek jika pengguna meminta setup-storage
-        LaunchedEffect(pendingSetupStorage) {
-            if (pendingSetupStorage) {
-                val hasPermission = ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.READ_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED ||
-                                    ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.WRITE_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
-                
-                if (hasPermission) {
-                    setupStorage()
-                    pendingSetupStorage = false
-                } else {
-                    storagePermissionLauncher.launch(arrayOf(
-                        Manifest.permission.READ_EXTERNAL_STORAGE,
-                        Manifest.permission.WRITE_EXTERNAL_STORAGE
-                    ))
-                }
-            }
-        }
 
         ModalNavigationDrawer(
             drawerState = drawerState,
@@ -232,38 +175,25 @@ class MainActivity : ComponentActivity() {
                         onTabClosed = { closeTab(it) },
                         onOpenAI = { scope.launch { drawerState.open() } }
                     )
+                    
                     Box(modifier = Modifier.weight(1f)) {
-                        TerminalScreenView(emulator = activeExecutor.emulator, screenDirty = screenDirty)
+                        TerminalScreenView(
+                            emulator = activeExecutor.emulator,
+                            screenDirty = screenDirty,
+                            onResize = { rows, cols, fontSize ->
+                                activeExecutor.resizeTerminal(rows, cols, fontSize)
+                            }
+                        )
+                        
                         BasicTextField(
                             value = hiddenInput, onValueChange = { 
-                                if (it.isNotEmpty()) {
-                                    val typed = it
-                                    hiddenInput = ""
-                                    
-                                    // Intercept perintah built-in
-                                    if (typed == "setup-storage\n" || typed == "setup-storage\r") {
-                                        pendingSetupStorage = true
-                                    } else {
-                                        activeExecutor.writeRaw(typed)
-                                    }
-                                }
+                                if (it.isNotEmpty()) { activeExecutor.writeRaw(it); hiddenInput = "" }
                             },
                             textStyle = TextStyle(color = Color.Transparent),
                             cursorBrush = SolidColor(Color.Transparent),
                             modifier = Modifier.fillMaxSize().onPreviewKeyEvent { event ->
                                 if (event.key == Key.Enter && event.type == KeyEventType.KeyUp) {
-                                    val currentInput = hiddenInput
-                                    if (currentInput.isNotEmpty()) {
-                                        hiddenInput = ""
-                                        if (currentInput.trim() == "setup-storage") {
-                                            pendingSetupStorage = true
-                                        } else {
-                                            activeExecutor.writeRaw(currentInput + "\n")
-                                        }
-                                    } else {
-                                        activeExecutor.writeRaw("\n")
-                                    }
-                                    true
+                                    activeExecutor.writeRaw("\n"); hiddenInput = ""; true
                                 } else false
                             }
                         )
@@ -283,7 +213,7 @@ class MainActivity : ComponentActivity() {
         val activeExecutor = shellExecutors.find { it.id == activeExecutorId } ?: return
         for (cmd in commands) {
             activeExecutor.executeCommand(cmd)
-            delay(3000) // Tunggu 3 detik antar perintah
+            delay(3000)
         }
     }
 
