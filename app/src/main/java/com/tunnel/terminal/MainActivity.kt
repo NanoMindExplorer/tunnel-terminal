@@ -24,18 +24,20 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
-    // Menyimpan daftar sesi shell yang aktif
     private val shellExecutors = mutableStateListOf<ShellExecutor>()
     private var activeExecutorId by mutableStateOf(0)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         
-        // Buat tab pertama saat aplikasi dibuka
-        createNewTab()
+        // Panggil createNewTab di dalam coroutine scope
+        lifecycleScope.launch {
+            createNewTab()
+        }
 
         setContent {
             MaterialTheme {
@@ -46,11 +48,29 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun createNewTab() {
+    private suspend fun createNewTab() {
         val newExecutor = ShellExecutor()
-        newExecutor.start()
+        newExecutor.start() // Sekarang aman dipanggil karena createNewTab adalah suspend fun
         shellExecutors.add(newExecutor)
         activeExecutorId = newExecutor.id
+    }
+
+    private fun closeTab(id: Int) {
+        val executor = shellExecutors.find { it.id == id }
+        executor?.destroy()
+        shellExecutors.remove(executor)
+        
+        // Jika tab yang ditutup adalah tab aktif, pindah ke tab pertama yang tersisa
+        if (activeExecutorId == id) {
+            activeExecutorId = shellExecutors.firstOrNull()?.id ?: 0
+        }
+        
+        // Jika semua tab ditutup, buat tab baru otomatis
+        if (shellExecutors.isEmpty()) {
+            lifecycleScope.launch {
+                createNewTab()
+            }
+        }
     }
 
     override fun onDestroy() {
@@ -60,14 +80,21 @@ class MainActivity : ComponentActivity() {
 
     @Composable
     fun TerminalApp() {
-        val activeExecutor = shellExecutors.find { it.id == activeExecutorId } ?: shellExecutors.first()
-        val terminalHistory by activeExecutor.output.collectAsState()
+        val activeExecutor = shellExecutors.find { it.id == activeExecutorId } ?: shellExecutors.firstOrNull()
         
+        // Jika belum ada executor (saat loading pertama), tampilkan teks menunggu
+        if (activeExecutor == null) {
+            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Text("Inisialisasi Tunnel Terminal...", color = Color.White, fontFamily = FontFamily.Monospace)
+            }
+            return
+        }
+
+        val terminalHistory by activeExecutor.output.collectAsState()
         var inputText by remember(activeExecutorId) { mutableStateOf("") }
         val scrollState = rememberScrollState()
         val scope = rememberCoroutineScope()
 
-        // Mapping tab untuk UI (ID, Nomor Tab)
         val tabsData = shellExecutors.mapIndexed { index, executor -> 
             Pair(executor.id, index + 1) 
         }
@@ -79,23 +106,24 @@ class MainActivity : ComponentActivity() {
         fun handleExtraKey(key: String) {
             when (key) {
                 "ESC" -> inputText = ""
-                "TAB" -> inputText += "    " // Sementara beri 4 spasi
+                "TAB" -> inputText += "    "
                 "CTRL", "ALT" -> { /* Modifier keys, butuh PTY untuk berfungsi maksimal */ }
                 "↑", "↓", "←", "→" -> { /* Arrow keys butuh PTY untuk navigasi cursor */ }
-                else -> inputText += key // Untuk -, /, |
+                else -> inputText += key
             }
         }
 
         Column(modifier = Modifier.fillMaxSize()) {
-            // 1. Tab Bar di paling atas
             TabBar(
                 tabs = tabsData,
                 activeTabId = activeExecutorId,
                 onTabSelected = { id -> activeExecutorId = id },
-                onNewTab = { createNewTab() }
+                onNewTab = { 
+                    lifecycleScope.launch { createNewTab() } 
+                },
+                onTabClosed = { id -> closeTab(id) }
             )
 
-            // 2. Area Terminal (Scrollable)
             Box(modifier = Modifier.weight(1f)) {
                 Column(
                     modifier = Modifier
@@ -137,7 +165,6 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
-            // 3. Extra Keys Bar di atas keyboard
             ExtraKeysBar(onKeyPressed = { handleExtraKey(it) })
         }
     }

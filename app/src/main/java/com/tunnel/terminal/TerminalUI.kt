@@ -20,32 +20,48 @@ fun TabBar(
     tabs: List<Pair<Int, Int>>, // Pair of (Session ID, Tab Number)
     activeTabId: Int,
     onTabSelected: (Int) -> Unit,
-    onNewTab: () -> Unit
+    onNewTab: () -> Unit,
+    onTabClosed: (Int) -> Unit
 ) {
     LazyRow(
         modifier = Modifier
             .fillMaxWidth()
             .background(Color(0xFF1E1E1E))
             .padding(4.dp),
-        horizontalArrangement = Arrangement.spacedBy(4.dp)
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        verticalAlignment = Alignment.CenterVertically
     ) {
         items(tabs) { tab ->
             val isActive = tab.first == activeTabId
-            Box(
+            Row(
                 modifier = Modifier
                     .background(
                         if (isActive) Color(0xFF333333) else Color(0xFF222222),
                         RoundedCornerShape(4.dp)
                     )
                     .clickable { onTabSelected(tab.first) }
-                    .padding(horizontal = 12.dp, vertical = 6.dp)
+                    .padding(start = 12.dp, top = 6.dp, bottom = 6.dp, end = 4.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = "Tab ${tab.second}",
+                    text = "Tab ${tab.second}  ",
                     color = if (isActive) Color.White else Color.Gray,
                     fontSize = 12.sp,
                     fontFamily = FontFamily.Monospace
                 )
+                // Tombol Close (X)
+                Box(
+                    modifier = Modifier
+                        .clickable { onTabClosed(tab.first) }
+                        .padding(4.dp)
+                ) {
+                    Text(
+                        text = "X",
+                        color = Color(0xFFFF5252),
+                        fontSize = 12.sp,
+                        fontFamily = FontFamily.Monospace
+                    )
+                }
             }
         }
         item {
@@ -53,7 +69,7 @@ fun TabBar(
                 modifier = Modifier
                     .background(Color(0xFF3A3A3A), RoundedCornerShape(4.dp))
                     .clickable { onNewTab() }
-                    .padding(horizontal = 12.dp, vertical = 6.dp)
+                    .padding(horizontal = 12.dp, vertical = 10.dp)
             ) {
                 Text("+", color = Color.White, fontSize = 14.sp, fontFamily = FontFamily.Monospace)
             }

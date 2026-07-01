@@ -14,7 +14,6 @@ class ShellExecutor {
     private var process: Process? = null
     private var outputWriter: OutputStreamWriter? = null
 
-    // ID unik untuk setiap sesi tab
     val id: Int = System.currentTimeMillis().toInt()
 
     private val _output = MutableStateFlow<List<String>>(emptyList())
@@ -30,6 +29,10 @@ class ShellExecutor {
                     .start()
 
                 outputWriter = OutputStreamWriter(process?.outputStream)
+
+                _output.value = _output.value + "Tunnel Terminal v2.0 (Tab ID: $id)"
+                _output.value = _output.value + "Mesin eksekusi aktif. Ketik 'ls', 'pwd', dll."
+                _output.value = _output.value + ""
 
                 val reader = BufferedReader(InputStreamReader(process?.inputStream))
                 var line: String?
@@ -58,6 +61,11 @@ class ShellExecutor {
     }
 
     fun destroy() {
-        process?.destroy()
+        try {
+            outputWriter?.close()
+            process?.destroy()
+        } catch (e: Exception) {
+            // Abaikan error saat penutupan
+        }
     }
 }
