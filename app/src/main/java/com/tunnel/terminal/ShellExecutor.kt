@@ -1,98 +1,100 @@
 package com.tunnel.terminal
 
+import android.os.ParcelFileDescriptor
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
-import java.io.BufferedReader
-import java.io.IOException
-import java.io.InputStreamReader
-import java.io.OutputStreamWriter
+import java.io.FileInputStream
+import java.nio.ByteBuffer
+import java.nio.CharBuffer
+import java.nio.charset.CodingErrorAction
+import java.nio.charset.StandardCharsets
 
 class ShellExecutor {
-    private var process: Process? = null
-    private var outputWriter: OutputStreamWriter? = null
-
+    private var masterFd: Int = -1
+    private var pfd: ParcelFileDescriptor? = null
     val id: Int = System.currentTimeMillis().toInt()
 
     private val _output = MutableStateFlow<List<String>>(emptyList())
     val output: StateFlow<List<String>> = _output.asStateFlow()
 
-    // Buffer khusus untuk menyimpan output perintah terakhir (untuk AI)
     private val _lastCommandOutput = MutableStateFlow("")
     val lastCommandOutput: StateFlow<String> = _lastCommandOutput.asStateFlow()
-    private var isCapturingCommand = false
-
-    private val endMarker = "___TUNNEL_CMD_END_${id}___"
+    private var outputBuffer = StringBuilder()
 
     suspend fun start() {
         withContext(Dispatchers.IO) {
-            try {
-                process = ProcessBuilder("/system/bin/sh")
-                    .redirectErrorStream(true)
-                    .start()
+            // Buat sesi PTY via C++ (Default 24 baris, 80 kolom)
+            masterFd = TerminalJni.createSession(24, 80)
+            if (masterFd < 0) {
+                _output.value = _output.value + "Gagal memulai PTY (NDK Error)."
+                return@withContext
+            }
 
-                outputWriter = OutputStreamWriter(process?.outputStream)
+            pfd = ParcelFileDescriptor.adoptFd(masterFd)
+            val inputStream = FileInputStream(pfd!!.fileDescriptor)
 
-                // MOTD (Message of the Day) - Identitas Aplikasi
-                _output.value = _output.value + """
-                    ████████╗███╗   ██╗██████╗ ███████╗██╗███████╗██╗  ██╗
-                    ╚══██╔══╝████╗  ██║██╔══██╗██╔════╝██║██╔════╝██║  ██║
-                       ██║   ██╔██╗ ██║██║  ██║█████╗  ██║███████╗███████║
-                       ██║   ██║╚██╗██║██║  ██║██╔══╝  ██║╚════██║██╔══██║
-                       ██║   ██║ ╚████║██████╔╝███████╗██║███████║██║  ██║
-                       ╚═╝   ╚═╝  ╚═══╝╚═════╝ ╚══════╝╚═╝╚══════╝╚═╝  ██║
-                                                                    ╚═╝
-                """.trimIndent()
-                _output.value = _output.value + "Tunnel Terminal v1.0 (Masterpiece Build)"
-                _output.value = _output.value + "Powered by Multi-Provider AI Copilot"
-                _output.value = _output.value + "Ketik 'help' atau buka panel AI (tombol AI di atas)."
-                _output.value = _output.value + ""
+            // Set prompt kustom agar terlihat profesional
+            Thread.sleep(100)
+            TerminalJni.write(masterFd, "PS1='tunnel@android:~$ '\n".toByteArray())
+            
+            _output.value = _output.value + "Tunnel Terminal v2.0 (NDK PTY Engine Aktif)"
+            _output.value = _output.value + "Mesin C/C++ Native berjalan. TUI (vim/nano) didukung."
+            _output.value = _output.value + ""
 
-                val reader = BufferedReader(InputStreamReader(process?.inputStream))
-                var line: String?
-                while (reader.readLine().also { line = it } != null) {
-                    if (line == endMarker) {
-                        isCapturingCommand = false
-                        continue
-                    }
-                    _output.value = _output.value + line!!
-                    
-                    // Tangkap output untuk konteks AI
-                    if (isCapturingCommand) {
-                        _lastCommandOutput.value += line + "\n"
+            // Thread untuk membaca output PTY secara real-time
+            val buffer = ByteArray(4096)
+            val decoder = StandardCharsets.UTF_8.newDecoder()
+                .onMalformedInput(CodingErrorAction.REPLACE)
+                .onUnmappableCharacter(CodingErrorAction.REPLACE)
+            val byteBuffer = ByteBuffer.wrap(buffer)
+            val charBuffer = CharBuffer.allocate(8192)
+
+            var bytesRead: Int
+            while (inputStream.read(buffer).also { bytesRead = it } != -1) {
+                byteBuffer.position(0)
+                byteBuffer.limit(bytesRead)
+                
+                decoder.decode(byteBuffer, charBuffer, false)
+                charBuffer.flip()
+                
+                val text = charBuffer.toString()
+                charBuffer.clear()
+                
+                // Pecah teks berdasarkan baris baru
+                text.split("\n").forEach { line ->
+                    if (line.isNotEmpty()) {
+                        _output.value = _output.value + line
+                        outputBuffer.append(line).append("\n")
+                        if (outputBuffer.length > 1000) {
+                            outputBuffer = StringBuilder(outputBuffer.substring(outputBuffer.length - 1000))
+                        }
+                        _lastCommandOutput.value = outputBuffer.toString()
                     }
                 }
-            } catch (e: IOException) {
-                _output.value = _output.value + "Gagal memulai shell: ${e.message}"
             }
         }
     }
 
     fun executeCommand(command: String) {
-        try {
-            _output.value = _output.value + "tunnel@android:~$ $command"
-            
-            // Reset buffer konteks AI dan mulai tangkap output perintah ini
-            _lastCommandOutput.value = ""
-            isCapturingCommand = true
-            
-            outputWriter?.write("$command\necho $endMarker\n")
-            outputWriter?.flush()
-        } catch (e: IOException) {
-            _output.value = _output.value + "Gagal mengeksekusi: ${e.message}"
-        }
+        if (masterFd < 0) return
+        // Kirim perintah ke PTY (tambahkan newline/Enter)
+        val data = (command + "\n").toByteArray(StandardCharsets.UTF_8)
+        TerminalJni.write(masterFd, data)
     }
 
     fun clearScreen() {
         _output.value = emptyList()
+        outputBuffer.clear()
+        _lastCommandOutput.value = ""
     }
 
     fun destroy() {
         try {
-            outputWriter?.close()
-            process?.destroy()
+            if (masterFd >= 0) TerminalJni.close(masterFd)
+            pfd?.close()
         } catch (e: Exception) { }
     }
 }

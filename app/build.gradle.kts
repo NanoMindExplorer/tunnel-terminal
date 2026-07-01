@@ -11,8 +11,8 @@ android {
         applicationId = "com.tunnel.terminal"
         minSdk = 24
         targetSdk = 34
-        versionCode = 2
-        versionName = "1.0-phase1.1"
+        versionCode = 3
+        versionName = "2.0-phase7-pty"
     }
 
     buildTypes {
@@ -39,6 +39,14 @@ android {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
         }
     }
+    
+    // Konfigurasi NDK & CMake
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+            version = "3.22.1"
+        }
+    }
 }
 
 dependencies {
@@ -49,7 +57,5 @@ dependencies {
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-graphics")
     implementation("androidx.compose.material3:material3")
-    
-    // Tambahkan Coroutines untuk proses Async
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
 }
