@@ -7,14 +7,19 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
@@ -71,6 +76,30 @@ fun ExtraKeysBar(onKeyPressed: (String) -> Unit) {
     }
 }
 
+// Composable baru untuk merender matriks terminal
+@Composable
+fun TerminalScreenView(emulator: TerminalEmulator, screenDirty: Int) {
+    val scrollState = rememberScrollState()
+    Column(modifier = Modifier.fillMaxSize().padding(8.dp).verticalScroll(scrollState)) {
+        for (row in 0 until emulator.rows) {
+            val annotatedString = buildAnnotatedString {
+                for (col in 0 until emulator.cols) {
+                    val cell = emulator.screen[row][col]
+                    withStyle(SpanStyle(color = cell.color)) {
+                        append(cell.char)
+                    }
+                }
+            }
+            Text(
+                text = annotatedString,
+                fontFamily = FontFamily.Monospace,
+                fontSize = 14.sp,
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AIChatPanel(
@@ -80,7 +109,7 @@ fun AIChatPanel(
     onRunSnippet: (String) -> Unit, onDeleteSnippet: (Int) -> Unit, onClose: () -> Unit
 ) {
     var inputText by remember { mutableStateOf("") }
-    var selectedTab by remember { mutableStateOf(0) } // 0: Chat, 1: Workflows, 2: Settings
+    var selectedTab by remember { mutableStateOf(0) }
     val scrollState = rememberScrollState()
     var expandedProvider by remember { mutableStateOf(false) }
     var showSaveDialog by remember { mutableStateOf<String?>(null) }
@@ -95,7 +124,7 @@ fun AIChatPanel(
                     Text("Perintah: ${showSaveDialog}")
                     OutlinedTextField(
                         value = snippetTitle, onValueChange = { snippetTitle = it },
-                        label = { Text("Nama Workflow (misal: Start Server)") },
+                        label = { Text("Nama Workflow") },
                         modifier = Modifier.fillMaxWidth().padding(top = 8.dp)
                     )
                 }
@@ -118,7 +147,6 @@ fun AIChatPanel(
             Text("Tunnel AI Copilot", color = Color.White, fontSize = 18.sp, fontFamily = FontFamily.Monospace)
             Button(onClick = onClose, colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF333333))) { Text("X", color = Color.White) }
         }
-
         Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(onClick = { selectedTab = 0 }, colors = ButtonDefaults.buttonColors(containerColor = if (selectedTab == 0) Color(0xFF6200EE) else Color(0xFF333333))) { Text("Chat") }
             Button(onClick = { selectedTab = 1 }, colors = ButtonDefaults.buttonColors(containerColor = if (selectedTab == 1) Color(0xFF6200EE) else Color(0xFF333333))) { Text("Workflows") }
@@ -147,7 +175,7 @@ fun AIChatPanel(
         } else if (selectedTab == 1) {
             Column(modifier = Modifier.weight(1f).padding(16.dp).verticalScroll(scrollState)) {
                 if (snippets.isEmpty()) {
-                    Text("Belum ada workflow tersimpan. Anda bisa menyimpan perintah dari tab Chat.", color = Color.Gray, fontSize = 14.sp)
+                    Text("Belum ada workflow tersimpan.", color = Color.Gray, fontSize = 14.sp)
                 } else {
                     snippets.forEachIndexed { index, snippet ->
                         Card(modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp), colors = CardDefaults.cardColors(containerColor = Color(0xFF2B2B2B))) {

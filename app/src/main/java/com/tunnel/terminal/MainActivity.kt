@@ -5,22 +5,14 @@ import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.input.key.Key
-import androidx.compose.ui.input.key.KeyEventType
-import androidx.compose.ui.input.key.key
-import androidx.compose.ui.input.key.onPreviewKeyEvent
-import androidx.compose.ui.input.key.type
+import androidx.compose.ui.input.key.*
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
@@ -42,10 +34,8 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        
         snippetManager = SnippetManager(this)
         snippetsState.addAll(snippetManager.snippets)
-        
         loadAISettings()
         
         val serviceIntent = Intent(this, TerminalForegroundService::class.java)
@@ -125,10 +115,8 @@ class MainActivity : ComponentActivity() {
             drawerContent = {
                 ModalDrawerSheet(modifier = Modifier.fillMaxHeight(0.9f).background(Color(0xFF1A1A1A))) {
                     AIChatPanel(
-                        messages = chatMessages,
-                        settings = aiSettings,
-                        snippets = snippetsState,
-                        onSettingsChanged = { newSettings -> saveAISettings(newSettings) },
+                        messages = chatMessages, settings = aiSettings, snippets = snippetsState,
+                        onSettingsChanged = { saveAISettings(it) },
                         onSendPrompt = { prompt -> scope.launch { handleAIPrompt(prompt) } },
                         onRunCommand = { cmd ->
                             shellExecutors.find { it.id == activeExecutorId }?.executeCommand(cmd)
@@ -139,7 +127,7 @@ class MainActivity : ComponentActivity() {
                             shellExecutors.find { it.id == activeExecutorId }?.executeCommand(cmd)
                             scope.launch { drawerState.close() }
                         },
-                        onDeleteSnippet = { index -> deleteSnippet(index) },
+                        onDeleteSnippet = { deleteSnippet(it) },
                         onClose = { scope.launch { drawerState.close() } }
                     )
                 }
@@ -153,26 +141,35 @@ class MainActivity : ComponentActivity() {
                 return@ModalNavigationDrawer
             }
 
-            val terminalHistory by activeExecutor.output.collectAsState()
-            var inputText by remember(activeExecutorId) { mutableStateOf("") }
-            val scrollState = rememberScrollState()
+            val screenDirty by activeExecutor.screenDirty.collectAsState()
             val tabsData = shellExecutors.mapIndexed { index, executor -> Pair(executor.id, index + 1) }
+            
+            // Hidden text field to capture keyboard input
+            var hiddenInput by remember { mutableStateOf("") }
 
-            LaunchedEffect(terminalHistory.size) {
-                scrollState.animateScrollTo(scrollState.maxValue)
+            LaunchedEffect(activeExecutor.lastCommandOutput.value) {
                 val lastOut = activeExecutor.lastCommandOutput.value.lowercase()
-                if (lastOut.contains("error") || lastOut.contains("not found") || lastOut.contains("exception")) {
+                if (lastOut.contains("error") || lastOut.contains("not found")) {
                     if (!isProcessingAI && chatMessages.lastOrNull()?.role != "assistant") {
-                        chatMessages.add(ChatMessage("assistant", "Saya mendeteksi error pada output perintah terakhir. Klik 🛠 untuk meminta solusi.", false))
+                        chatMessages.add(ChatMessage("assistant", "Saya mendeteksi error. Klik 🛠 untuk meminta solusi.", false))
                     }
                 }
             }
 
             fun handleExtraKey(key: String) {
-                when (key) {
-                    "ESC" -> inputText = ""
-                    "TAB" -> inputText += "    "
-                    else -> inputText += key
+                val ansiCode = when (key) {
+                    "ESC" -> "\u001B"
+                    "TAB" -> "\t"
+                    "↑" -> "\u001B[A"
+                    "↓" -> "\u001B[B"
+                    "→" -> "\u001B[C"
+                    "←" -> "\u001B[D"
+                    "CTRL" -> "" // Butuh kombinasi tombol, diabaikan sementara
+                    "ALT" -> ""
+                    else -> key
+                }
+                if (ansiCode.isNotEmpty()) {
+                    activeExecutor.writeRaw(ansiCode)
                 }
             }
 
@@ -180,38 +177,36 @@ class MainActivity : ComponentActivity() {
                 Column(modifier = Modifier.fillMaxSize()) {
                     TabBar(
                         tabs = tabsData, activeTabId = activeExecutorId,
-                        onTabSelected = { id -> activeExecutorId = id },
+                        onTabSelected = { activeExecutorId = it },
                         onNewTab = { lifecycleScope.launch { createNewTab() } },
-                        onTabClosed = { id -> closeTab(id) },
+                        onTabClosed = { closeTab(it) },
                         onOpenAI = { scope.launch { drawerState.open() } }
                     )
 
                     Box(modifier = Modifier.weight(1f)) {
-                        Column(modifier = Modifier.fillMaxSize().padding(8.dp).verticalScroll(scrollState)) {
-                            terminalHistory.forEach { line ->
-                                val styledSegments = AnsiParser.parse(line)
-                                Row {
-                                    styledSegments.forEach { segment ->
-                                        Text(segment.text, color = segment.color, fontFamily = FontFamily.Monospace, fontSize = 14.sp)
-                                    }
+                        // Render Matriks Terminal
+                        TerminalScreenView(emulator = activeExecutor.emulator, screenDirty = screenDirty)
+                        
+                        // BasicTextField transparan untuk menangkap keyboard Android
+                        BasicTextField(
+                            value = hiddenInput,
+                            onValueChange = { 
+                                if (it.isNotEmpty()) {
+                                    // Langsung kirim keystroke ke PTY
+                                    activeExecutor.writeRaw(it)
+                                    hiddenInput = "" // Kosongkan kembali
                                 }
+                            },
+                            textStyle = TextStyle(color = Color.Transparent), // Teks transparan
+                            cursorBrush = androidx.compose.ui.graphics.SolidColor(Color.Transparent), // Kursor transparan
+                            modifier = Modifier.fillMaxSize().onPreviewKeyEvent { event ->
+                                if (event.key == Key.Enter && event.type == KeyEventType.KeyUp) {
+                                    activeExecutor.writeRaw("\n")
+                                    hiddenInput = ""
+                                    true
+                                } else false
                             }
-                            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                                Text("tunnel@android:~$ ", color = Color(0xFF00FF00), fontFamily = FontFamily.Monospace, fontSize = 14.sp)
-                                BasicTextField(
-                                    value = inputText, onValueChange = { inputText = it },
-                                    textStyle = TextStyle(color = Color.White, fontFamily = FontFamily.Monospace, fontSize = 14.sp),
-                                    cursorBrush = SolidColor(Color.White),
-                                    modifier = Modifier.fillMaxWidth().onPreviewKeyEvent { event ->
-                                        if (event.key == Key.Enter && event.type == KeyEventType.KeyUp) {
-                                            if (inputText.trim() == "clear") activeExecutor.clearScreen() else activeExecutor.executeCommand(inputText)
-                                            inputText = ""
-                                            true
-                                        } else false
-                                    }
-                                )
-                            }
-                        }
+                        )
                     }
                     ExtraKeysBar(onKeyPressed = { handleExtraKey(it) })
                 }
@@ -226,9 +221,7 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.align(Alignment.BottomEnd).padding(16.dp).padding(bottom = 40.dp),
                     containerColor = Color(0xFF6200EE),
                     contentColor = Color.White
-                ) {
-                    Text("🛠", fontSize = 20.sp)
-                }
+                ) { Text("🛠", fontSize = 20.sp) }
             }
         }
     }
@@ -239,15 +232,13 @@ class MainActivity : ComponentActivity() {
         
         chatMessages.add(ChatMessage("user", prompt, false))
         val activeExecutor = shellExecutors.find { it.id == activeExecutorId }
-        
         val context = if (activeExecutor?.lastCommandOutput?.value.isNullOrEmpty()) {
-            "Tidak ada output sebelumnya. Terminal kosong."
+            "Terminal kosong."
         } else {
-            "Output perintah terakhir di terminal:\n${activeExecutor?.lastCommandOutput?.value}"
+            "Output perintah terakhir:\n${activeExecutor?.lastCommandOutput?.value}"
         }
         
         val response = aiAgent.askAI(aiSettings, prompt, context)
-        
         val bashRegex = Regex("```bash\\n([\\s\\S]*?)\\n```")
         val match = bashRegex.find(response)
         
@@ -259,7 +250,6 @@ class MainActivity : ComponentActivity() {
         } else {
             chatMessages.add(ChatMessage("assistant", response, false))
         }
-        
         isProcessingAI = false
     }
 }

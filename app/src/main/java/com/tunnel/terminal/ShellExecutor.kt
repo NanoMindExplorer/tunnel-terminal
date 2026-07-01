@@ -17,10 +17,8 @@ class ShellExecutor {
     private var pfd: ParcelFileDescriptor? = null
     val id: Int = System.currentTimeMillis().toInt()
 
-    // Emulator instance
     val emulator = TerminalEmulator()
     
-    // Trigger untuk memberi tahu UI bahwa layar perlu digambar ulang
     private val _screenDirty = MutableStateFlow(0)
     val screenDirty: StateFlow<Int> = _screenDirty.asStateFlow()
 
@@ -35,12 +33,12 @@ class ShellExecutor {
 
             pfd = ParcelFileDescriptor.adoptFd(masterFd)
             
-            // Tulis MOTD langsung ke emulator screen
-            emulator.process("Tunnel Terminal v2.0 (True Emulator)\n")
-            emulator.process("NDK PTY Engine Aktif. TUI Supported.\n\n")
+            emulator.process("Tunnel Terminal v3.0 (Beyond Termux)\n")
+            emulator.process("NDK PTY + AI Copilot Active.\n\n")
+            _screenDirty.value++
+            
             Thread.sleep(100)
-            TerminalJni.write(masterFd, "PS1='tunnel@android:~$ '\n".toByteArray())
-            _screenDirty.value++ // Update UI
+            writeRaw("PS1='tunnel@android:~$ '\n")
 
             Thread { readLoop() }.start()
         }
@@ -65,29 +63,31 @@ class ShellExecutor {
             val text = charBuffer.toString()
             charBuffer.clear()
 
-            // Kirim teks mentah ke emulator
             emulator.process(text)
             
-            // Buffer untuk AI
             outputBuffer.append(text)
             if (outputBuffer.length > 2000) {
                 outputBuffer = StringBuilder(outputBuffer.substring(outputBuffer.length - 2000))
             }
             _lastCommandOutput.value = outputBuffer.toString()
 
-            // Tandai layar kotor agar UI Compose menggambar ulang
             _screenDirty.value++
         }
     }
 
+    // Mengirim perintah biasa (dengan Enter)
     fun executeCommand(command: String) {
+        writeRaw(command + "\n")
+    }
+
+    // Mengirim karakter mentah (untuk panah, ctrl, dll)
+    fun writeRaw(data: String) {
         if (masterFd < 0) return
-        val data = (command + "\n").toByteArray(StandardCharsets.UTF_8)
-        TerminalJni.write(masterFd, data)
+        TerminalJni.write(masterFd, data.toByteArray(StandardCharsets.UTF_8))
     }
 
     fun clearScreen() {
-        emulator.process("\u001B[2J\u001B[H") // Kirim kode clear screen ANSI
+        emulator.process("\u001B[2J\u001B[H")
         outputBuffer.clear()
         _lastCommandOutput.value = ""
         _screenDirty.value++
