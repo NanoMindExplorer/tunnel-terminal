@@ -22,6 +22,14 @@ data class TerminalCell(
 )
 
 /**
+ * ThemeHolder - holder sederhana untuk tema aktif yang bisa di-share
+ * antar TerminalEmulator instance tanpa re-create emulator saat ganti tema.
+ *
+ * Simple holder for active theme shared across emulator instances.
+ */
+class ThemeHolder(var theme: TerminalTheme = ThemeManager.defaultTheme)
+
+/**
  * TerminalEmulator - Emulator terminal lengkap dengan screen buffer.
  *
  * Phase 17 (Major Bug Fix) - Penambahan signifikan:
@@ -37,7 +45,7 @@ data class TerminalCell(
  * - OSC sequence diabaikan dengan benar (tidak print garbage)
  * - Private mode (?...) parsing yang benar
  */
-class TerminalEmulator {
+class TerminalEmulator(private val themeHolder: ThemeHolder = ThemeHolder()) {
     var rows: Int = 24
         private set
     var cols: Int = 80
@@ -64,16 +72,16 @@ class TerminalEmulator {
     private var savedCursorCol = 0
 
     /** Current style attributes. */
-    private var currentFg = Color(0xFF00FF00)
-    private var currentBg = Color.Black
+    private var currentFg: Color = themeHolder.theme.foreground
+    private var currentBg: Color = themeHolder.theme.background
     private var currentBold = false
     private var currentItalic = false
     private var currentUnderline = false
     private var currentReverse = false
 
-    /** Default colors (reset target). */
-    private val defaultFg = Color(0xFF00FF00)
-    private val defaultBg = Color.Black
+    /** Default colors (reset target) - read from theme. */
+    private val defaultFg: Color get() = themeHolder.theme.foreground
+    private val defaultBg: Color get() = themeHolder.theme.background
 
     /** Scrolling region (top, bottom inclusive, 0-indexed). */
     private var scrollTop = 0
@@ -361,6 +369,7 @@ class TerminalEmulator {
             resetStyle()
             return
         }
+        val palette = themeHolder.theme.ansi
         var i = 0
         while (i < params.size) {
             val code = params[i]
@@ -377,45 +386,45 @@ class TerminalEmulator {
                 24 -> currentUnderline = false
                 27 -> currentReverse = false
 
-                /* Standard foreground 30-37 */
-                30 -> currentFg = Color.Black
-                31 -> currentFg = Color(0xFFFF5252)
-                32 -> currentFg = Color(0xFF4CAF50)
-                33 -> currentFg = Color(0xFFFFC107)
-                34 -> currentFg = Color(0xFF2196F3)
-                35 -> currentFg = Color(0xFFE040FB)
-                36 -> currentFg = Color(0xFF00BCD4)
-                37 -> currentFg = Color.White
+                /* Standard foreground 30-37 (theme palette 0-7). */
+                30 -> currentFg = palette.getOrElse(0) { Color.Black }
+                31 -> currentFg = palette.getOrElse(1) { Color(0xFFFF5252) }
+                32 -> currentFg = palette.getOrElse(2) { Color(0xFF4CAF50) }
+                33 -> currentFg = palette.getOrElse(3) { Color(0xFFFFC107) }
+                34 -> currentFg = palette.getOrElse(4) { Color(0xFF2196F3) }
+                35 -> currentFg = palette.getOrElse(5) { Color(0xFFE040FB) }
+                36 -> currentFg = palette.getOrElse(6) { Color(0xFF00BCD4) }
+                37 -> currentFg = palette.getOrElse(7) { Color.White }
 
-                /* Bright foreground 90-97 */
-                90 -> currentFg = Color(0xFF757575)
-                91 -> currentFg = Color(0xFFFF8A80)
-                92 -> currentFg = Color(0xFFB9F6CA)
-                93 -> currentFg = Color(0xFFFFF59D)
-                94 -> currentFg = Color(0xFF82B1FF)
-                95 -> currentFg = Color(0xFFEA80FC)
-                96 -> currentFg = Color(0xFF84FFFF)
-                97 -> currentFg = Color.White
+                /* Bright foreground 90-97 (theme palette 8-15). */
+                90 -> currentFg = palette.getOrElse(8) { Color(0xFF757575) }
+                91 -> currentFg = palette.getOrElse(9) { Color(0xFFFF8A80) }
+                92 -> currentFg = palette.getOrElse(10) { Color(0xFFB9F6CA) }
+                93 -> currentFg = palette.getOrElse(11) { Color(0xFFFFF59D) }
+                94 -> currentFg = palette.getOrElse(12) { Color(0xFF82B1FF) }
+                95 -> currentFg = palette.getOrElse(13) { Color(0xFFEA80FC) }
+                96 -> currentFg = palette.getOrElse(14) { Color(0xFF84FFFF) }
+                97 -> currentFg = palette.getOrElse(15) { Color.White }
 
-                /* Standard background 40-47 */
-                40 -> currentBg = Color.Black
-                41 -> currentBg = Color(0xFFFF5252)
-                42 -> currentBg = Color(0xFF4CAF50)
-                43 -> currentBg = Color(0xFFFFC107)
-                44 -> currentBg = Color(0xFF2196F3)
-                45 -> currentBg = Color(0xFFE040FB)
-                46 -> currentBg = Color(0xFF00BCD4)
-                47 -> currentBg = Color.White
+                /* Standard background 40-47 (theme palette 0-7). */
+                40 -> currentBg = palette.getOrElse(0) { Color.Black }
+                41 -> currentBg = palette.getOrElse(1) { Color(0xFFFF5252) }
+                42 -> currentBg = palette.getOrElse(2) { Color(0xFF4CAF50) }
+                43 -> currentBg = palette.getOrElse(3) { Color(0xFFFFC107) }
+                44 -> currentBg = palette.getOrElse(4) { Color(0xFF2196F3) }
+                45 -> currentBg = palette.getOrElse(5) { Color(0xFFE040FB) }
+                46 -> currentBg = palette.getOrElse(6) { Color(0xFF00BCD4) }
+                47 -> currentBg = palette.getOrElse(7) { Color.White }
 
-                /* Bright background 100-107 */
-                100 -> currentBg = Color(0xFF757575)
-                101 -> currentBg = Color(0xFFFF8A80)
-                102 -> currentBg = Color(0xFFB9F6CA)
-                103 -> currentBg = Color(0xFFFFF59D)
-                104 -> currentBg = Color(0xFF82B1FF)
-                105 -> currentBg = Color(0xFFEA80FC)
-                106 -> currentBg = Color(0xFF84FFFF)
-                107 -> currentBg = Color.White
+                /* Bright background 100-107 (theme palette 8-15). */
+                100 -> currentBg = palette.getOrElse(8) { Color(0xFF757575) }
+                101 -> currentBg = palette.getOrElse(9) { Color(0xFFFF8A80) }
+                102 -> currentBg = palette.getOrElse(10) { Color(0xFFB9F6CA) }
+                103 -> currentBg = palette.getOrElse(11) { Color(0xFFFFF59D) }
+                104 -> currentBg = palette.getOrElse(12) { Color(0xFF82B1FF) }
+                105 -> currentBg = palette.getOrElse(13) { Color(0xFFEA80FC) }
+                106 -> currentBg = palette.getOrElse(14) { Color(0xFF84FFFF) }
+                107 -> currentBg = palette.getOrElse(15) { Color.White }
 
                 /* 38 - extended foreground color */
                 38 -> {
@@ -474,18 +483,16 @@ class TerminalEmulator {
         }
     }
 
-    /** Map kode 256-color ke Color. Map 256-color code to Color. */
+    /** Map kode 256-color ke Color. Pakai palette tema untuk 0-15.
+     * Map 256-color code to Color. Uses theme palette for 0-15. */
     private fun color256(n: Int): Color {
         val idx = n.coerceIn(0, 255)
-        /* 0-15: standard + bright (mirip 30-37, 90-97) */
-        val standard = arrayOf(
-            Color(0xFF000000), Color(0xFFFF5252), Color(0xFF4CAF50), Color(0xFFFFC107),
-            Color(0xFF2196F3), Color(0xFFE040FB), Color(0xFF00BCD4), Color(0xFFEEEEEE),
-            Color(0xFF757575), Color(0xFFFF8A80), Color(0xFFB9F6CA), Color(0xFFFFF59D),
-            Color(0xFF82B1FF), Color(0xFFEA80FC), Color(0xFF84FFFF), Color(0xFFFFFFFF)
-        )
-        if (idx < 16) return standard[idx]
-        /* 16-231: 6x6x6 color cube */
+        /* 0-15: pakai palette dari tema aktif.
+         * Use theme palette for 0-15. */
+        if (idx < 16) {
+            return themeHolder.theme.ansi.getOrElse(idx) { Color.White }
+        }
+        /* 16-231: 6x6x6 color cube (warna tetap, tidak tema-dependent). */
         if (idx < 232) {
             val off = idx - 16
             val r = off / 36

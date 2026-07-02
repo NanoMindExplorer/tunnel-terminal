@@ -30,6 +30,7 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import java.io.File
 
@@ -74,6 +75,11 @@ class MainActivity : ComponentActivity() {
     /** Storage Access Framework manager. */
     private lateinit var storageManager: StorageManager
 
+    /** Theme holder - shared across all ShellExecutor instances.
+     * Saat user ganti tema, semua tab langsung update (tanpa re-create emulator). */
+    private val themeHolder = ThemeHolder()
+    private var currentTheme by mutableStateOf(ThemeManager.defaultTheme)
+
     /** SAF launcher - dipanggil saat user ketik `setup-storage`. */
     private val storageLauncher = registerForActivityResult(
         ActivityResultContracts.OpenDocumentTree()
@@ -105,6 +111,7 @@ class MainActivity : ComponentActivity() {
         snippetsState.addAll(snippetManager.snippets)
         storageManager = StorageManager(this)
         loadAISettings()
+        loadTheme()
 
         /* Request POST_NOTIFICATIONS permission untuk Android 13+. */
         requestNotificationPermission()
@@ -118,11 +125,34 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             MaterialTheme {
-                Surface(modifier = Modifier.fillMaxSize(), color = Color.Black) {
+                Surface(modifier = Modifier.fillMaxSize(), color = currentTheme.background) {
                     TerminalApp()
                 }
             }
         }
+    }
+
+    /** Load saved theme from prefs and apply to themeHolder. */
+    private fun loadTheme() {
+        val theme = ThemeManager.getActiveTheme(this)
+        themeHolder.theme = theme
+        currentTheme = theme
+    }
+
+    /** Change theme at runtime: update holder + persist. */
+    private fun changeTheme(newTheme: TerminalTheme) {
+        themeHolder.theme = newTheme
+        currentTheme = newTheme
+        ThemeManager.setActiveTheme(this, newTheme)
+        /* Trigger screen update on all tabs so theme color applies to existing cells.
+         * Note: existing cells keep their assigned colors (they were set when written).
+         * New cells will use new theme. For full refresh, user can clear screen. */
+        shellExecutors.forEach { it.triggerScreenUpdate() }
+    }
+
+    /** Clear chat conversation history (multi-turn memory reset). */
+    private fun clearChat() {
+        chatMessages.clear()
     }
 
     private fun requestNotificationPermission() {
@@ -187,7 +217,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private suspend fun createNewTab() {
-        val newExecutor = ShellExecutor()
+        val newExecutor = ShellExecutor(themeHolder)
         /* Tampilkan MOTD sebelum start. */
         newExecutor.start()
         shellExecutors.add(newExecutor)
@@ -286,11 +316,14 @@ class MainActivity : ComponentActivity() {
         ModalNavigationDrawer(
             drawerState = drawerState,
             drawerContent = {
-                ModalDrawerSheet(modifier = Modifier.fillMaxHeight(0.9f).background(Color(0xFF1A1A1A))) {
+                ModalDrawerSheet(modifier = Modifier.fillMaxHeight(0.9f).background(currentTheme.uiBg)) {
                     AIChatPanel(
                         messages = chatMessages,
                         settings = aiSettings,
                         snippets = snippetsState,
+                        theme = currentTheme,
+                        themes = ThemeManager.presets,
+                        isProcessingAI = isProcessingAI,
                         onSettingsChanged = { saveAISettings(it) },
                         onSendPrompt = { prompt -> scope.launch { handleAIPrompt(prompt) } },
                         onRunCommand = { cmd ->
@@ -306,6 +339,8 @@ class MainActivity : ComponentActivity() {
                             scope.launch { drawerState.close() }
                         },
                         onDeleteSnippet = { id -> deleteSnippet(id) },
+                        onThemeChanged = { changeTheme(it) },
+                        onClearChat = { clearChat() },
                         onClose = { scope.launch { drawerState.close() } }
                     )
                 }
@@ -647,54 +682,124 @@ class MainActivity : ComponentActivity() {
         return false
     }
 
+    /**
+     * Handle AI prompt dengan streaming SSE + multi-turn conversation memory.
+     *
+     * Phase 18:
+     * - Tambah user message ke chatMessages (untuk display + conversation history)
+     * - Buat placeholder assistant message dengan isStreaming=true
+     * - Koleksi token dari askAIStreaming() Flow, append ke placeholder
+     * - Saat stream selesai, parse bash blocks untuk deteksi command/autopilot
+     * - Conversation history dikirim ke AI untuk multi-turn context
+     *
+     * Streaming SSE handler with multi-turn memory.
+     */
     private suspend fun handleAIPrompt(prompt: String) {
         if (isProcessingAI) {
-            chatMessages.add(ChatMessage("assistant", "⏳ AI masih memproses permintaan sebelumnya. Tunggu sebentar.", false))
+            chatMessages.add(ChatMessage(
+                "assistant",
+                "⏳ AI masih memproses permintaan sebelumnya. Tunggu sebentar.",
+                false
+            ))
             return
         }
         isProcessingAI = true
-        chatMessages.add(ChatMessage("user", prompt, false))
+
+        /* Tambah user message ke history (untuk display + multi-turn memory). */
+        val userMsg = ChatMessage("user", prompt, conversationRole = "user")
+        chatMessages.add(userMsg)
 
         val activeExecutor = shellExecutors.find { it.id == activeExecutorId }
-        /* Pakai clean output (ANSI stripped). */
-        val context = activeExecutor?.getCleanOutput()?.let {
-            if (it.isBlank()) "Terminal kosong." else "Output terminal terakhir:\n$it"
-        } ?: "Terminal tidak tersedia."
+        val terminalContext = activeExecutor?.getCleanOutput() ?: ""
 
-        val response = aiAgent.askAI(aiSettings, prompt, context)
+        /* Placeholder assistant message yang akan di-update selama streaming.
+         * Placeholder assistant message updated during streaming. */
+        val streamingMsg = ChatMessage(
+            role = "assistant",
+            content = "",
+            isStreaming = true,
+            conversationRole = "assistant"
+        )
+        chatMessages.add(streamingMsg)
+        val streamingIdx = chatMessages.size - 1
 
-        /* Cek apakah response mengandung error dari sisi AI client. */
-        val isError = response.startsWith("Error") || response.startsWith("Timeout") ||
-                      response.startsWith("Kesalahan") || response.startsWith("API Key") ||
-                      response.startsWith("DNS") || response.startsWith("SSL") ||
-                      response.startsWith("Akses ditolak") || response.startsWith("Endpoint") ||
-                      response.startsWith("Rate limit") || response.startsWith("Server")
+        val fullResponse = StringBuilder()
+        var firstChunk = true
 
-        /* Parse bash blocks. */
-        val bashRegex = Regex("```(?:bash|sh|shell)?\\n([\\s\\S]*?)\\n```")
-        val matches = bashRegex.findAll(response).toList()
-
-        if (matches.size > 1) {
-            val commands = matches.map { it.groupValues[1].trim() }
-            val explanation = response.substring(0, matches.first().range.first).trim()
-            if (explanation.isNotEmpty()) {
-                chatMessages.add(ChatMessage("assistant", explanation, false, isError = isError))
+        try {
+            /* Koleksi token-by-token dari streaming Flow. */
+            aiAgent.askAIStreaming(aiSettings, chatMessages.toList(), terminalContext).collect { delta ->
+                if (firstChunk) {
+                    firstChunk = false
+                    /* Cek apakah delta pertama adalah error message (client-side error). */
+                    val isClientError = delta.startsWith("Error") || delta.startsWith("Timeout") ||
+                                        delta.startsWith("Kesalahan") || delta.startsWith("API Key") ||
+                                        delta.startsWith("DNS") || delta.startsWith("SSL") ||
+                                        delta.startsWith("Akses ditolak") || delta.startsWith("Endpoint") ||
+                                        delta.startsWith("Rate limit") || delta.startsWith("Server")
+                    if (isClientError) {
+                        chatMessages[streamingIdx] = streamingMsg.copy(
+                            content = delta,
+                            isStreaming = false,
+                            isError = true
+                        )
+                        isProcessingAI = false
+                        return
+                    }
+                }
+                fullResponse.append(delta)
+                /* Update placeholder dengan content yang sudah ter-akumulasi.
+                 * Update placeholder with accumulated content. */
+                chatMessages[streamingIdx] = streamingMsg.copy(
+                    content = fullResponse.toString(),
+                    isStreaming = true
+                )
             }
-            chatMessages.add(ChatMessage(
-                "assistant",
-                "Rangkaian perintah siap dieksekusi (${commands.size} langkah).",
-                false, commands = commands
-            ))
-        } else if (matches.size == 1) {
-            val command = matches[0].groupValues[1].trim()
-            val explanation = response.substring(0, matches[0].range.first).trim()
-            if (explanation.isNotEmpty()) {
-                chatMessages.add(ChatMessage("assistant", explanation, false, isError = isError))
+
+            /* Stream selesai. Parse bash blocks untuk deteksi command/autopilot.
+             * Stream done. Parse bash blocks to detect command/autopilot. */
+            val response = fullResponse.toString()
+            val bashRegex = Regex("```(?:bash|sh|shell)?\\n([\\s\\S]*?)\\n```")
+            val matches = bashRegex.findAll(response).toList()
+
+            if (matches.size > 1) {
+                val commands = matches.map { it.groupValues[1].trim() }
+                val explanation = response.substring(0, matches.first().range.first).trim()
+                val finalContent = if (explanation.isNotEmpty()) explanation else
+                    "Rangkaian perintah siap dieksekusi (${commands.size} langkah)."
+                /* Replace streaming message: keep explanation as content, attach commands. */
+                chatMessages[streamingIdx] = streamingMsg.copy(
+                    content = finalContent,
+                    isStreaming = false,
+                    commands = commands
+                )
+            } else if (matches.size == 1) {
+                val command = matches[0].groupValues[1].trim()
+                val explanation = response.substring(0, matches[0].range.first).trim()
+                val finalContent = if (explanation.isNotEmpty()) explanation else command
+                chatMessages[streamingIdx] = streamingMsg.copy(
+                    content = finalContent,
+                    isStreaming = false,
+                    isCommand = true,
+                    commands = listOf(command)
+                )
+            } else {
+                /* No bash block - just text response. Keep accumulated content. */
+                chatMessages[streamingIdx] = streamingMsg.copy(
+                    content = response,
+                    isStreaming = false
+                )
             }
-            chatMessages.add(ChatMessage("assistant", command, true, isError = isError))
-        } else {
-            chatMessages.add(ChatMessage("assistant", response, false, isError = isError))
+        } catch (e: Exception) {
+            /* Stream cancelled or error mid-stream. Keep partial content + mark as error. */
+            val partial = fullResponse.toString()
+            chatMessages[streamingIdx] = streamingMsg.copy(
+                content = if (partial.isBlank()) "Stream terputus: ${e.message}" else partial,
+                isStreaming = false,
+                isError = partial.isBlank()
+            )
+        } finally {
+            isProcessingAI = false
         }
-        isProcessingAI = false
     }
 }

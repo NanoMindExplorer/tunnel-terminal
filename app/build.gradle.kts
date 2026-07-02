@@ -11,9 +11,9 @@ android {
         applicationId = "com.tunnel.terminal"
         minSdk = 24
         targetSdk = 34
-        // Phase 17 (Major Bug Fix Release): bump version
-        versionCode = 4
-        versionName = "3.0.0-phase17-major-fix"
+        // Phase 18: AI Streaming + Multi-turn Memory + Theme Picker
+        versionCode = 5
+        versionName = "3.1.0-phase18-streaming-themes"
     }
 
     buildTypes {
@@ -59,6 +59,8 @@ dependencies {
     implementation("androidx.compose.ui:ui-graphics")
     implementation("androidx.compose.material3:material3")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
+    // Phase 18: Flow/callbackFlow untuk AI streaming SSE
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.7.3")
 
     // Phase 17: DocumentFile untuk Storage Access Framework (StorageManager)
     implementation("androidx.documentfile:documentfile:1.0.1")

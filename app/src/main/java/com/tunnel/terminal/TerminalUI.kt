@@ -14,6 +14,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.key.*
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
@@ -227,28 +228,42 @@ fun TerminalScreenView(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AIChatPanel(
-    messages: List<ChatMessage>, settings: AISettings, snippets: List<Snippet>,
-    onSettingsChanged: (AISettings) -> Unit, onSendPrompt: (String) -> Unit,
-    onRunCommand: (String) -> Unit, onRunAutoPilot: (List<String>) -> Unit,
-    onSaveSnippet: (String, String) -> Unit, onRunSnippet: (String) -> Unit,
-    onDeleteSnippet: (Long) -> Unit, onClose: () -> Unit
+    messages: List<ChatMessage>,
+    settings: AISettings,
+    snippets: List<Snippet>,
+    theme: TerminalTheme,
+    themes: List<TerminalTheme>,
+    isProcessingAI: Boolean,
+    onSettingsChanged: (AISettings) -> Unit,
+    onSendPrompt: (String) -> Unit,
+    onRunCommand: (String) -> Unit,
+    onRunAutoPilot: (List<String>) -> Unit,
+    onSaveSnippet: (String, String) -> Unit,
+    onRunSnippet: (String) -> Unit,
+    onDeleteSnippet: (Long) -> Unit,
+    onThemeChanged: (TerminalTheme) -> Unit,
+    onClearChat: () -> Unit,
+    onClose: () -> Unit
 ) {
     var inputText by remember { mutableStateOf("") }
     var selectedTab by remember { mutableStateOf(0) }
+    /* Settings sub-tab: 0=AI Provider, 1=Theme, 2=About. */
+    var settingsSubTab by remember { mutableStateOf(0) }
     val scrollState = rememberScrollState()
     var expandedProvider by remember { mutableStateOf(false) }
     var showSaveDialog by remember { mutableStateOf<String?>(null) }
     var snippetTitle by remember { mutableStateOf("") }
     var settingsDraft by remember { mutableStateOf(settings) }
     var showSaved by remember { mutableStateOf(false) }
+    /* Streaming cursor blink state. */
+    var cursorBlink by remember { mutableStateOf(true) }
 
-    /* Sync settingsDraft ketika settings prop berubah (e.g., dari provider preset click).
-     * Sync settingsDraft when settings prop changes externally. */
+    /* Sync settingsDraft ketika settings prop berubah. */
     LaunchedEffect(settings) {
         settingsDraft = settings
     }
 
-    /* Debounce save: jika user berhenti ngetik 800ms, save. Debounce save. */
+    /* Debounce save settings. */
     LaunchedEffect(settingsDraft) {
         if (settingsDraft != settings) {
             kotlinx.coroutines.delay(800)
@@ -256,6 +271,22 @@ fun AIChatPanel(
             showSaved = true
             kotlinx.coroutines.delay(1500)
             showSaved = false
+        }
+    }
+
+    /* Auto-scroll ke bawah saat ada message baru atau streaming update.
+     * Auto-scroll to bottom on new messages or streaming updates. */
+    LaunchedEffect(messages.size, messages.lastOrNull()?.content, messages.lastOrNull()?.isStreaming) {
+        if (scrollState.maxValue > 0) {
+            scrollState.scrollTo(scrollState.maxValue)
+        }
+    }
+
+    /* Cursor blink animation saat streaming aktif. */
+    LaunchedEffect(isProcessingAI) {
+        while (isProcessingAI) {
+            cursorBlink = !cursorBlink
+            kotlinx.coroutines.delay(500)
         }
     }
 
@@ -285,87 +316,181 @@ fun AIChatPanel(
         )
     }
 
-    Column(modifier = Modifier.fillMaxSize().background(Color(0xFF1A1A1A))) {
+    Column(modifier = Modifier.fillMaxSize().background(theme.uiBg)) {
+        /* Header dengan title + clear chat + close. */
         Row(
             modifier = Modifier.fillMaxWidth().padding(16.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text("Tunnel Auto-Pilot", color = Color.White, fontSize = 18.sp, fontFamily = FontFamily.Monospace)
-            Button(onClick = onClose, colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF333333))) {
-                Text("X", color = Color.White)
+            Column {
+                Text("Tunnel Auto-Pilot", color = theme.uiText, fontSize = 18.sp, fontFamily = FontFamily.Monospace)
+                Text(
+                    if (isProcessingAI) "● Streaming..." else "${messages.size} pesan",
+                    color = if (isProcessingAI) theme.uiAccent else theme.uiTextMuted,
+                    fontSize = 10.sp,
+                    fontFamily = FontFamily.Monospace
+                )
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                /* Clear chat button. */
+                Button(
+                    onClick = { onClearChat() },
+                    enabled = messages.isNotEmpty() && !isProcessingAI,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = theme.uiSurface,
+                        disabledContainerColor = theme.uiSurface.copy(alpha = 0.5f)
+                    ),
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                ) {
+                    Text("🗑", color = theme.uiText, fontSize = 14.sp)
+                }
+                Button(
+                    onClick = onClose,
+                    colors = ButtonDefaults.buttonColors(containerColor = theme.uiSurface)
+                ) {
+                    Text("X", color = theme.uiText)
+                }
             }
         }
+        /* Tab selector. */
         Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(onClick = { selectedTab = 0 }, colors = ButtonDefaults.buttonColors(containerColor = if (selectedTab == 0) Color(0xFF6200EE) else Color(0xFF333333))) { Text("Chat") }
-            Button(onClick = { selectedTab = 1 }, colors = ButtonDefaults.buttonColors(containerColor = if (selectedTab == 1) Color(0xFF6200EE) else Color(0xFF333333))) { Text("Workflows") }
-            Button(onClick = { selectedTab = 2 }, colors = ButtonDefaults.buttonColors(containerColor = if (selectedTab == 2) Color(0xFF6200EE) else Color(0xFF333333))) { Text("Settings") }
+            listOf("Chat", "Workflows", "Settings").forEachIndexed { idx, label ->
+                Button(
+                    onClick = { selectedTab = idx },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = if (selectedTab == idx) theme.uiAccent else theme.uiSurface
+                    )
+                ) {
+                    Text(label, color = theme.uiText)
+                }
+            }
         }
 
         if (selectedTab == 0) {
+            /* ─── Chat Tab ─── */
             Column(modifier = Modifier.weight(1f).padding(16.dp).verticalScroll(scrollState)) {
-                messages.forEach { msg ->
-                    val color = when {
-                        msg.isError -> Color(0xFFFF5252)
-                        msg.role == "user" -> Color(0xFF00FF00)
-                        else -> Color.White
-                    }
+                if (messages.isEmpty()) {
                     Text(
-                        "${if (msg.role == "user") "Anda" else "AI"}:",
-                        color = color,
+                        "Selamat datang di Tunnel Auto-Pilot!\n\n" +
+                        "Ketik permintaan Anda, contoh:\n" +
+                        "• \"Tampilkan 5 proses termahal\"\n" +
+                        "• \"Setup server Python http di port 8080\"\n" +
+                        "• \"Cari file .log ukuran > 10MB\"\n\n" +
+                        "AI akan streaming response token-by-token dan ingat seluruh percakapan.",
+                        color = theme.uiTextMuted,
+                        fontSize = 12.sp,
+                        fontFamily = FontFamily.Monospace
+                    )
+                }
+                messages.forEach { msg ->
+                    val nameColor = when {
+                        msg.isError -> Color(0xFFFF5252)
+                        msg.role == "user" -> theme.ansi.getOrElse(2) { Color(0xFF4CAF50) }
+                        else -> theme.uiAccent
+                    }
+                    val displayName = if (msg.role == "user") "Anda" else "AI"
+                    val suffix = if (msg.isStreaming) " (streaming...)" else ""
+                    Text(
+                        "$displayName:$suffix",
+                        color = nameColor,
                         fontSize = 14.sp,
                         fontFamily = FontFamily.Monospace
                     )
+                    /* Content - tambahkan cursor blink jika streaming. */
+                    val displayContent = if (msg.isStreaming && cursorBlink) {
+                        msg.content + "▋"
+                    } else if (msg.isStreaming) {
+                        msg.content + " "
+                    } else {
+                        msg.content
+                    }
                     Text(
-                        msg.content,
-                        color = Color.White,
+                        displayContent,
+                        color = if (msg.isError) Color(0xFFFF8A80) else theme.uiText,
                         fontSize = 14.sp,
                         fontFamily = FontFamily.Monospace,
                         modifier = Modifier.padding(bottom = 8.dp)
                     )
-                    if (msg.commands.size > 1) {
+                    /* Command buttons. */
+                    if (msg.commands.size > 1 && !msg.isStreaming) {
                         Text(
                             "🚀 Rangkaian Auto-Pilot (${msg.commands.size} langkah):",
-                            color = Color(0xFFFFEB3B),
+                            color = theme.ansi.getOrElse(3) { Color(0xFFFFEB3B) },
                             fontSize = 12.sp,
                             fontFamily = FontFamily.Monospace
                         )
                         msg.commands.forEachIndexed { i, c ->
                             Text(
                                 "  ${i + 1}. $c",
-                                color = Color(0xFF00BCD4),
+                                color = theme.ansi.getOrElse(6) { Color(0xFF00BCD4) },
                                 fontSize = 11.sp,
                                 fontFamily = FontFamily.Monospace
                             )
                         }
                         Row(modifier = Modifier.padding(bottom = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Button(onClick = { onRunAutoPilot(msg.commands) }, colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00BCD4))) { Text("Run Auto-Pilot") }
+                            Button(
+                                onClick = { onRunAutoPilot(msg.commands) },
+                                enabled = !isProcessingAI,
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = theme.ansi.getOrElse(6) { Color(0xFF00BCD4) }
+                                )
+                            ) { Text("Run Auto-Pilot") }
                         }
-                    } else if (msg.isCommand) {
+                    } else if (msg.isCommand && !msg.isStreaming) {
                         Row(modifier = Modifier.padding(bottom = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Button(onClick = { onRunCommand(msg.content) }, colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF6200EE))) { Text("▶ Run") }
-                            Button(onClick = { showSaveDialog = msg.content }, colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF333333))) { Text("💾 Save") }
+                            /* Untuk single command: pakai commands[0] (lebih akurat dari msg.content
+                             * yang mungkin berisi explanation + command). */
+                            val cmdToRun = msg.commands.firstOrNull() ?: msg.content
+                            Button(
+                                onClick = { onRunCommand(cmdToRun) },
+                                enabled = !isProcessingAI,
+                                colors = ButtonDefaults.buttonColors(containerColor = theme.uiAccent)
+                            ) { Text("▶ Run") }
+                            Button(
+                                onClick = { showSaveDialog = cmdToRun },
+                                colors = ButtonDefaults.buttonColors(containerColor = theme.uiSurface)
+                            ) { Text("💾 Save") }
                         }
                     }
                 }
             }
+            /* Input bar. */
             Row(modifier = Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
                 OutlinedTextField(
                     value = inputText,
                     onValueChange = { inputText = it },
                     modifier = Modifier.weight(1f),
-                    textStyle = TextStyle(color = Color.White, fontFamily = FontFamily.Monospace),
-                    placeholder = { Text("Minta AI menyelesaikan tugas...", color = Color.Gray) }
+                    enabled = !isProcessingAI,
+                    textStyle = TextStyle(color = theme.uiText, fontFamily = FontFamily.Monospace),
+                    placeholder = {
+                        Text(
+                            if (isProcessingAI) "AI sedang merespons..." else "Minta AI menyelesaikan tugas...",
+                            color = theme.uiTextMuted
+                        )
+                    }
                 )
                 Spacer(modifier = Modifier.width(8.dp))
-                Button(onClick = { if (inputText.isNotEmpty()) { onSendPrompt(inputText); inputText = "" } }) { Text("Kirim") }
+                Button(
+                    onClick = {
+                        if (inputText.isNotEmpty() && !isProcessingAI) {
+                            onSendPrompt(inputText)
+                            inputText = ""
+                        }
+                    },
+                    enabled = inputText.isNotEmpty() && !isProcessingAI,
+                    colors = ButtonDefaults.buttonColors(containerColor = theme.uiAccent)
+                ) {
+                    Text(if (isProcessingAI) "..." else "Kirim")
+                }
             }
         } else if (selectedTab == 1) {
+            /* ─── Workflows Tab ─── */
             Column(modifier = Modifier.weight(1f).padding(16.dp).verticalScroll(scrollState)) {
                 if (snippets.isEmpty()) {
                     Text(
                         "Belum ada workflow tersimpan.\n\nKlik '💾 Save' di pesan AI bercommand untuk menyimpan.",
-                        color = Color.Gray,
+                        color = theme.uiTextMuted,
                         fontSize = 14.sp,
                         fontFamily = FontFamily.Monospace
                     )
@@ -373,20 +498,31 @@ fun AIChatPanel(
                     snippets.forEach { snippet ->
                         Card(
                             modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
-                            colors = CardDefaults.cardColors(containerColor = Color(0xFF2B2B2B))
+                            colors = CardDefaults.cardColors(containerColor = theme.uiSurface)
                         ) {
                             Column(modifier = Modifier.padding(12.dp)) {
-                                Text(snippet.title, color = Color(0xFF00FF00), fontSize = 14.sp, fontFamily = FontFamily.Monospace)
+                                Text(
+                                    snippet.title,
+                                    color = theme.ansi.getOrElse(2) { Color(0xFF4CAF50) },
+                                    fontSize = 14.sp,
+                                    fontFamily = FontFamily.Monospace
+                                )
                                 Text(
                                     snippet.command,
-                                    color = Color.White,
+                                    color = theme.uiText,
                                     fontSize = 12.sp,
                                     fontFamily = FontFamily.Monospace,
                                     modifier = Modifier.padding(top = 4.dp)
                                 )
                                 Row(modifier = Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    Button(onClick = { onRunSnippet(snippet.command) }, colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF6200EE))) { Text("▶ Run") }
-                                    Button(onClick = { onDeleteSnippet(snippet.id) }, colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF5252))) { Text("Hapus") }
+                                    Button(
+                                        onClick = { onRunSnippet(snippet.command) },
+                                        colors = ButtonDefaults.buttonColors(containerColor = theme.uiAccent)
+                                    ) { Text("▶ Run") }
+                                    Button(
+                                        onClick = { onDeleteSnippet(snippet.id) },
+                                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF5252))
+                                    ) { Text("Hapus") }
                                 }
                             }
                         }
@@ -394,66 +530,211 @@ fun AIChatPanel(
                 }
             }
         } else {
-            /* Settings tab - dengan draft + debounce save. */
-            Column(modifier = Modifier.weight(1f).padding(16.dp).verticalScroll(scrollState)) {
-                Text("Provider:", color = Color.Gray, fontSize = 12.sp)
-                Box {
-                    OutlinedTextField(
-                        value = settingsDraft.providerName,
-                        onValueChange = {},
-                        readOnly = true,
-                        modifier = Modifier.fillMaxWidth().clickable { expandedProvider = true },
-                        textStyle = TextStyle(color = Color.White, fontFamily = FontFamily.Monospace),
-                        trailingIcon = { Text("▼", color = Color.White) }
-                    )
-                    DropdownMenu(expanded = expandedProvider, onDismissRequest = { expandedProvider = false }) {
-                        AIProviders.presets.forEach { preset ->
-                            DropdownMenuItem(
-                                text = { Text(preset.providerName) },
-                                onClick = {
-                                    settingsDraft = preset.copy(apiKey = settingsDraft.apiKey)
-                                    expandedProvider = false
-                                }
+            /* ─── Settings Tab ─── */
+            /* Sub-tab selector: AI Provider / Theme / About. */
+            Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                listOf("AI", "Theme", "About").forEachIndexed { idx, label ->
+                    Button(
+                        onClick = { settingsSubTab = idx },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = if (settingsSubTab == idx) theme.uiAccent else theme.uiSurface
+                        ),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                    ) {
+                        Text(label, color = theme.uiText, fontSize = 12.sp)
+                    }
+                }
+            }
+            when (settingsSubTab) {
+                0 -> {
+                    /* AI Provider settings. */
+                    Column(modifier = Modifier.weight(1f).padding(16.dp).verticalScroll(scrollState)) {
+                        Text("Provider:", color = theme.uiTextMuted, fontSize = 12.sp)
+                        Box {
+                            OutlinedTextField(
+                                value = settingsDraft.providerName,
+                                onValueChange = {},
+                                readOnly = true,
+                                modifier = Modifier.fillMaxWidth().clickable { expandedProvider = true },
+                                textStyle = TextStyle(color = theme.uiText, fontFamily = FontFamily.Monospace),
+                                trailingIcon = { Text("▼", color = theme.uiText) }
                             )
+                            DropdownMenu(expanded = expandedProvider, onDismissRequest = { expandedProvider = false }) {
+                                AIProviders.presets.forEach { preset ->
+                                    DropdownMenuItem(
+                                        text = { Text(preset.providerName) },
+                                        onClick = {
+                                            settingsDraft = preset.copy(apiKey = settingsDraft.apiKey)
+                                            expandedProvider = false
+                                        }
+                                    )
+                                }
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Text("Base URL:", color = theme.uiTextMuted, fontSize = 12.sp)
+                        OutlinedTextField(
+                            value = settingsDraft.baseUrl,
+                            onValueChange = { settingsDraft = settingsDraft.copy(baseUrl = it) },
+                            modifier = Modifier.fillMaxWidth(),
+                            textStyle = TextStyle(color = theme.uiText, fontFamily = FontFamily.Monospace)
+                        )
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Text("Model Name:", color = theme.uiTextMuted, fontSize = 12.sp)
+                        OutlinedTextField(
+                            value = settingsDraft.modelName,
+                            onValueChange = { settingsDraft = settingsDraft.copy(modelName = it) },
+                            modifier = Modifier.fillMaxWidth(),
+                            textStyle = TextStyle(color = theme.uiText, fontFamily = FontFamily.Monospace)
+                        )
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Text("API Key:", color = theme.uiTextMuted, fontSize = 12.sp)
+                        OutlinedTextField(
+                            value = settingsDraft.apiKey,
+                            onValueChange = { settingsDraft = settingsDraft.copy(apiKey = it) },
+                            modifier = Modifier.fillMaxWidth(),
+                            textStyle = TextStyle(color = theme.uiText, fontFamily = FontFamily.Monospace),
+                            placeholder = { Text("sk-...", color = theme.uiTextMuted) }
+                        )
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Text("Timeout (ms):", color = theme.uiTextMuted, fontSize = 12.sp)
+                        OutlinedTextField(
+                            value = settingsDraft.requestTimeoutMs.toString(),
+                            onValueChange = { v -> v.toIntOrNull()?.let { settingsDraft = settingsDraft.copy(requestTimeoutMs = it.coerceIn(5000, 120000)) } },
+                            modifier = Modifier.fillMaxWidth(),
+                            textStyle = TextStyle(color = theme.uiText, fontFamily = FontFamily.Monospace)
+                        )
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Text("Temperature:", color = theme.uiTextMuted, fontSize = 12.sp)
+                        OutlinedTextField(
+                            value = settingsDraft.temperature.toString(),
+                            onValueChange = { v -> v.toDoubleOrNull()?.let { settingsDraft = settingsDraft.copy(temperature = it.coerceIn(0.0, 2.0)) } },
+                            modifier = Modifier.fillMaxWidth(),
+                            textStyle = TextStyle(color = theme.uiText, fontFamily = FontFamily.Monospace)
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        if (showSaved) {
+                            Text("✓ Saved", color = theme.ansi.getOrElse(2) { Color(0xFF4CAF50) }, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
                         }
                     }
                 }
-                Spacer(modifier = Modifier.height(16.dp))
-                Text("Base URL:", color = Color.Gray, fontSize = 12.sp)
-                OutlinedTextField(
-                    value = settingsDraft.baseUrl,
-                    onValueChange = { settingsDraft = settingsDraft.copy(baseUrl = it) },
-                    modifier = Modifier.fillMaxWidth(),
-                    textStyle = TextStyle(color = Color.White, fontFamily = FontFamily.Monospace)
-                )
-                Spacer(modifier = Modifier.height(16.dp))
-                Text("Model Name:", color = Color.Gray, fontSize = 12.sp)
-                OutlinedTextField(
-                    value = settingsDraft.modelName,
-                    onValueChange = { settingsDraft = settingsDraft.copy(modelName = it) },
-                    modifier = Modifier.fillMaxWidth(),
-                    textStyle = TextStyle(color = Color.White, fontFamily = FontFamily.Monospace)
-                )
-                Spacer(modifier = Modifier.height(16.dp))
-                Text("API Key:", color = Color.Gray, fontSize = 12.sp)
-                OutlinedTextField(
-                    value = settingsDraft.apiKey,
-                    onValueChange = { settingsDraft = settingsDraft.copy(apiKey = it) },
-                    modifier = Modifier.fillMaxWidth(),
-                    textStyle = TextStyle(color = Color.White, fontFamily = FontFamily.Monospace),
-                    placeholder = { Text("sk-...", color = Color.Gray) }
-                )
-                Spacer(modifier = Modifier.height(16.dp))
-                Text("Timeout (ms):", color = Color.Gray, fontSize = 12.sp)
-                OutlinedTextField(
-                    value = settingsDraft.requestTimeoutMs.toString(),
-                    onValueChange = { v -> v.toIntOrNull()?.let { settingsDraft = settingsDraft.copy(requestTimeoutMs = it.coerceIn(5000, 120000)) } },
-                    modifier = Modifier.fillMaxWidth(),
-                    textStyle = TextStyle(color = Color.White, fontFamily = FontFamily.Monospace)
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-                if (showSaved) {
-                    Text("✓ Saved", color = Color(0xFF00FF00), fontSize = 11.sp, fontFamily = FontFamily.Monospace)
+                1 -> {
+                    /* Theme picker. */
+                    Column(modifier = Modifier.weight(1f).padding(16.dp).verticalScroll(scrollState)) {
+                        Text(
+                            "Pilih tema terminal:",
+                            color = theme.uiText,
+                            fontSize = 14.sp,
+                            fontFamily = FontFamily.Monospace
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+                        themes.forEach { t ->
+                            val isActive = t.name == theme.name
+                            Card(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(bottom = 8.dp)
+                                    .clickable { onThemeChanged(t) },
+                                colors = CardDefaults.cardColors(
+                                    containerColor = if (isActive) theme.uiAccent else theme.uiSurface
+                                )
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(12.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    /* Color preview swatches - tampilkan 8 warna pertama dari palette. */
+                                    Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                                        t.ansi.take(8).forEach { c ->
+                                            Box(
+                                                modifier = Modifier
+                                                    .size(16.dp)
+                                                    .background(c)
+                                            )
+                                        }
+                                    }
+                                    Spacer(modifier = Modifier.width(12.dp))
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            t.name,
+                                            color = theme.uiText,
+                                            fontSize = 14.sp,
+                                            fontFamily = FontFamily.Monospace
+                                        )
+                                        Text(
+                                            "BG: #${Integer.toHexString(t.background.toArgb()).substring(2).uppercase()}  " +
+                                            "FG: #${Integer.toHexString(t.foreground.toArgb()).substring(2).uppercase()}",
+                                            color = theme.uiTextMuted,
+                                            fontSize = 10.sp,
+                                            fontFamily = FontFamily.Monospace
+                                        )
+                                    }
+                                    if (isActive) {
+                                        Text("✓", color = theme.uiText, fontSize = 18.sp)
+                                    }
+                                }
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Text(
+                            "Catatan: tema diterapkan ke sel baru di terminal. " +
+                            "Untuk refresh penuh, ketik 'clear' di terminal.\n\n" +
+                            "Tema juga diterapkan ke UI drawer ini secara live.",
+                            color = theme.uiTextMuted,
+                            fontSize = 11.sp,
+                            fontFamily = FontFamily.Monospace
+                        )
+                    }
+                }
+                2 -> {
+                    /* About tab. */
+                    Column(modifier = Modifier.weight(1f).padding(16.dp).verticalScroll(scrollState)) {
+                        Text(
+                            "Tunnel Terminal v3.1.0",
+                            color = theme.uiText,
+                            fontSize = 16.sp,
+                            fontFamily = FontFamily.Monospace
+                        )
+                        Text(
+                            "Phase 18: AI Streaming + Multi-turn Memory + Theme Picker",
+                            color = theme.uiTextMuted,
+                            fontSize = 11.sp,
+                            fontFamily = FontFamily.Monospace
+                        )
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Text(
+                            "Fitur Phase 18:",
+                            color = theme.ansi.getOrElse(6) { Color(0xFF00BCD4) },
+                            fontSize = 12.sp,
+                            fontFamily = FontFamily.Monospace
+                        )
+                        Text(
+                            "• AI Streaming SSE - response token-by-token\n" +
+                            "• Multi-turn conversation memory (max 20 pesan)\n" +
+                            "• 6 theme presets: Matrix, Dracula, Solarized, Monokai, Nord, Tokyo Night\n" +
+                            "• Theme-aware UI (drawer, buttons, text)\n" +
+                            "• Streaming cursor indicator (▋ blink)\n" +
+                            "• Clear chat button untuk reset memory\n" +
+                            "• Auto-scroll selama streaming\n" +
+                            "• Settings sub-tabs (AI / Theme / About)",
+                            color = theme.uiText,
+                            fontSize = 11.sp,
+                            fontFamily = FontFamily.Monospace
+                        )
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Text(
+                            "Open source:",
+                            color = theme.ansi.getOrElse(6) { Color(0xFF00BCD4) },
+                            fontSize = 12.sp,
+                            fontFamily = FontFamily.Monospace
+                        )
+                        Text(
+                            "github.com/NanoMindExplorer/tunnel-terminal",
+                            color = theme.uiAccent,
+                            fontSize = 11.sp,
+                            fontFamily = FontFamily.Monospace
+                        )
+                    }
                 }
             }
         }

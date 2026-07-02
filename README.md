@@ -3,16 +3,16 @@
 **Tunnel Terminal** adalah aplikasi terminal Android tingkat lanjut yang menggabungkan kekuatan mesin C/C++ NDK (Pseudo-Terminal) dengan AI Copilot Multi-Provider untuk pengembang modern.
 
 ![Architecture](https://img.shields.io/badge/Architecture-NDK%20%2B%20Jetpack%20Compose-purple)
-![AI](https://img.shields.io/badge/AI-AutoPilot%20Agent-cyan)
-![Version](https://img.shields.io/badge/version-3.0.0--phase17-blue)
+![AI](https://img.shields.io/badge/AI-Streaming%20SSE-cyan)
+![Version](https://img.shields.io/badge/version-3.1.0--phase18-blue)
 
 ## Fitur Utama
 
 ### 1. True Linux Terminal (C++ NDK PTY)
 Tidak menggunakan trik Java `Runtime.exec()`. Tunnel Terminal menggunakan `forkpty()` dari C/C++ untuk membuat sesi terminal asli di kernel Linux Android. Mendukung penuh aplikasi TUI seperti `vim`, `nano`, dan `htop`.
 
-### 2. AI Auto-Pilot (Agentic Workflow)
-Alih-alih sekadar memberi saran, AI bisa menjalankan rangkaian perintah secara otomatis. Cukup minta *"Setup server Node.js Express dan jalankan"*, AI akan menginstal, membuat file, dan menjalankannya secara berurutan. **Phase 17:** Auto-Pilot sekarang cerdas — menunggu prompt shell muncul sebelum lanjut ke perintah berikutnya, mendeteksi error mid-sequence, dan memberi laporan setiap step.
+### 2. AI Auto-Pilot (Agentic Workflow) with Streaming
+Alih-alih sekadar memberi saran, AI bisa menjalankan rangkaian perintah secara otomatis. Cukup minta *"Setup server Node.js Express dan jalankan"*, AI akan menginstal, membuat file, dan menjalankannya secara berurutan. **Phase 17:** Auto-Pilot cerdas — menunggu prompt shell muncul sebelum lanjut ke perintah berikutnya, mendeteksi error mid-sequence, dan memberi laporan setiap step. **Phase 18:** Response AI di-stream token-by-token via SSE (Server-Sent Events) sehingga terasa instan. AI juga ingat seluruh percakapan (multi-turn memory, max 20 pesan) untuk follow-up question.
 
 ### 3. Multi-Provider AI (OpenAI-Compatible)
 Pengguna bebas memilih provider AI favorit mereka. Semua provider menggunakan OpenAI-compatible `/chat/completions` endpoint:
@@ -119,6 +119,71 @@ Membutuhkan:
 | 15 | Session lifecycle guard (anti-freeze on exit) |
 | 16 | Built-in help command & open-source README |
 | **17** | **Major Bug Fix Release** — see below |
+| **18** | **AI Streaming SSE + Multi-turn Memory + Theme Picker** — see below |
+
+## Phase 18 — AI Streaming + Multi-turn Memory + Theme Picker
+
+This release focuses on AI UX polish and personalization. Three complementary features bundled together.
+
+### AI Streaming via SSE (Server-Sent Events)
+- **Token-by-token response**: AI responses appear progressively as the model generates them, no more waiting for full response
+- **SSE parsing**: `AIAgent.askAIStreaming()` returns `Flow<String>` that emits content deltas
+- **Streaming cursor**: Blinking `▋` cursor indicator while streaming
+- **Auto-scroll**: Chat view auto-scrolls to bottom during streaming
+- **Stream cancellation**: If user navigates away or AI errors mid-stream, partial content is preserved
+- **Provider compatibility**: Works with all OpenAI-compatible providers that support `stream: true` (OpenAI, DeepSeek, Groq, OpenRouter, Gemini OpenAI-compat, Anthropic OpenAI-compat, Ollama)
+- **Header `Accept: text/event-stream`** set on streaming requests
+- **Read timeout 0** (unlimited) for streaming, normal timeout for non-streaming
+
+### Multi-turn Conversation Memory
+- AI now remembers the full conversation history (up to 20 messages) within a session
+- Ask follow-up questions like "what about for Python?" and AI understands the context
+- `ChatMessage` gained `conversationRole` field (system/user/assistant) for proper OpenAI API format
+- Messages filtered before sending: error messages, streaming-in-progress, and pure-command messages excluded from history (avoid confusing the AI)
+- **Clear chat button** (🗑) to reset conversation memory when starting a new task
+
+### Theme Picker (6 Themes)
+Six complete themes with full ANSI 16-color palette + UI color scheme:
+- **Matrix** (default) — signature green-on-black
+- **Dracula** — popular dark purple/pink
+- **Solarized Dark** — ergonomic dark blue
+- **Monokai Pro** — classic Sublime Text theme
+- **Nord** — Arctic north-bluish
+- **Tokyo Night** — modern dark blue inspired by Tokyo city lights
+
+Each theme defines: terminal background/foreground/cursor, 16-color ANSI palette (8 normal + 8 bright), and UI colors (drawer bg, surface, accent, text, muted). Themes are applied live to:
+- New terminal cells (existing cells keep their assigned colors — type `clear` for full refresh)
+- 256-color palette (0-15 use theme palette, 16-255 stay standard)
+- AI drawer UI (backgrounds, buttons, text colors, accents)
+- Theme picker cards with color swatches preview
+
+### Additional Improvements
+- **Settings sub-tabs**: AI / Theme / About (was single long scroll)
+- **Temperature setting** now exposed in UI (0.0-2.0)
+- **Send button disabled** during streaming (no double-send)
+- **Input field disabled** during streaming
+- **"AI sedang merespons..." placeholder** during streaming
+- **Status indicator** in drawer header: "● Streaming..." / "N pesan"
+- **About sub-tab** with version + feature list + repo link
+- **Single-command Run button** now uses `commands[0]` instead of `msg.content` (more accurate when AI includes explanation text)
+- **Welcome message** in empty chat with example prompts
+
+### Files Changed (Phase 18)
+- **NEW**: `ThemeManager.kt` — theme data class + 6 presets + persistence
+- **NEW**: `ThemeHolder` class in `TerminalEmulator.kt` — shared theme reference
+- **MODIFIED**: `TerminalEmulator.kt` — accept ThemeHolder, use theme palette for SGR 30-37/90-97/40-47/100-107 and color256(0-15)
+- **MODIFIED**: `AIAgent.kt` — added `askAIStreaming()` Flow-based SSE parser; `askAI()` now takes conversation list for multi-turn
+- **MODIFIED**: `ChatMessage` — added `isStreaming` and `conversationRole` fields
+- **MODIFIED**: `ShellExecutor.kt` — accept ThemeHolder, pass to TerminalEmulator
+- **MODIFIED**: `MainActivity.kt` — wire theme holder, streaming handler, multi-turn conversation, clear chat, theme change
+- **MODIFIED**: `TerminalUI.kt` — full AIChatPanel rewrite: theme-aware colors, streaming rendering with cursor, auto-scroll, clear chat button, settings sub-tabs (AI/Theme/About), theme picker with color swatches
+- **MODIFIED**: `build.gradle.kts` — added `kotlinx-coroutines-core` for Flow, bumped version
+
+### Version
+- `versionCode`: 4 → 5
+- `versionName`: `3.0.0-phase17-major-fix` → `3.1.0-phase18-streaming-themes`
+
+---
 
 ## Phase 17 — Major Bug Fix Release
 

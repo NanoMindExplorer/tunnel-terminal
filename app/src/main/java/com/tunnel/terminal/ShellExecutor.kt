@@ -27,8 +27,10 @@ import java.nio.charset.StandardCharsets
  * - Per-executor command history (tidak shared antar tab)
  * - Tunggu shell siap setelah start() sebelum kirim PS1
  * - Thread readLoop di-set sebagai daemon
+ *
+ * Phase 18: Accept themeHolder untuk TerminalEmulator (theme-aware rendering).
  */
-class ShellExecutor {
+class ShellExecutor(private val themeHolder: ThemeHolder = ThemeHolder()) {
     private val tag = "ShellExecutor"
 
     private var masterFd: Int = -1
@@ -36,7 +38,7 @@ class ShellExecutor {
     private var pfd: ParcelFileDescriptor? = null
     val id: Int = System.currentTimeMillis().toInt() and 0x7FFFFFFF
 
-    var emulator = TerminalEmulator()
+    var emulator = TerminalEmulator(themeHolder)
 
     var isAlive by mutableStateOf(true)
         private set
@@ -105,7 +107,7 @@ class ShellExecutor {
      */
     suspend fun restart() {
         destroy()
-        emulator = TerminalEmulator()
+        emulator = TerminalEmulator(themeHolder)
         start()
     }
 

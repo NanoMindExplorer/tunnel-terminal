@@ -2,6 +2,11 @@ package com.tunnel.terminal
 
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
@@ -14,25 +19,28 @@ import java.net.URL
 /**
  * Model pesan chat.
  * Chat message model.
+ *
+ * Phase 18: Tambah isStreaming flag untuk indikasi pesan sedang di-stream.
+ * Tambah conversationRole untuk multi-turn memory (role yang dikirim ke AI).
  */
 data class ChatMessage(
-    val role: String,
+    val role: String,                  // "user" / "assistant" - untuk display
     val content: String,
     val isCommand: Boolean = false,
     val commands: List<String> = emptyList(),
-    val isError: Boolean = false
+    val isError: Boolean = false,
+    val isStreaming: Boolean = false,  // true jika sedang di-stream (token-by-token)
+    val conversationRole: String = role // role untuk dikirim ke AI ("system"/"user"/"assistant")
 )
 
 /**
  * AIAgent - Client untuk OpenAI-compatible chat completions API.
  *
- * Phase 17 (Major Bug Fix):
- * - Timeout configurable dari AISettings (bukan hardcoded 30000)
- * - Error response tidak di-truncate agresif (300 -> 800 chars)
- * - Log error lengkap untuk debugging
- * - Deteksi koneksi internet sebelum request
- * - Strip ANSI dari terminal context sebelum dikirim
- * - Header User-Agent di-set untuk kompatibilitas dengan beberapa provider
+ * Phase 18 (Streaming + Multi-turn):
+ * - askAIStreaming(): Returns Flow<String> yang emit token-by-token via SSE parsing
+ * - Konsumsi SSE chunks: data: {json}\n\n ... data: [DONE]
+ * - Multi-turn conversation: kirim list pesan sebelumnya, bukan hanya user prompt terakhir
+ * - Fallback ke askAI() (non-streaming) jika provider tidak support SSE
  *
  * Mendukung semua provider OpenAI-compatible:
  * OpenAI, DeepSeek, Groq, OpenRouter, Gemini (OpenAI-compat), Anthropic (OpenAI-compat), Ollama.
@@ -41,107 +49,50 @@ class AIAgent {
     private val tag = "AIAgent"
 
     /**
-     * Kirim prompt ke AI dan tunggu response utuh.
-     * Send prompt to AI and wait for full response.
+     * Kirim prompt ke AI dan tunggu response utuh (non-streaming).
+     * Send prompt and wait for full response (non-streaming).
      *
      * @param settings konfigurasi AI provider
-     * @param userPrompt teks permintaan user
+     * @param conversation list pesan multi-turn (untuk memory)
      * @param terminalContext output terminal terakhir (akan di-strip ANSI-nya)
      * @return response AI atau pesan error yang user-friendly
      */
-    suspend fun askAI(settings: AISettings, userPrompt: String, terminalContext: String): String {
-        if (settings.apiKey.isBlank() && !settings.baseUrl.contains("localhost") && !settings.baseUrl.contains("127.0.0.1")) {
-            return "API Key belum diset. Buka tab Settings (drawer kanan) untuk konfigurasi."
+    suspend fun askAI(
+        settings: AISettings,
+        conversation: List<ChatMessage>,
+        terminalContext: String
+    ): String {
+        if (!isConfigured(settings)) {
+            return configErrorMessage(settings)
         }
 
         return withContext(Dispatchers.IO) {
             var connection: HttpURLConnection? = null
             try {
-                val apiUrl = "${settings.baseUrl.trimEnd('/')}/chat/completions"
-                val url = URL(apiUrl)
-                connection = (url.openConnection() as HttpURLConnection).apply {
-                    requestMethod = "POST"
-                    setRequestProperty("Content-Type", "application/json; charset=utf-8")
-                    setRequestProperty("Authorization", "Bearer ${settings.apiKey}")
-                    setRequestProperty("HTTP-Referer", "https://github.com/NanoMindExplorer/tunnel-terminal")
-                    setRequestProperty("X-Title", "Tunnel Terminal")
-                    setRequestProperty("User-Agent", "TunnelTerminal/3.0 (Android)")
-                    connectTimeout = settings.requestTimeoutMs
-                    readTimeout = settings.requestTimeoutMs
-                    doOutput = true
-                }
-
-                val systemPrompt = """
-                    Anda adalah 'Tunnel Auto-Pilot', agen AI otonom untuk terminal Android.
-                    Tugas Anda adalah menyelesaikan tujuan pengguna dengan rangkaian perintah shell.
-                    Anda boleh memberikan MULTIPLE perintah dalam respons Anda. Format WAJIB setiap perintah adalah blok terpisah:
-                    ```bash
-                    perintah_1
-                    ```
-                    ```bash
-                    perintah_2
-                    ```
-                    Jangan memberikan penjelasan panjang. Cukup berikan perintah-perintah yang perlu dijalankan berurutan oleh sistem Auto-Pilot.
-
-                    Anda berjalan di /system/bin/sh Android (bukan bash), jadi hindari bash-ism.
-                    Command tersedia: ls, cd, cat, echo, mkdir, rm, cp, mv, pwd, ps, kill, df, du, head, tail, grep, sed, awk, wget, curl (jika ada).
-                    Tidak ada: apt, yum, brew, pacman. Tidak ada sudo.
-                """.trimIndent()
-
-                val cleanContext = stripAnsi(terminalContext).take(1500)
-
-                val messagesArray = JSONArray().apply {
-                    put(JSONObject().put("role", "system").put("content", systemPrompt))
-                    val contextPrompt = buildString {
-                        if (cleanContext.isNotBlank()) {
-                            append("Konteks Terminal:\n").append(cleanContext).append("\n\n")
-                        }
-                        append("Permintaan: ").append(userPrompt)
-                    }
-                    put(JSONObject().put("role", "user").put("content", contextPrompt))
-                }
-
-                val requestBody = JSONObject()
-                    .put("model", settings.modelName)
-                    .put("messages", messagesArray)
-                    .put("temperature", settings.temperature)
-                    .put("max_tokens", settings.maxTokens)
-                    .toString()
-
-                val writer = OutputStreamWriter(connection.outputStream, Charsets.UTF_8)
-                writer.write(requestBody)
-                writer.flush()
-                writer.close()
+                connection = openConnection(settings, streaming = false)
+                val requestBody = buildRequestBody(settings, conversation, terminalContext, streaming = false)
+                writeRequest(connection, requestBody)
 
                 val responseCode = connection.responseCode
                 val inputStream = if (responseCode in 200..299) connection.inputStream else connection.errorStream
-                val reader = BufferedReader(InputStreamReader(inputStream, Charsets.UTF_8))
-                val response = StringBuilder()
-                var line: String?
-                while (reader.readLine().also { line = it } != null) {
-                    response.append(line).append('\n')
-                }
-                reader.close()
+                val response = readAll(inputStream)
 
                 if (responseCode !in 200..299) {
-                    val errBody = response.toString().take(800)
+                    val errBody = response.take(800)
                     Log.e(tag, "API error $responseCode: $errBody")
                     return@withContext formatHttpError(responseCode, errBody)
                 }
 
-                val jsonResponse = JSONObject(response.toString())
+                val jsonResponse = JSONObject(response)
                 jsonResponse.getJSONArray("choices")
                     .getJSONObject(0)
                     .getJSONObject("message")
                     .getString("content")
             } catch (e: java.net.SocketTimeoutException) {
-                Log.e(tag, "Timeout: ${e.message}")
                 "Timeout (${settings.requestTimeoutMs}ms). Provider lambat atau unreachable. Coba lagi atau naikkan timeout di Settings."
             } catch (e: java.net.UnknownHostException) {
-                Log.e(tag, "Unknown host: ${e.message}")
                 "DNS gagal: ${e.message}. Cek koneksi internet atau Base URL."
             } catch (e: javax.net.ssl.SSLException) {
-                Log.e(tag, "SSL error: ${e.message}")
                 "SSL/TLS error: ${e.message}. Mungkin Base URL salah atau sertifikat provider bermasalah."
             } catch (e: Exception) {
                 Log.e(tag, "Generic error: ${e.javaClass.simpleName}: ${e.message}")
@@ -150,6 +101,204 @@ class AIAgent {
                 connection?.disconnect()
             }
         }
+    }
+
+    /**
+     * Kirim prompt ke AI dengan STREAMING via Server-Sent Events.
+     * Send prompt with SSE streaming. Returns Flow that emits content deltas.
+     *
+     * Setiap token/chunk dipancarkan sebagai String. Flow selesai ketika
+     * server kirim `data: [DONE]` atau stream closed.
+     *
+     * Emits content deltas as String. Flow completes on `[DONE]` or stream close.
+     *
+     * @param settings konfigurasi AI provider
+     * @param conversation list pesan multi-turn
+     * @param terminalContext output terminal terakhir (ANSI stripped)
+     * @return Flow<String> yang emit token-by-token
+     */
+    fun askAIStreaming(
+        settings: AISettings,
+        conversation: List<ChatMessage>,
+        terminalContext: String
+    ): Flow<String> = callbackFlow {
+        if (!isConfigured(settings)) {
+            trySend(configErrorMessage(settings))
+            channel.close()
+            return@callbackFlow
+        }
+
+        var connection: HttpURLConnection? = null
+        try {
+            connection = openConnection(settings, streaming = true)
+            val requestBody = buildRequestBody(settings, conversation, terminalContext, streaming = true)
+            writeRequest(connection, requestBody)
+
+            val responseCode = connection.responseCode
+            val inputStream = if (responseCode in 200..299) connection.inputStream else connection.errorStream
+
+            if (responseCode !in 200..299) {
+                val errBody = readAll(inputStream).take(800)
+                Log.e(tag, "API error $responseCode (streaming): $errBody")
+                trySend(formatHttpError(responseCode, errBody))
+                channel.close()
+                return@callbackFlow
+            }
+
+            /* Parse SSE stream baris demi baris.
+             * Parse SSE stream line by line. */
+            val reader = BufferedReader(InputStreamReader(inputStream, Charsets.UTF_8))
+            var line: String?
+            while (reader.readLine().also { line = it } != null) {
+                if (!isActive) break  // consumer cancelled
+
+                val raw = line ?: continue
+                if (raw.isEmpty() || raw.startsWith(":")) continue  // SSE comment/heartbeat
+                if (!raw.startsWith("data:")) continue
+
+                val data = raw.removePrefix("data:").trim()
+                if (data == "[DONE]") break
+
+                try {
+                    val json = JSONObject(data)
+                    val choices = json.optJSONArray("choices") ?: continue
+                    if (choices.length() == 0) continue
+                    val delta = choices.getJSONObject(0)
+                        .optJSONObject("delta")
+                        ?.optString("content")
+                        ?: ""
+                    if (delta.isNotEmpty()) {
+                        trySend(delta)
+                    }
+                } catch (e: Exception) {
+                    /* Partial JSON atau format lain - skip, jangan crash stream. */
+                    Log.w(tag, "Skip SSE line: ${e.message}")
+                }
+            }
+            reader.close()
+        } catch (e: java.net.SocketTimeoutException) {
+            trySend("Timeout (${settings.requestTimeoutMs}ms). Provider lambat atau unreachable.")
+        } catch (e: java.net.UnknownHostException) {
+            trySend("DNS gagal: ${e.message}. Cek koneksi internet atau Base URL.")
+        } catch (e: javax.net.ssl.SSLException) {
+            trySend("SSL/TLS error: ${e.message}.")
+        } catch (e: Exception) {
+            Log.e(tag, "Streaming error: ${e.javaClass.simpleName}: ${e.message}")
+            trySend("Kesalahan streaming (${e.javaClass.simpleName}): ${e.message ?: "tidak diketahui"}")
+        } finally {
+            connection?.disconnect()
+            channel.close()
+        }
+
+        awaitClose {
+            /* Consumer cancelled - disconnect. */
+            try { connection?.disconnect() } catch (_: Exception) {}
+        }
+    }.flowOn(Dispatchers.IO)
+
+    /* ─── Helpers ─── */
+
+    private fun isConfigured(settings: AISettings): Boolean {
+        /* Local providers (Ollama, LM Studio) tidak butuh API key. */
+        val isLocal = settings.baseUrl.contains("localhost") ||
+                      settings.baseUrl.contains("127.0.0.1")
+        return settings.apiKey.isNotBlank() || isLocal
+    }
+
+    private fun configErrorMessage(settings: AISettings): String {
+        return "API Key belum diset. Buka tab Settings (drawer kanan) untuk konfigurasi."
+    }
+
+    private fun openConnection(settings: AISettings, streaming: Boolean): HttpURLConnection {
+        val apiUrl = "${settings.baseUrl.trimEnd('/')}/chat/completions"
+        val url = URL(apiUrl)
+        return (url.openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            setRequestProperty("Content-Type", "application/json; charset=utf-8")
+            setRequestProperty("Authorization", "Bearer ${settings.apiKey}")
+            setRequestProperty("HTTP-Referer", "https://github.com/NanoMindExplorer/tunnel-terminal")
+            setRequestProperty("X-Title", "Tunnel Terminal")
+            setRequestProperty("User-Agent", "TunnelTerminal/3.1 (Android)")
+            /* Accept: text/event-stream penting untuk SSE. */
+            if (streaming) {
+                setRequestProperty("Accept", "text/event-stream")
+            }
+            connectTimeout = settings.requestTimeoutMs
+            /* Streaming: read timeout 0 = unlimited (chunked). */
+            readTimeout = if (streaming) 0 else settings.requestTimeoutMs
+            doOutput = true
+        }
+    }
+
+    private fun buildRequestBody(
+        settings: AISettings,
+        conversation: List<ChatMessage>,
+        terminalContext: String,
+        streaming: Boolean
+    ): String {
+        val systemPrompt = """
+            Anda adalah 'Tunnel Auto-Pilot', agen AI otonom untuk terminal Android.
+            Tugas Anda adalah menyelesaikan tujuan pengguna dengan rangkaian perintah shell.
+            Anda boleh memberikan MULTIPLE perintah dalam respons Anda. Format WAJIB setiap perintah adalah blok terpisah:
+            ```bash
+            perintah_1
+            ```
+            ```bash
+            perintah_2
+            ```
+            Jangan memberikan penjelasan panjang. Cukup berikan perintah-perintah yang perlu dijalankan berurutan oleh sistem Auto-Pilot.
+
+            Anda berjalan di /system/bin/sh Android (bukan bash), jadi hindari bash-ism.
+            Command tersedia: ls, cd, cat, echo, mkdir, rm, cp, mv, pwd, ps, kill, df, du, head, tail, grep, sed, awk, wget, curl (jika ada).
+            Tidak ada: apt, yum, brew, pacman. Tidak ada sudo.
+        """.trimIndent()
+
+        val messagesArray = JSONArray().apply {
+            put(JSONObject().put("role", "system").put("content", systemPrompt))
+
+            /* Multi-turn: kirim seluruh conversation history (max 20 pesan terakhir
+             * untuk hindari token bloat). Filter pesan error & streaming-in-progress.
+             * Multi-turn: send conversation history (cap 20 to avoid token bloat). */
+            val history = conversation
+                .filter { !it.isError && !it.isStreaming && !it.isCommand && it.content.isNotBlank() }
+                .takeLast(20)
+            history.forEach { msg ->
+                put(JSONObject().put("role", msg.conversationRole).put("content", msg.content))
+            }
+
+            /* Tambahkan terminal context sebagai pesan system tambahan jika ada.
+             * Append terminal context as additional system message if present. */
+            val cleanContext = stripAnsi(terminalContext).take(1500)
+            if (cleanContext.isNotBlank()) {
+                put(JSONObject().put("role", "system").put("content", "Konteks Terminal saat ini:\n$cleanContext"))
+            }
+        }
+
+        return JSONObject()
+            .put("model", settings.modelName)
+            .put("messages", messagesArray)
+            .put("temperature", settings.temperature)
+            .put("max_tokens", settings.maxTokens)
+            .put("stream", streaming)
+            .toString()
+    }
+
+    private fun writeRequest(connection: HttpURLConnection, body: String) {
+        val writer = OutputStreamWriter(connection.outputStream, Charsets.UTF_8)
+        writer.write(body)
+        writer.flush()
+        writer.close()
+    }
+
+    private fun readAll(inputStream: java.io.InputStream): String {
+        val reader = BufferedReader(InputStreamReader(inputStream, Charsets.UTF_8))
+        val sb = StringBuilder()
+        var line: String?
+        while (reader.readLine().also { line = it } != null) {
+            sb.append(line).append('\n')
+        }
+        reader.close()
+        return sb.toString()
     }
 
     /** Strip ANSI escape codes dari string. Strip ANSI escape codes. */
