@@ -611,7 +611,12 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun closeTab(id: Int) {
-        shellExecutors.find { it.id == id }?.destroy()
+        /* Phase 25: Fix ANR — destroy() di background thread (was main thread = 350ms block).
+         * Old code: destroy() blocking (Thread.sleep + join) di main thread → ANR. */
+        val executor = shellExecutors.find { it.id == id }
+        if (executor != null) {
+            Thread { executor.destroy() }.start()
+        }
         shellExecutors.removeAll { it.id == id }
         /* Phase 24.5: Fix activeExecutorId=0 invalid state.
          * Old code: set to 0 if no tabs, but 0 is not a valid session id.
@@ -1110,6 +1115,8 @@ class MainActivity : ComponentActivity() {
                         /* Enter: process buffer + newline. Consume agar tidak double-fire. */
                         processInput(activeExecutor.currentCommandBuffer + "\n")
                         activeExecutor.currentCommandBuffer = ""
+                        /* Phase 25: Clear hiddenInput agar text tidak menumpuk. */
+                        hiddenInput = ""
                         return true
                     }
                     Key.Backspace -> {
@@ -1311,9 +1318,9 @@ class MainActivity : ComponentActivity() {
                             }
                         }
 
-                        /* Phase 19.5: BasicTextField DI BAWAH (z-order pertama).
-                         * Invisible, terima keyboard via FocusRequester.
-                         * Pointer events di-handle oleh TerminalScreenView di atas. */
+                        /* Phase 25: Fix input — JANGAN reset hiddenInput di onValueChange!
+                         * Old code: hiddenInput = "" setiap kali user type → IME confused → stop sending text.
+                         * Fix: biarkan text menumpuk (invisible). Clear hanya saat Enter (di handleKeyEvent). */
                         var lastInputValue by remember { mutableStateOf("") }
 
                         BasicTextField(
@@ -1331,16 +1338,11 @@ class MainActivity : ComponentActivity() {
                                             '\n', '\r' -> {
                                                 processInput(activeExecutor.currentCommandBuffer + "\n")
                                                 activeExecutor.currentCommandBuffer = ""
+                                                /* Clear input setelah Enter. */
+                                                hiddenInput = ""
+                                                lastInputValue = ""
                                             }
-                                            '\u007F' -> {
-                                                /* Backspace dari soft keyboard (DEL char). */
-                                                if (activeExecutor.currentCommandBuffer.isNotEmpty()) {
-                                                    activeExecutor.currentCommandBuffer = activeExecutor.currentCommandBuffer.dropLast(1)
-                                                }
-                                                activeExecutor.writeRaw("\u007F")
-                                            }
-                                            '\b' -> {
-                                                /* Backspace (BS char). */
+                                            '\u007F', '\b' -> {
                                                 if (activeExecutor.currentCommandBuffer.isNotEmpty()) {
                                                     activeExecutor.currentCommandBuffer = activeExecutor.currentCommandBuffer.dropLast(1)
                                                 }
@@ -1354,14 +1356,8 @@ class MainActivity : ComponentActivity() {
                                         }
                                     }
                                 }
-                                /* Jika value berkurang (backspace soft keyboard), handle via onPreviewKeyEvent. */
-
-                                /* Reset hiddenInput ke "" via LaunchedEffect agar IME tidak confused.
-                                 * Reset hiddenInput to "" via LaunchedEffect so IME doesn't get confused. */
-                                if (newValue.isNotEmpty()) {
-                                    hiddenInput = ""
-                                    lastInputValue = ""
-                                }
+                                /* JANGAN reset hiddenInput di sini — IME akan confused.
+                                 * Text menumpuk tapi invisible (transparent). Clear saat Enter. */
                             },
                             textStyle = TextStyle(color = Color.Transparent),
                             cursorBrush = SolidColor(Color.Transparent),

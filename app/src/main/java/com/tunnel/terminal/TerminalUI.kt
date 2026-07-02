@@ -710,12 +710,17 @@ fun AIChatPanel(
                     /* AI Provider settings. */
                     Column(modifier = Modifier.weight(1f).padding(16.dp).verticalScroll(scrollState)) {
                         Text("Provider:", color = theme.uiTextMuted, fontSize = 12.sp)
-                        Box {
+                        /* Phase 25: Fix provider dropdown tidak membuka.
+                         * Old code: OutlinedTextField readOnly + Modifier.clickable — internal
+                         * click handler intercept event, .clickable tidak trigger.
+                         * Fix: Box wrapper dengan clickable + DropdownMenu. */
+                        Box(modifier = Modifier.fillMaxWidth().clickable { expandedProvider = true }) {
                             OutlinedTextField(
                                 value = settingsDraft.providerName,
                                 onValueChange = {},
                                 readOnly = true,
-                                modifier = Modifier.fillMaxWidth().clickable { expandedProvider = true },
+                                enabled = false,
+                                modifier = Modifier.fillMaxWidth(),
                                 textStyle = TextStyle(color = theme.uiText, fontFamily = FontFamily.Monospace),
                                 trailingIcon = { Text("▼", color = theme.uiText) }
                             )

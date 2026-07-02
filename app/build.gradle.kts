@@ -11,9 +11,9 @@ android {
         applicationId = "com.tunnel.terminal"
         minSdk = 24
         targetSdk = 34
-        // Phase 24.5: Continued audit fixes (MCP crash, voice input, block mode cleanup)
-        versionCode = 12
-        versionName = "4.3.1-phase24.5-audit-continued"
+        // Phase 25: Fix input + ANR + provider dropdown (3 critical user-facing bugs)
+        versionCode = 13
+        versionName = "4.4.0-phase25-input-anr-dropdown-fix"
     }
 
     buildTypes {
