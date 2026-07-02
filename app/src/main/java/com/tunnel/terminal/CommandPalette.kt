@@ -5,6 +5,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
@@ -15,6 +16,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.key.*
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
@@ -98,6 +100,9 @@ fun CommandPalette(
         selectedIndex = 0
     }
 
+    /* Phase 26: Keyboard navigation — Up/Down/Enter via onPreviewKeyEvent. */
+    val listState = rememberLazyListState()
+
     AlertDialog(
         onDismissRequest = onDismiss,
         modifier = Modifier.fillMaxWidth(0.95f).background(theme.uiBg, RoundedCornerShape(12.dp)),
@@ -112,7 +117,43 @@ fun CommandPalette(
                 BasicTextField(
                     value = query,
                     onValueChange = { query = it },
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier.weight(1f).onPreviewKeyEvent { event ->
+                        if (event.type == KeyEventType.KeyUp) {
+                            when (event.key) {
+                                Key.DirectionDown -> {
+                                    if (filtered.isNotEmpty()) {
+                                        selectedIndex = (selectedIndex + 1) % filtered.size
+                                        /* Scroll to selected. */
+                                        kotlinx.coroutines.MainScope().launch {
+                                            listState.scrollToItem(selectedIndex)
+                                        }
+                                    }
+                                    true
+                                }
+                                Key.DirectionUp -> {
+                                    if (filtered.isNotEmpty()) {
+                                        selectedIndex = if (selectedIndex == 0) filtered.size - 1 else selectedIndex - 1
+                                        kotlinx.coroutines.MainScope().launch {
+                                            listState.scrollToItem(selectedIndex)
+                                        }
+                                    }
+                                    true
+                                }
+                                Key.Enter -> {
+                                    if (filtered.isNotEmpty() && selectedIndex < filtered.size) {
+                                        onExecute(filtered[selectedIndex])
+                                        onDismiss()
+                                    }
+                                    true
+                                }
+                                Key.Escape -> {
+                                    onDismiss()
+                                    true
+                                }
+                                else -> false
+                            }
+                        } else false
+                    },
                     textStyle = TextStyle(
                         color = theme.uiText,
                         fontFamily = FontFamily.Monospace,
@@ -148,6 +189,7 @@ fun CommandPalette(
                     )
                 } else {
                     LazyColumn(
+                        state = listState,
                         modifier = Modifier.fillMaxWidth(),
                         verticalArrangement = Arrangement.spacedBy(2.dp)
                     ) {

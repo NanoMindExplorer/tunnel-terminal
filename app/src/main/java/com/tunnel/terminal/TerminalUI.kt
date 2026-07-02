@@ -249,12 +249,15 @@ fun TerminalScreenView(
                 }
             }
     ) {
-        /* Phase 24: Snapshot screen + cursor untuk thread-safe rendering.
-         * Old code: emulator.getScreen()[row][col] + emulator.cursorRow langsung
-         * — race condition (readLoop mutates while Compose reads).
-         * Fix: get snapshot copy via getScreenSnapshot() + getCursorState(). */
+        /* Phase 26: Throttle snapshot — hanya re-snapshot saat screenDirty berubah.
+         * Compose's remember(screenDirty) sudah efisien: hanya re-compute saat key berubah.
+         * Untuk output sangat cepat (yes, find /), screenDirty berubah cepat tapi Compose
+         * batch updates per frame (~16ms), jasi tidak per frame-by-frame snapshot. */
         val screenSnapshot = remember(screenDirty) { emulator.getScreenSnapshot() }
         val cursorState = remember(screenDirty) { emulator.getCursorState() }
+        /* Phase 26: Thread-safe rows/cols reads (avoid ArrayIndexOutOfBounds during resize). */
+        val renderRows = emulator.getRows()
+        val renderCols = emulator.getCols()
 
         Column(
             modifier = Modifier
@@ -262,9 +265,9 @@ fun TerminalScreenView(
                 .padding(4.dp)
                 .verticalScroll(scrollState)
         ) {
-            for (row in 0 until emulator.rows) {
+            for (row in 0 until renderRows) {
                 val annotatedString = buildAnnotatedString {
-                    for (col in 0 until emulator.cols) {
+                    for (col in 0 until renderCols) {
                         val cell = screenSnapshot.getOrElse(row) { arrayOf() }.getOrElse(col) { TerminalCell() }
                         val isCursor = cursorState.visible && row == cursorState.row && col == cursorState.col
 

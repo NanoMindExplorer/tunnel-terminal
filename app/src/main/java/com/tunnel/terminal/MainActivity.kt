@@ -142,8 +142,11 @@ class MainActivity : ComponentActivity() {
     private var pendingDiff by mutableStateOf<Triple<String, String, String>?>(null)
     /** Phase 23: MCP tools discovered. */
     private val mcpTools = mutableStateListOf<McpTool>()
-    /** Phase 24: Global font size untuk terminal (persist pinch-to-zoom across tabs/modes). */
-    private var terminalFontSize by mutableStateOf(12f)
+    /** Phase 24: Global font size untuk terminal (persist pinch-to-zoom across tabs/modes).
+     *  Phase 26: Persist ke SharedPreferences supaya tidak reset setelah app restart. */
+    private var terminalFontSize by mutableStateOf(
+        getSharedPreferences("TunnelUI", Context.MODE_PRIVATE).getFloat("fontSize", 12f)
+    )
     /** Phase 19: Available models dari fetch /models. */
     private val availableModels = mutableStateListOf<ModelInfo>()
     private var isLoadingModels by mutableStateOf(false)
@@ -932,22 +935,33 @@ class MainActivity : ComponentActivity() {
             val tabsData = shellExecutors.mapIndexed { index, executor -> Pair(executor.id, index + 1) }
             var hiddenInput by remember { mutableStateOf("") }
 
-            /* Phase 20: Deteksi error di output terakhir (debounced).
-             * Guard dengan isProcessingAI flag + check apakah message error-detection
-             * sudah ada (avoid spam). Old code bisa race dengan handleAIPrompt
-             * yang menambah streamingMsg — streamingIdx shift. */
+            /* Phase 26: Fix auto-error-detection terlalu agresif.
+             * Old code: trigger pada setiap output chunk yang mengandung "error"
+             * → false positive untuk `grep error`, `cat error.log`, dll.
+             * Fix: hanya trigger jika output ENDS dengan error pattern (bukan contains),
+             * + cooldown 5 detik antara notifikasi. */
+            var lastErrorNotificationTime by remember { mutableStateOf(0L) }
             LaunchedEffect(activeExecutor.id, activeExecutor.lastCommandOutput.value) {
-                /* Skip jika AI sedang processing (streaming atau non-streaming). */
                 if (isProcessingAI) return@LaunchedEffect
+                val now = System.currentTimeMillis()
+                /* Cooldown 5 detik. */
+                if (now - lastErrorNotificationTime < 5000) return@LaunchedEffect
+
                 val lastOut = activeExecutor.getCleanOutput().lowercase()
-                val hasError = lastOut.contains("error") || lastOut.contains("not found") ||
-                               lastOut.contains("no such file") || lastOut.contains("permission denied")
+                /* Hanya cek 500 char terakhir (output terbaru, bukan seluruh buffer). */
+                val recentOut = lastOut.takeLast(500)
+                /* Error hanya jika di akhir baris (bukan di tengah command seperti grep). */
+                val hasError = recentOut.lines().any { line ->
+                    (line.endsWith("error") || line.endsWith("not found") ||
+                     line.endsWith("no such file or directory") || line.endsWith("permission denied") ||
+                     line.contains(": error:") || line.contains("command not found"))
+                }
                 if (hasError) {
-                    /* Cek apakah message error-detection sudah ada (avoid duplicate). */
                     val hasExistingErrorNotification = chatMessages.any {
                         it.role == "assistant" && it.content.contains("mendeteksi error")
                     }
                     if (!hasExistingErrorNotification) {
+                        lastErrorNotificationTime = now
                         chatMessages.add(ChatMessage(
                             "assistant",
                             "⚠️ Saya mendeteksi error di terminal. Klik 🛠 untuk minta solusi, " +
@@ -982,11 +996,13 @@ class MainActivity : ComponentActivity() {
             fun processInput(input: String) {
                 val cmd = input.trim().replace("\n", "")
                 if (cmd.isNotEmpty()) {
-                    /* Tambah ke history per-executor dengan dedup consecutive. */
                     val h = activeExecutor.commandHistory
                     if (h.isEmpty() || h.last() != cmd) h.add(cmd)
-                    /* Cap history size. */
                     if (h.size > 500) h.removeAt(0)
+                    /* Phase 26: Add block ke BlockManager saat command dijalankan. */
+                    if (blockMode) {
+                        blockManager.addBlock(cmd)
+                    }
                 }
                 activeExecutor.historyIndex = -1
 
@@ -1166,11 +1182,22 @@ class MainActivity : ComponentActivity() {
                         onToggleSplit = {
                             splitMode = !splitMode
                             if (splitMode) {
-                                /* Pilih tab lain untuk split pane (atau buat baru). */
+                                /* Phase 26: Fix race condition — createNewTab async, tapi
+                                 * splitPaneId di-set sync. Fix: cari tab lain dulu, jika
+                                 * tidak ada, create async lalu set splitPaneId di callback. */
                                 val otherTab = shellExecutors.firstOrNull { it.id != activeExecutorId }
-                                splitPaneId = otherTab?.id ?: run {
-                                    lifecycleScope.launch { createNewTab() }
-                                    shellExecutors.lastOrNull()?.id ?: activeExecutorId
+                                if (otherTab != null) {
+                                    splitPaneId = otherTab.id
+                                } else {
+                                    /* Hanya 1 tab — buat tab baru async, set splitPaneId
+                                     * setelah tab dibuat. */
+                                    lifecycleScope.launch {
+                                        createNewTab()
+                                        /* createNewTab sets activeExecutorId ke tab baru.
+                                         * Ambil tab LAMA (sebelumnya aktif) untuk split pane. */
+                                        val oldTab = shellExecutors.firstOrNull { it.id != activeExecutorId }
+                                        if (oldTab != null) splitPaneId = oldTab.id
+                                    }
                                 }
                             }
                         },
@@ -1210,13 +1237,17 @@ class MainActivity : ComponentActivity() {
                                             val added = newValue.substring(oldText.length)
                                             for (ch in added) {
                                                 when (ch) {
-                                                    '\n', '\r' -> { processInput(activeExecutor.currentCommandBuffer + "\n"); activeExecutor.currentCommandBuffer = "" }
+                                                    '\n', '\r' -> {
+                                                        processInput(activeExecutor.currentCommandBuffer + "\n")
+                                                        activeExecutor.currentCommandBuffer = ""
+                                                        hiddenInput = ""; lastInputValue = ""
+                                                    }
                                                     '\u007F', '\b' -> { if (activeExecutor.currentCommandBuffer.isNotEmpty()) activeExecutor.currentCommandBuffer = activeExecutor.currentCommandBuffer.dropLast(1); activeExecutor.writeRaw("\u007F") }
                                                     else -> { val t = handleChar(ch); activeExecutor.currentCommandBuffer += t; activeExecutor.writeRaw(t) }
                                                 }
                                             }
                                         }
-                                        if (newValue.isNotEmpty()) { hiddenInput = ""; lastInputValue = "" }
+                                        /* Phase 26: JANGAN reset hiddenInput di sini (IME confused). */
                                     },
                                     textStyle = TextStyle(color = Color.Transparent),
                                     cursorBrush = SolidColor(Color.Transparent),
@@ -1230,7 +1261,12 @@ class MainActivity : ComponentActivity() {
                                     theme = currentTheme,
                                     onTap = { try { focusRequester.requestFocus(); keyboardController?.show() } catch (_: Exception) {} },
                                     fontSizeState = terminalFontSize,
-                                    onFontSizeChange = { terminalFontSize = it }
+                                    onFontSizeChange = {
+                                        terminalFontSize = it
+                                        /* Phase 26: Persist fontSize. */
+                                        getSharedPreferences("TunnelUI", Context.MODE_PRIVATE)
+                                            .edit().putFloat("fontSize", it).apply()
+                                    }
                                 )
                             }
                             /* Divider. */
@@ -1248,7 +1284,12 @@ class MainActivity : ComponentActivity() {
                                         onResize = { r, c, f -> exec.resizeTerminal(r, c, f) },
                                         theme = currentTheme,
                                         fontSizeState = terminalFontSize,
-                                        onFontSizeChange = { terminalFontSize = it }
+                                        onFontSizeChange = {
+                                        terminalFontSize = it
+                                        /* Phase 26: Persist fontSize. */
+                                        getSharedPreferences("TunnelUI", Context.MODE_PRIVATE)
+                                            .edit().putFloat("fontSize", it).apply()
+                                    }
                                     )
                                 }
                             }
@@ -1272,13 +1313,17 @@ class MainActivity : ComponentActivity() {
                                         val added = newValue.substring(oldText.length)
                                         for (ch in added) {
                                             when (ch) {
-                                                '\n', '\r' -> { processInput(activeExecutor.currentCommandBuffer + "\n"); activeExecutor.currentCommandBuffer = "" }
+                                                '\n', '\r' -> {
+                                                    processInput(activeExecutor.currentCommandBuffer + "\n")
+                                                    activeExecutor.currentCommandBuffer = ""
+                                                    hiddenInput = ""; lastInputValue = ""
+                                                }
                                                 '\u007F', '\b' -> { if (activeExecutor.currentCommandBuffer.isNotEmpty()) activeExecutor.currentCommandBuffer = activeExecutor.currentCommandBuffer.dropLast(1); activeExecutor.writeRaw("\u007F") }
                                                 else -> { val t = handleChar(ch); activeExecutor.currentCommandBuffer += t; activeExecutor.writeRaw(t) }
                                             }
                                         }
                                     }
-                                    if (newValue.isNotEmpty()) { hiddenInput = ""; lastInputValue = "" }
+                                    /* Phase 26: JANGAN reset hiddenInput di sini (IME confused). */
                                 },
                                 textStyle = TextStyle(color = Color.Transparent),
                                 cursorBrush = SolidColor(Color.Transparent),

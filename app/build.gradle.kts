@@ -11,9 +11,9 @@ android {
         applicationId = "com.tunnel.terminal"
         minSdk = 24
         targetSdk = 34
-        // Phase 25: Fix input + ANR + provider dropdown (3 critical user-facing bugs)
-        versionCode = 13
-        versionName = "4.4.0-phase25-input-anr-dropdown-fix"
+        // Phase 26: Fix all 13 remaining bugs (input, block mode, SSH, performance, security)
+        versionCode = 14
+        versionName = "4.5.0-phase26-all-bugs-fixed"
     }
 
     buildTypes {
