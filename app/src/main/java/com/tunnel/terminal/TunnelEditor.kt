@@ -11,8 +11,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.input.OffsetMapping
+import androidx.compose.ui.text.input.TransformedText
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
@@ -37,7 +41,8 @@ import java.io.IOException
 @Composable
 fun TunnelEditorDialog(
     filePath: String,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    theme: TerminalTheme = ThemeManager.defaultTheme
 ) {
     val file = File(filePath)
     val scope = rememberCoroutineScope()
@@ -161,7 +166,9 @@ fun TunnelEditorDialog(
                                     )
                                 }
                             }
-                            /* Editor area. */
+                            /* Editor area. Phase 21: Syntax highlighting via VisualTransformation. */
+                            val language = SyntaxHighlighter.detectLanguage(file.name)
+                            val syntaxColors = SyntaxHighlighter.colorsFromTheme(theme)
                             BasicTextField(
                                 value = content,
                                 onValueChange = {
@@ -175,6 +182,7 @@ fun TunnelEditorDialog(
                                     lineHeight = 16.sp
                                 ),
                                 cursorBrush = SolidColor(Color(0xFF00FF00)),
+                                visualTransformation = SyntaxHighlightTransformation(language, syntaxColors),
                                 modifier = Modifier.weight(1f).padding(4.dp)
                             )
                         }
@@ -246,5 +254,22 @@ fun TunnelEditorDialog(
                 )
             }
         }
+    }
+}
+
+/**
+ * SyntaxHighlightTransformation - VisualTransformation untuk BasicTextField
+ * yang merender text dengan syntax highlighting tanpa mengubah underlying text.
+ *
+ * Phase 21: Syntax highlighting in editor. VisualTransformation adalah cara
+ * Compose untuk mengubah visual text tanpa mengubah actual text value.
+ */
+class SyntaxHighlightTransformation(
+    private val language: String,
+    private val colors: SyntaxHighlighter.SyntaxColors
+) : VisualTransformation {
+    override fun filter(text: AnnotatedString): TransformedText {
+        val highlighted = SyntaxHighlighter.highlight(text.text, language, colors)
+        return TransformedText(highlighted, OffsetMapping.Identity)
     }
 }

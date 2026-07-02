@@ -53,6 +53,9 @@ fun TabBar(
     onTabClosed: (Int) -> Unit, onOpenAI: () -> Unit,
     onOpenFileExplorer: () -> Unit = {},
     onOpenWorkspace: () -> Unit = {},
+    onOpenSsh: () -> Unit = {},
+    onToggleSplit: () -> Unit = {},
+    isSplitMode: Boolean = false,
     theme: TerminalTheme = ThemeManager.defaultTheme
 ) {
     LazyRow(
@@ -88,6 +91,18 @@ fun TabBar(
         item {
             Box(modifier = Modifier.background(theme.uiSurface, RoundedCornerShape(4.dp)).clickable { onOpenWorkspace() }.padding(horizontal = 10.dp, vertical = 10.dp)) {
                 Text("💾", color = theme.uiText, fontSize = 12.sp)
+            }
+        }
+        /* Phase 21: SSH Connect button. */
+        item {
+            Box(modifier = Modifier.background(theme.uiSurface, RoundedCornerShape(4.dp)).clickable { onOpenSsh() }.padding(horizontal = 10.dp, vertical = 10.dp)) {
+                Text("🔌", color = theme.uiText, fontSize = 12.sp)
+            }
+        }
+        /* Phase 21: Split Pane toggle button. */
+        item {
+            Box(modifier = Modifier.background(if (isSplitMode) theme.uiAccent else theme.uiSurface, RoundedCornerShape(4.dp)).clickable { onToggleSplit() }.padding(horizontal = 10.dp, vertical = 10.dp)) {
+                Text("⬡", color = theme.uiText, fontSize = 12.sp)
             }
         }
         item {

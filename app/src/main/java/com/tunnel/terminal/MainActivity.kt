@@ -59,7 +59,9 @@ import androidx.compose.ui.platform.LocalSoftwareKeyboardController
  * per-tab history, contextual FAB, back button, POST_NOTIFICATIONS permission.
  */
 class MainActivity : ComponentActivity() {
-    private val shellExecutors = mutableStateListOf<ShellExecutor>()
+    /* Phase 21: Changed from ShellExecutor to TerminalSession interface
+     * untuk support SSH sessions alongside local PTY. */
+    private val shellExecutors = mutableStateListOf<TerminalSession>()
     private var activeExecutorId by mutableStateOf(0)
     private val aiAgent = AIAgent()
 
@@ -93,6 +95,12 @@ class MainActivity : ComponentActivity() {
     private var showFileExplorer by mutableStateOf(false)
     /** Phase 19: Workspace drawer visibility. */
     private var showWorkspaceDrawer by mutableStateOf(false)
+    /** Phase 21: SSH connect dialog visibility. */
+    private var showSshDialog by mutableStateOf(false)
+    /** Phase 21: Split pane mode — 2 terminals side by side. */
+    private var splitMode by mutableStateOf(false)
+    /** Phase 21: Second pane session ID (for split mode). */
+    private var splitPaneId by mutableStateOf(0)
     /** Phase 19: Available models dari fetch /models. */
     private val availableModels = mutableStateListOf<ModelInfo>()
     private var isLoadingModels by mutableStateOf(false)
@@ -404,6 +412,17 @@ class MainActivity : ComponentActivity() {
         newExecutor.triggerScreenUpdate()
     }
 
+    /**
+     * Phase 21: Buat tab SSH baru.
+     * Create new SSH tab with given connection config.
+     */
+    private suspend fun createSshTab(config: SshConnectionConfig) {
+        val sshExecutor = SshShellExecutor(themeHolder, config)
+        shellExecutors.add(sshExecutor)
+        activeExecutorId = sshExecutor.id
+        sshExecutor.start()
+    }
+
     private fun closeTab(id: Int) {
         shellExecutors.find { it.id == id }?.destroy()
         shellExecutors.removeAll { it.id == id }
@@ -500,7 +519,20 @@ class MainActivity : ComponentActivity() {
                         exec.emulator.process("\u001B[2K\r\u001B[32m[Editor ditutup]\u001B[0m\n")
                         exec.triggerScreenUpdate()
                     }
-                }
+                },
+                theme = currentTheme
+            )
+        }
+
+        /* Phase 21: SSH Connect Dialog. */
+        if (showSshDialog) {
+            SshConnectDialog(
+                theme = currentTheme,
+                onConnect = { config ->
+                    showSshDialog = false
+                    lifecycleScope.launch { createSshTab(config) }
+                },
+                onDismiss = { showSshDialog = false }
             )
         }
 
@@ -827,10 +859,86 @@ class MainActivity : ComponentActivity() {
                         onOpenAI = { scope.launch { drawerState.open() } },
                         onOpenFileExplorer = { showFileExplorer = true },
                         onOpenWorkspace = { showWorkspaceDrawer = true },
+                        onOpenSsh = { showSshDialog = true },
+                        onToggleSplit = {
+                            splitMode = !splitMode
+                            if (splitMode) {
+                                /* Pilih tab lain untuk split pane (atau buat baru). */
+                                val otherTab = shellExecutors.firstOrNull { it.id != activeExecutorId }
+                                splitPaneId = otherTab?.id ?: run {
+                                    lifecycleScope.launch { createNewTab() }
+                                    shellExecutors.lastOrNull()?.id ?: activeExecutorId
+                                }
+                            }
+                        },
+                        isSplitMode = splitMode,
                         theme = currentTheme
                     )
 
-                    Box(modifier = Modifier.weight(1f)) {
+                    /* Phase 21: Split Pane mode — 2 terminals side by side. */
+                    if (splitMode) {
+                        val splitExecutor = shellExecutors.find { it.id != activeExecutorId }
+                        if (splitExecutor != null) splitPaneId = splitExecutor.id
+                        Row(modifier = Modifier.weight(1f)) {
+                            /* Left pane: active terminal. */
+                            Box(modifier = Modifier.weight(1f)) {
+                                val focusRequester = remember { FocusRequester() }
+                                val keyboardController = LocalSoftwareKeyboardController.current
+                                LaunchedEffect(activeExecutorId) {
+                                    try { focusRequester.requestFocus(); keyboardController?.show() } catch (_: Exception) {}
+                                }
+                                var lastInputValue by remember { mutableStateOf("") }
+                                BasicTextField(
+                                    value = hiddenInput,
+                                    onValueChange = { newValue ->
+                                        val oldText = lastInputValue
+                                        lastInputValue = newValue
+                                        if (newValue.length > oldText.length) {
+                                            val added = newValue.substring(oldText.length)
+                                            for (ch in added) {
+                                                when (ch) {
+                                                    '\n', '\r' -> { processInput(activeExecutor.currentCommandBuffer + "\n"); activeExecutor.currentCommandBuffer = "" }
+                                                    '\u007F', '\b' -> { if (activeExecutor.currentCommandBuffer.isNotEmpty()) activeExecutor.currentCommandBuffer = activeExecutor.currentCommandBuffer.dropLast(1); activeExecutor.writeRaw("\u007F") }
+                                                    else -> { val t = handleChar(ch); activeExecutor.currentCommandBuffer += t; activeExecutor.writeRaw(t) }
+                                                }
+                                            }
+                                        }
+                                        if (newValue.isNotEmpty()) { hiddenInput = ""; lastInputValue = "" }
+                                    },
+                                    textStyle = TextStyle(color = Color.Transparent),
+                                    cursorBrush = SolidColor(Color.Transparent),
+                                    modifier = Modifier.fillMaxSize().focusRequester(focusRequester).onPreviewKeyEvent { event -> handleKeyEvent(event) }
+                                )
+                                TerminalScreenView(
+                                    emulator = activeExecutor.emulator, screenDirty = screenDirty,
+                                    isAlive = activeExecutor.isAlive,
+                                    onRestartSession = { scope.launch { activeExecutor.restart() } },
+                                    onResize = { r, c, f -> activeExecutor.resizeTerminal(r, c, f) },
+                                    theme = currentTheme,
+                                    onTap = { try { focusRequester.requestFocus(); keyboardController?.show() } catch (_: Exception) {} }
+                                )
+                            }
+                            /* Divider. */
+                            Box(modifier = Modifier.width(2.dp).fillMaxHeight().background(currentTheme.uiSurface))
+                            /* Right pane: second terminal. */
+                            Box(modifier = Modifier.weight(1f).clickable {
+                                splitExecutor?.let { activeExecutorId = it.id }
+                            }) {
+                                splitExecutor?.let { exec ->
+                                    val sd by exec.screenDirty.collectAsState()
+                                    TerminalScreenView(
+                                        emulator = exec.emulator, screenDirty = sd,
+                                        isAlive = exec.isAlive,
+                                        onRestartSession = { scope.launch { exec.restart() } },
+                                        onResize = { r, c, f -> exec.resizeTerminal(r, c, f) },
+                                        theme = currentTheme
+                                    )
+                                }
+                            }
+                        }
+                    } else {
+                        /* Normal mode: single terminal (existing logic). */
+                        Box(modifier = Modifier.weight(1f)) {
                         /* Phase 19.5: FocusRequester untuk auto-focus BasicTextField.
                          * Tap pada terminal area = request focus = show soft keyboard. */
                         val focusRequester = remember { FocusRequester() }
@@ -931,6 +1039,7 @@ class MainActivity : ComponentActivity() {
                             }
                         )
                     }
+                    } /* end else (normal mode) */
                     ExtraKeysBar(
                         isCtrlActive = isCtrlActive,
                         isAltActive = isAltActive,

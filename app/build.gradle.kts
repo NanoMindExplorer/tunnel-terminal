@@ -11,9 +11,9 @@ android {
         applicationId = "com.tunnel.terminal"
         minSdk = 24
         targetSdk = 34
-        // Phase 20: Comprehensive Bug Fix + Compose BOM Upgrade
-        versionCode = 7
-        versionName = "3.3.0-phase20-comprehensive-fix"
+        // Phase 21: Thread Safety + SSH Client + Syntax Highlighting + Split Pane
+        versionCode = 8
+        versionName = "4.0.0-phase21-ssh-syntax-split"
     }
 
     buildTypes {
@@ -69,4 +69,7 @@ dependencies {
 
     // Phase 17: DocumentFile untuk Storage Access Framework (StorageManager)
     implementation("androidx.documentfile:documentfile:1.0.1")
+
+    // Phase 21: JSch untuk SSH Client
+    implementation("com.github.mwiede:jsch:0.2.17")
 }

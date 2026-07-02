@@ -105,34 +105,78 @@ class TerminalEmulator(private val themeHolder: ThemeHolder = ThemeHolder()) {
     )
 
     fun resize(newRows: Int, newCols: Int, newFontSize: TextUnit) {
-        if (newRows <= 0 || newCols <= 0) return
-        if (newRows == rows && newCols == cols && newFontSize == fontSize) return
+        synchronized(lock) {
+            if (newRows <= 0 || newCols <= 0) return
+            if (newRows == rows && newCols == cols && newFontSize == fontSize) return
 
-        val newScreen = Array(newRows) { Array(newCols) { TerminalCell() } }
-        for (r in 0 until minOf(rows, newRows)) {
-            for (c in 0 until minOf(cols, newCols)) {
-                newScreen[r][c] = screen[r][c]
+            val newScreen = Array(newRows) { Array(newCols) { TerminalCell() } }
+            for (r in 0 until minOf(rows, newRows)) {
+                for (c in 0 until minOf(cols, newCols)) {
+                    newScreen[r][c] = screen[r][c]
+                }
             }
-        }
-        screen = newScreen
-        rows = newRows
-        cols = newCols
-        fontSize = newFontSize
-        scrollBottom = rows - 1
+            screen = newScreen
+            rows = newRows
+            cols = newCols
+            fontSize = newFontSize
+            scrollBottom = rows - 1
 
-        if (cursorRow >= rows) cursorRow = rows - 1
-        if (cursorCol >= cols) cursorCol = cols - 1
+            if (cursorRow >= rows) cursorRow = rows - 1
+            if (cursorCol >= cols) cursorCol = cols - 1
+        }
     }
 
-    fun getScreen(): Array<Array<TerminalCell>> = screen
+    /**
+     * Phase 21: Thread safety lock. process() dipanggil dari readLoop (background),
+     * getScreen()/cursorRow/cursorCol dibaca dari Compose (main thread).
+     * Tanpa sync, Compose bisa baca screen array saat sedang di-mutate -> crash/corruption.
+     *
+     * Thread safety lock for process() vs getScreen()/cursor reads.
+     */
+    private val lock = Any()
+
+    /**
+     * Phase 21: Snapshot screen untuk Compose rendering.
+     * Returns a COPY of screen array agar Compose tidak baca array yang sedang di-mutate.
+     * Copy dibuat di dalam synchronized block untuk konsistensi.
+     *
+     * Returns a snapshot copy of screen array for thread-safe Compose rendering.
+     */
+    fun getScreenSnapshot(): Array<Array<TerminalCell>> {
+        synchronized(lock) {
+            /* Shallow copy baris, lalu copy setiap baris (array of TerminalCell).
+             * TerminalCell adalah data class — copy sekali per cell cukup (char + colors + flags).
+             * Untuk performance, bisa di-cache, tapi untuk sekarang copy langsung. */
+            return Array(rows) { r ->
+                Array(cols) { c ->
+                    screen[r][c].copy()  /* data class copy */
+                }
+            }
+        }
+    }
+
+    /** Legacy alias — sekarang returns snapshot copy. */
+    fun getScreen(): Array<Array<TerminalCell>> = getScreenSnapshot()
+
+    /** Phase 21: Snapshot cursor position untuk thread-safe reads. */
+    data class CursorState(val row: Int, val col: Int, val visible: Boolean)
+    fun getCursorState(): CursorState {
+        synchronized(lock) {
+            return CursorState(cursorRow, cursorCol, isCursorVisible)
+        }
+    }
 
     fun setCursor(row: Int, col: Int) {
-        cursorRow = row.coerceIn(0, rows - 1)
-        cursorCol = col.coerceIn(0, cols - 1)
+        synchronized(lock) {
+            cursorRow = row.coerceIn(0, rows - 1)
+            cursorCol = col.coerceIn(0, cols - 1)
+        }
     }
 
     fun setCursorVisible(visible: Boolean) {
-        isCursorVisible = visible
+        synchronized(lock) {
+            isCursorVisible = visible
+        }
     }
 
     /**
@@ -145,7 +189,24 @@ class TerminalEmulator(private val themeHolder: ThemeHolder = ThemeHolder()) {
      */
     private val pendingBuffer = StringBuilder()
 
-    fun process(data: String) {
+    /**
+     * Phase 21: Synchronized process() — hanya satu thread yang bisa mutate screen.
+     * readLoop memanggil ini, Compose membaca via getScreenSnapshot().
+     */
+    fun process(data: String) = synchronized(lock) {
+        processInternal(data)
+    }
+
+    /** Flush pending buffer — juga synchronized. */
+    fun flush() = synchronized(lock) {
+        if (pendingBuffer.isNotEmpty()) {
+            val data = pendingBuffer.toString()
+            pendingBuffer.setLength(0)
+            printText(data)
+        }
+    }
+
+    private fun processInternal(data: String) {
         /* Prepend pending buffer dari process() sebelumnya.
          * Prepend pending buffer from previous process() call. */
         val fullData = if (pendingBuffer.isNotEmpty()) {
@@ -206,15 +267,7 @@ class TerminalEmulator(private val themeHolder: ThemeHolder = ThemeHolder()) {
         if (remainingText.isNotEmpty()) printText(remainingText)
     }
 
-    /** Flush pending buffer (force process apa pun yang tersisa). */
-    fun flush() {
-        if (pendingBuffer.isNotEmpty()) {
-            val data = pendingBuffer.toString()
-            pendingBuffer.setLength(0)
-            /* Print sebagai text biasa (kemungkinan partial escape yang tidak complete). */
-            printText(data)
-        }
-    }
+    /* flush() moved to synchronized version above (Phase 21 thread safety). */
 
     private fun printText(text: String) {
         for (ch in text.toCharArray()) {

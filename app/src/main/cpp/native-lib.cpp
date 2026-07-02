@@ -151,6 +151,12 @@ Java_com_tunnel_terminal_TerminalJni_close(JNIEnv *env, jobject thiz, jint fd) {
 /*
  * Mengirim sinyal ke child process shell.
  * Sends a signal to the child shell process.
+ *
+ * Phase 21: Fix PID recycling risk. Sebelum kirim sinyal, cek apakah pid
+ * masih child process kita dengan waitpid(WNOHANG). Jika waitpid return -1
+ * (ECHILD), proses sudah bukan child kita (sudah di-reap atau PID recycled)
+ * -> jangan kirim sinyal (bisa kena process lain).
+ *
  * Returns: 0 on success, -1 on failure.
  */
 JNIEXPORT jint JNICALL
@@ -160,6 +166,24 @@ Java_com_tunnel_terminal_TerminalJni_killSession(JNIEnv *env, jobject thiz,
         LOGE("killSession() menolak pid tidak valid: %d", pid);
         return -1;
     }
+
+    /* Phase 21: Cek apakah pid masih child kita sebelum kirim sinyal.
+     * Check if pid is still our child before sending signal (PID recycling fix). */
+    int status = 0;
+    pid_t check = waitpid(pid, &status, WNOHANG);
+    if (check == -1) {
+        /* errno == ECHILD: proses bukan child kita (sudah di-reap atau PID recycled).
+         * Jangan kirim sinyal — bisa kena process lain. */
+        LOGI("killSession: pid %d bukan child kita (sudah di-reap), skip kill", pid);
+        return 0;
+    }
+    if (check == pid) {
+        /* Child sudah exited, sudah di-reap. Tidak perlu kirim sinyal. */
+        LOGI("killSession: pid %d sudah exited (reaped), skip kill", pid);
+        return 0;
+    }
+    /* check == 0: child masih running. Lanjut kirim sinyal. */
+
     int sig = (signal == 0) ? SIGKILL : signal;
     if (kill(pid, sig) < 0) {
         LOGE("kill(pid=%d, sig=%d) gagal: %s", pid, sig, strerror(errno));
@@ -169,8 +193,6 @@ Java_com_tunnel_terminal_TerminalJni_killSession(JNIEnv *env, jobject thiz,
 
     /* Reap zombie child process untuk hindari fd/resource leak.
      * Reap zombie to prevent resource leak. */
-    int status = 0;
-    /* Wait dengan timeout singkat (non-blocking lalu polling ringan). */
     for (int i = 0; i < 10; i++) {
         pid_t reaped = waitpid(pid, &status, WNOHANG);
         if (reaped == pid || reaped == -1) break;
@@ -180,16 +202,9 @@ Java_com_tunnel_terminal_TerminalJni_killSession(JNIEnv *env, jobject thiz,
 }
 
 /*
- * Mengecek apakah child process masih hidup.
- * Checks if the child process is still alive.
- * Returns: 1 if alive, 0 if exited, -1 on error.
+ * Phase 21: isAlive dihapus (dead code — tidak pernah dipanggil dari Kotlin).
+ * Jika diperlukan di masa depan, gunakan waitpid(pid, &status, WNOHANG)
+ * bukan kill(pid, 0) untuk hindari PID recycling false-positive.
  */
-JNIEXPORT jint JNICALL
-Java_com_tunnel_terminal_TerminalJni_isAlive(JNIEnv *env, jobject thiz, jint pid) {
-    if (pid <= 1) return -1;
-    if (kill(pid, 0) == 0) return 1;
-    if (errno == ESRCH) return 0;
-    return -1;
-}
 
 }

@@ -4,7 +4,9 @@ import android.util.Log
 
 /**
  * JNI Bridge ke library C++ native (libtunnel_terminal.so).
- * Menyediakan operasi PTY: create, write, resize, close, kill, isAlive.
+ * Menyediakan operasi PTY: create, write, resize, close, kill.
+ *
+ * Phase 21: isAlive dihapus (dead code + PID recycling risk).
  *
  * JNI bridge to native C++ library providing PTY operations.
  */
@@ -43,16 +45,13 @@ object TerminalJni {
     /**
      * Mengirim sinyal ke child process dan reap zombie.
      * Sends signal to child and reaps zombie.
+     *
+     * Phase 21: Safe PID check — cek waitpid sebelum kill untuk hindari
+     * PID recycling (mengirim sinyal ke process lain yang dapat PID yang sama).
+     *
      * @param pid child process id
      * @param signal 0 = SIGKILL, otherwise signal number (e.g. 15 = SIGTERM)
      * @return 0 sukses, -1 gagal
      */
     external fun killSession(pid: Int, signal: Int): Int
-
-    /**
-     * Mengecek apakah child process masih hidup.
-     * Checks if child is alive.
-     * @return 1 hidup, 0 exited, -1 error
-     */
-    external fun isAlive(pid: Int): Int
 }

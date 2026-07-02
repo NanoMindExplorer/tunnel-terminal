@@ -4,7 +4,7 @@
 
 ![Architecture](https://img.shields.io/badge/Architecture-NDK%20%2B%20Jetpack%20Compose-purple)
 ![AI](https://img.shields.io/badge/AI-Multi%20Provider%20%2B%20Vision-cyan)
-![Version](https://img.shields.io/badge/version-3.3.0--phase20-blue)
+![Version](https://img.shields.io/badge/version-4.0.0--phase21-blue)
 
 ## Fitur Utama
 
@@ -123,6 +123,91 @@ Membutuhkan:
 | **19** | **Free AI Provider + Image Vision + File Explorer + Workspace Sessions + Icon Redesign** — see below |
 | **19.5** | **Input Reliability + Mouse Support** (fix: cannot type in terminal) |
 | **20** | **Comprehensive Bug Fix + Compose BOM Upgrade** — see below |
+| **21** | **Thread Safety + SSH Client + Syntax Highlighting + Split Pane** — see below |
+
+## Phase 21 — Production Quality + SSH + Syntax Highlighting + Split Pane
+
+This release closes all 4 deferred thread safety bugs from Phase 20 + adds 3 major features previously deferred from Phase 19.
+
+### Thread Safety (4 fixes — production quality)
+
+1. **TerminalEmulator thread safety**: `process()` + `resize()` + `getScreen()` now use `synchronized(lock)`. `getScreen()` returns a **snapshot copy** of the screen array — Compose never reads array being mutated. Added `getCursorState()` for thread-safe cursor reads.
+
+2. **ShellExecutor thread safety**: `outputBuffer` protected by `outputLock` (readLoop writes, main reads via `getCleanOutput()`). `writeRaw()` protected by `writeLock` — no more concurrent JNI writes from main + Auto-Pilot threads.
+
+3. **PID recycling fix** (C++ `killSession`): Before sending kill signal, `waitpid(pid, &status, WNOHANG)` checks if pid is still our child. If `waitpid` returns -1 (ECHILD), process already reaped or PID recycled → skip kill (avoid killing wrong process).
+
+4. **Dead code removal**: `AIAgent.askAI()` (non-streaming) removed — never called, only `askAIStreaming()` used. `TerminalJni.isAlive()` (JNI) removed — dead code, used `kill(pid, 0)` which has PID recycling risk.
+
+### SSH Client (JSch)
+
+5. **SshShellExecutor**: Full SSH terminal session using JSch library. Implements `TerminalSession` interface — works interchangeably with local PTY in TabBar. Features:
+   - Password authentication
+   - Private key authentication (with passphrase)
+   - PTY type "xterm-256color" + resize
+   - Read loop (same pattern as ShellExecutor)
+   - Thread-safe (outputLock + writeLock)
+   - Graceful disconnect
+
+6. **SshConnectDialog**: Connection form with host/port/username/password (or private key path + passphrase). Validation + error messages.
+
+7. **TabBar integration**: 🔌 button opens SSH dialog. New SSH tab appears in TabBar alongside local PTY tabs. Tap tab to switch between local/SSH sessions.
+
+8. **TerminalSession interface**: Common interface for `ShellExecutor` (local PTY) and `SshShellExecutor` (remote SSH). Both can coexist in the same tab list.
+
+### Syntax Highlighting (regex-based, NOT tree-sitter)
+
+9. **SyntaxHighlighter**: Regex-based highlighting for 8 languages:
+   - **Kotlin** (.kt, .kts, .java) — keywords, strings, comments, numbers, annotations, functions, types
+   - **Python** (.py) — keywords, strings (f-strings, triple), comments, decorators, functions
+   - **JavaScript/TypeScript** (.js, .ts, .mjs) — keywords, template literals, comments, functions
+   - **Shell/Bash** (.sh, .bash) — keywords, variables ($VAR), strings, comments
+   - **JSON** (.json) — keys, strings, numbers, booleans
+   - **XML/HTML** (.xml, .html, .svg) — tags, attributes, strings, comments
+   - **YAML** (.yml, .yaml) — keys, strings, comments, booleans
+   - **Markdown** (.md) — headers, code blocks, links, bold
+
+10. **Theme-aware colors**: Syntax colors derived from terminal ANSI palette — each theme produces different syntax colors.
+
+11. **VisualTransformation**: `SyntaxHighlightTransformation` class applies highlighting to `BasicTextField` without changing underlying text. Editor input stays plain, display is highlighted.
+
+12. **TunnelEditor integration**: `open <file>` now shows syntax-highlighted code. Language auto-detected by file extension.
+
+**Why not tree-sitter?** Tree-sitter requires NDK grammar builds (+2-5MB per language). Regex-based is ~400 lines, 0 bytes APK overhead, sufficient for mobile editing.
+
+### Split Pane (tmux-style)
+
+13. **Split pane mode**: ⬡ button in TabBar toggles split mode. Two terminals side by side:
+    - Left pane: active terminal (with input)
+    - Right pane: second tab terminal (view-only, tap to switch)
+    - Divider between panes
+
+14. **Tab switching**: Tap right pane → switches active tab to that pane. Type in left pane → input goes to active terminal.
+
+### Additional Changes
+
+15. **Compose BOM**: Already upgraded in Phase 20 (2024.02.00)
+16. **JSch dependency**: `com.github.mwiede:jsch:0.2.17` (maintained fork)
+17. **Material icons**: Already added in Phase 19
+
+### Files Changed (Phase 21)
+- **NEW**: `TerminalSession.kt` — common interface
+- **NEW**: `SshShellExecutor.kt` — SSH terminal session (JSch)
+- **NEW**: `SshConnectDialog.kt` — SSH connection form UI
+- **NEW**: `SyntaxHighlighter.kt` — regex-based syntax highlighting (8 languages)
+- **MODIFIED**: `TerminalEmulator.kt` — synchronized lock + snapshot getScreen + getCursorState
+- **MODIFIED**: `ShellExecutor.kt` — outputLock + writeLock + implements TerminalSession
+- **MODIFIED**: `TerminalJni.kt` — removed isAlive (dead code)
+- **MODIFIED**: `native-lib.cpp` — killSession PID recycling fix + removed isAlive
+- **MODIFIED**: `AIAgent.kt` — removed askAI dead code
+- **MODIFIED**: `TunnelEditor.kt` — syntax highlighting via VisualTransformation
+- **MODIFIED**: `TerminalUI.kt` — TabBar SSH + Split buttons
+- **MODIFIED**: `MainActivity.kt` — TerminalSession list + SSH dialog + split pane
+- **MODIFIED**: `build.gradle.kts` — JSch dependency + version bump
+
+### Version
+- `versionCode`: 7 → 8
+- `versionName`: `3.3.0-phase20-comprehensive-fix` → `4.0.0-phase21-ssh-syntax-split`
 
 ## Phase 20 — Comprehensive Bug Fix Release
 

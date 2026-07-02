@@ -7,7 +7,6 @@ import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.flowOn
-import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.BufferedReader
@@ -43,68 +42,15 @@ data class ChatMessage(
  * - askAIStreaming(): Returns Flow<String> yang emit token-by-token via SSE parsing
  * - Konsumsi SSE chunks: data: {json}\n\n ... data: [DONE]
  * - Multi-turn conversation: kirim list pesan sebelumnya, bukan hanya user prompt terakhir
- * - Fallback ke askAI() (non-streaming) jika provider tidak support SSE
+ *
+ * Phase 21: askAI() (non-streaming) dihapus — dead code, tidak pernah dipanggil.
+ * Semua request AI sekarang via askAIStreaming().
  *
  * Mendukung semua provider OpenAI-compatible:
  * OpenAI, DeepSeek, Groq, OpenRouter, Gemini (OpenAI-compat), Anthropic (OpenAI-compat), Ollama.
  */
 class AIAgent {
     private val tag = "AIAgent"
-
-    /**
-     * Kirim prompt ke AI dan tunggu response utuh (non-streaming).
-     * Send prompt and wait for full response (non-streaming).
-     *
-     * @param settings konfigurasi AI provider
-     * @param conversation list pesan multi-turn (untuk memory)
-     * @param terminalContext output terminal terakhir (akan di-strip ANSI-nya)
-     * @return response AI atau pesan error yang user-friendly
-     */
-    suspend fun askAI(
-        settings: AISettings,
-        conversation: List<ChatMessage>,
-        terminalContext: String
-    ): String {
-        if (!isConfigured(settings)) {
-            return configErrorMessage(settings)
-        }
-
-        return withContext(Dispatchers.IO) {
-            var connection: HttpURLConnection? = null
-            try {
-                connection = openConnection(settings, streaming = false)
-                val requestBody = buildRequestBody(settings, conversation, terminalContext, streaming = false)
-                writeRequest(connection, requestBody)
-
-                val responseCode = connection.responseCode
-                val inputStream = if (responseCode in 200..299) connection.inputStream else connection.errorStream
-                val response = readAll(inputStream)
-
-                if (responseCode !in 200..299) {
-                    val errBody = response.take(800)
-                    Log.e(tag, "API error $responseCode: $errBody")
-                    return@withContext formatHttpError(responseCode, errBody)
-                }
-
-                val jsonResponse = JSONObject(response)
-                jsonResponse.getJSONArray("choices")
-                    .getJSONObject(0)
-                    .getJSONObject("message")
-                    .getString("content")
-            } catch (e: java.net.SocketTimeoutException) {
-                "Timeout (${settings.requestTimeoutMs}ms). Provider lambat atau unreachable. Coba lagi atau naikkan timeout di Settings."
-            } catch (e: java.net.UnknownHostException) {
-                "DNS gagal: ${e.message}. Cek koneksi internet atau Base URL."
-            } catch (e: javax.net.ssl.SSLException) {
-                "SSL/TLS error: ${e.message}. Mungkin Base URL salah atau sertifikat provider bermasalah."
-            } catch (e: Exception) {
-                Log.e(tag, "Generic error: ${e.javaClass.simpleName}: ${e.message}")
-                "Kesalahan koneksi (${e.javaClass.simpleName}): ${e.message ?: "tidak diketahui"}"
-            } finally {
-                connection?.disconnect()
-            }
-        }
-    }
 
     /**
      * Kirim prompt ke AI dengan STREAMING via Server-Sent Events.

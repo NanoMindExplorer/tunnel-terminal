@@ -30,7 +30,7 @@ import java.nio.charset.StandardCharsets
  *
  * Phase 18: Accept themeHolder untuk TerminalEmulator (theme-aware rendering).
  */
-class ShellExecutor(private val themeHolder: ThemeHolder = ThemeHolder()) {
+class ShellExecutor(private val themeHolder: ThemeHolder = ThemeHolder()) : TerminalSession {
     private val tag = "ShellExecutor"
 
     private var masterFd: Int = -1
@@ -39,43 +39,48 @@ class ShellExecutor(private val themeHolder: ThemeHolder = ThemeHolder()) {
     /** Track readLoop thread untuk interrupt saat destroy. */
     @Volatile
     private var readThread: Thread? = null
-    val id: Int = System.currentTimeMillis().toInt() and 0x7FFFFFFF
+    override val id: Int = System.currentTimeMillis().toInt() and 0x7FFFFFFF
 
-    var emulator = TerminalEmulator(themeHolder)
+    override var emulator = TerminalEmulator(themeHolder)
 
-    var isAlive by mutableStateOf(true)
+    override var isAlive by mutableStateOf(true)
         private set
 
     private val _screenDirty = MutableStateFlow(0)
-    val screenDirty: StateFlow<Int> = _screenDirty.asStateFlow()
+    override val screenDirty: StateFlow<Int> = _screenDirty.asStateFlow()
 
-    fun triggerScreenUpdate() { _screenDirty.value++ }
+    override fun triggerScreenUpdate() { _screenDirty.value++ }
 
     private val _lastCommandOutput = MutableStateFlow("")
-    val lastCommandOutput: StateFlow<String> = _lastCommandOutput.asStateFlow()
+    override val lastCommandOutput: StateFlow<String> = _lastCommandOutput.asStateFlow()
+    /** Phase 21: outputBuffer diakses dari readLoop (write) + main (read di getCleanOutput).
+     *  Synchronize dengan lock untuk thread safety. */
+    private val outputLock = Any()
     private var outputBuffer = StringBuilder()
 
     /** Riwayat perintah per-executor (per-tab). Per-tab command history. */
-    val commandHistory = mutableListOf<String>()
+    override val commandHistory = mutableListOf<String>()
 
     /** Per-tab current input line buffer (Phase 19.5: was global in MainActivity).
      * Saat user switch tab, input yang sedang diketik tidak hilang. */
     @Volatile
-    var currentCommandBuffer: String = ""
+    override var currentCommandBuffer: String = ""
 
     /** Per-tab history navigation index (-1 = tidak browsing history). */
     @Volatile
-    var historyIndex: Int = -1
+    override var historyIndex: Int = -1
 
     /** Prompt saat ini (dideteksi dari output shell). Current prompt. */
     @Volatile
-    var currentPrompt: String = "tunnel@android:~$ "
+    override var currentPrompt: String = "tunnel@android:~$ "
+
+    override val sessionType: String = "local"
 
     /**
      * Mulai sesi PTY baru.
      * Start a new PTY session.
      */
-    suspend fun start() {
+    override suspend fun start() {
         withContext(Dispatchers.IO) {
             isAlive = true
             outputBuffer.setLength(0)
@@ -117,7 +122,7 @@ class ShellExecutor(private val themeHolder: ThemeHolder = ThemeHolder()) {
      * Restart sesi yang sudah mati. Destroy lalu start ulang.
      * Restart a dead session: destroy then start fresh.
      */
-    suspend fun restart() {
+    override suspend fun restart() {
         destroy()
         emulator = TerminalEmulator(themeHolder)
         start()
@@ -151,12 +156,15 @@ class ShellExecutor(private val themeHolder: ThemeHolder = ThemeHolder()) {
                 charBuffer.clear()
 
                 emulator.process(text)
-                outputBuffer.append(text)
-                /* Batasi buffer agar tidak membengkak. Cap buffer size. */
-                if (outputBuffer.length > 4000) {
-                    outputBuffer = StringBuilder(outputBuffer.substring(outputBuffer.length - 4000))
+                /* Phase 21: Synchronize outputBuffer access (readLoop writes, main reads). */
+                val outputStr = synchronized(outputLock) {
+                    outputBuffer.append(text)
+                    if (outputBuffer.length > 4000) {
+                        outputBuffer = StringBuilder(outputBuffer.substring(outputBuffer.length - 4000))
+                    }
+                    outputBuffer.toString()
                 }
-                _lastCommandOutput.value = outputBuffer.toString()
+                _lastCommandOutput.value = outputStr
                 triggerScreenUpdate()
             }
         } catch (e: InterruptedException) {
@@ -174,29 +182,40 @@ class ShellExecutor(private val themeHolder: ThemeHolder = ThemeHolder()) {
         }
     }
 
-    fun resizeTerminal(newRows: Int, newCols: Int, fontSize: Float) {
+    override fun resizeTerminal(newRows: Int, newCols: Int, fontSize: Float) {
         if (masterFd < 0) return
         TerminalJni.resize(masterFd, newRows, newCols)
         emulator.resize(newRows, newCols, fontSize.sp)
         triggerScreenUpdate()
     }
 
-    fun executeCommand(command: String) {
+    /** Phase 21: writeLock untuk serialize concurrent JNI writes dari multiple threads.
+     *  Tanpa ini, write dari main + write dari Auto-Pilot bisa interleave -> corrupt input. */
+    private val writeLock = Any()
+
+    override fun executeCommand(command: String) {
         if (isAlive) writeRaw(command + "\n")
     }
 
-    fun writeRaw(data: String) {
+    override fun writeRaw(data: String) {
         if (masterFd < 0 || !isAlive) return
-        TerminalJni.write(masterFd, data.toByteArray(StandardCharsets.UTF_8))
+        synchronized(writeLock) {
+            if (masterFd >= 0 && isAlive) {
+                TerminalJni.write(masterFd, data.toByteArray(StandardCharsets.UTF_8))
+            }
+        }
     }
 
     /**
      * Bersihkan layar terminal (lokal, tidak kirim ke shell).
      * Clear terminal screen locally (does NOT send to shell).
+     * Phase 21: Synchronized outputBuffer access.
      */
-    fun clearScreen() {
+    override fun clearScreen() {
         emulator.process("\u001B[2J\u001B[H")
-        outputBuffer.setLength(0)
+        synchronized(outputLock) {
+            outputBuffer.setLength(0)
+        }
         _lastCommandOutput.value = ""
         triggerScreenUpdate()
     }
@@ -204,9 +223,10 @@ class ShellExecutor(private val themeHolder: ThemeHolder = ThemeHolder()) {
     /**
      * Ambil output terminal yang sudah dibersihkan dari ANSI escape codes.
      * Get ANSI-stripped terminal output (clean for AI context).
+     * Phase 21: Synchronized outputBuffer access (thread-safe read).
      */
-    fun getCleanOutput(): String {
-        val raw = outputBuffer.toString()
+    override fun getCleanOutput(): String {
+        val raw = synchronized(outputLock) { outputBuffer.toString() }
         val sb = StringBuilder(raw.length)
         val regex = Regex("\u001B\\[[;?\\d]*[A-Za-z]|\u001B\\][^\\u0007]*\\u0007|\u001B\\[[0-9;]*[A-Za-z]")
         var lastEnd = 0
@@ -215,7 +235,6 @@ class ShellExecutor(private val themeHolder: ThemeHolder = ThemeHolder()) {
             lastEnd = m.range.last + 1
         }
         sb.append(raw, lastEnd, raw.length)
-        /* Trim whitespace berlebih. Trim excess whitespace. */
         return sb.toString().trim().take(2000)
     }
 
@@ -228,7 +247,7 @@ class ShellExecutor(private val themeHolder: ThemeHolder = ThemeHolder()) {
      * Also: make destroy non-blocking by closing pfd FIRST to unblock
      * readLoop's inputStream.read(), then interrupt thread.
      */
-    fun destroy() {
+    override fun destroy() {
         if (!isAlive && masterFd < 0 && childPid < 0 && readThread == null) return
         isAlive = false
 
