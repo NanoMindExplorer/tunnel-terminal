@@ -11,9 +11,9 @@ android {
         applicationId = "com.tunnel.terminal"
         minSdk = 24
         targetSdk = 34
-        // Phase 18: AI Streaming + Multi-turn Memory + Theme Picker
-        versionCode = 5
-        versionName = "3.1.0-phase18-streaming-themes"
+        // Phase 19: Free AI Provider + Image Vision + File Explorer + Workspace Sessions
+        versionCode = 6
+        versionName = "3.2.0-phase19-providers-vision-explorer"
     }
 
     buildTypes {
@@ -58,6 +58,8 @@ dependencies {
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-graphics")
     implementation("androidx.compose.material3:material3")
+    // Phase 19: material-icons-extended untuk FileExplorer icons (Folder, Description, Image, dll)
+    implementation("androidx.compose.material:material-icons-extended")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
     // Phase 18: Flow/callbackFlow untuk AI streaming SSE
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.7.3")

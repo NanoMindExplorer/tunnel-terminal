@@ -75,10 +75,25 @@ class MainActivity : ComponentActivity() {
     /** Storage Access Framework manager. */
     private lateinit var storageManager: StorageManager
 
+    /** Workspace sessions manager (Phase 19). */
+    private lateinit var workspaceManager: WorkspaceManager
+    private val workspaceSessions = mutableStateListOf<WorkspaceSession>()
+
     /** Theme holder - shared across all ShellExecutor instances.
      * Saat user ganti tema, semua tab langsung update (tanpa re-create emulator). */
     private val themeHolder = ThemeHolder()
     private var currentTheme by mutableStateOf(ThemeManager.defaultTheme)
+
+    /** Phase 19: Pending image attachments (base64) untuk pesan AI berikutnya. */
+    private val pendingImages = mutableStateListOf<String>()
+    /** Phase 19: File explorer drawer visibility. */
+    private var showFileExplorer by mutableStateOf(false)
+    /** Phase 19: Workspace drawer visibility. */
+    private var showWorkspaceDrawer by mutableStateOf(false)
+    /** Phase 19: Available models dari fetch /models. */
+    private val availableModels = mutableStateListOf<ModelInfo>()
+    private var isLoadingModels by mutableStateOf(false)
+    private var modelsFetchError by mutableStateOf<String?>(null)
 
     /** SAF launcher - dipanggil saat user ketik `setup-storage`. */
     private val storageLauncher = registerForActivityResult(
@@ -104,12 +119,36 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    /** Phase 19: Image picker launcher untuk AI vision. */
+    private val imagePickerLauncher = registerForActivityResult(
+        ActivityResultContracts.GetMultipleContents()
+    ) { uris: List<Uri> ->
+        if (uris.isNotEmpty()) {
+            lifecycleScope.launch {
+                val base64List = uris.mapNotNull { uri ->
+                    ImageHelper.uriToBase64(this@MainActivity, uri)
+                }
+                if (base64List.isNotEmpty()) {
+                    pendingImages.addAll(base64List)
+                    val totalKB = base64List.sumOf { it.length / 1024 }
+                    Toast.makeText(
+                        this@MainActivity,
+                        "${base64List.size} gambar siap (${totalKB}KB). Ketik prompt lalu kirim.",
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+            }
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
         snippetManager = SnippetManager(this)
         snippetsState.addAll(snippetManager.snippets)
         storageManager = StorageManager(this)
+        workspaceManager = WorkspaceManager(this)
+        workspaceSessions.addAll(workspaceManager.sessions)
         loadAISettings()
         loadTheme()
 
@@ -153,6 +192,138 @@ class MainActivity : ComponentActivity() {
     /** Clear chat conversation history (multi-turn memory reset). */
     private fun clearChat() {
         chatMessages.clear()
+        pendingImages.clear()
+    }
+
+    /* ─── Phase 19: AI Provider Model Fetcher ─── */
+
+    /** Fetch daftar model dari provider saat ini. */
+    private fun fetchModels() {
+        if (isLoadingModels) return
+        if (aiSettings.baseUrl.isBlank()) {
+            modelsFetchError = "Base URL kosong. Pilih provider dulu."
+            return
+        }
+        isLoadingModels = true
+        modelsFetchError = null
+        availableModels.clear()
+        lifecycleScope.launch {
+            val result = ModelFetcher.fetchModels(aiSettings)
+            isLoadingModels = false
+            result.onSuccess { models ->
+                availableModels.addAll(models)
+                if (models.isEmpty()) {
+                    modelsFetchError = "Tidak ada model di endpoint /models"
+                }
+            }.onFailure { e ->
+                modelsFetchError = e.message ?: "Gagal fetch models"
+            }
+        }
+    }
+
+    /** Pilih model dari daftar, update settings. */
+    private fun selectModel(model: ModelInfo) {
+        val newSettings = aiSettings.copy(
+            modelName = model.id,
+            supportsVision = model.supportsVision
+        )
+        saveAISettings(newSettings)
+    }
+
+    /* ─── Phase 19: Image Vision ─── */
+
+    /** Buka image picker untuk attach ke pesan AI berikutnya. */
+    private fun attachImage() {
+        if (!aiSettings.supportsVision) {
+            Toast.makeText(
+                this,
+                "Model saat ini (${aiSettings.modelName}) mungkin tidak support image. " +
+                "Pilih model vision (gpt-4o, gemini-1.5, claude-3) di Settings.",
+                Toast.LENGTH_LONG
+            ).show()
+        }
+        imagePickerLauncher.launch("image/*")
+    }
+
+    /** Hapus image attachment by index. */
+    private fun removeImage(index: Int) {
+        if (index in pendingImages.indices) {
+            pendingImages.removeAt(index)
+        }
+    }
+
+    /* ─── Phase 19: Workspace Sessions ─── */
+
+    /**
+     * Parse working dir dari prompt shell (best-effort).
+     * Format prompt: "tunnel@android:/path/to/dir$ "
+     */
+    private fun parseWorkingDir(prompt: String): String {
+        val regex = Regex("""tunnel@android:([^\$]+)\$\s*$""")
+        val match = regex.find(prompt) ?: return ""
+        return match.groupValues[1].trim()
+    }
+
+    /** Save workspace session. */
+    private fun saveWorkspace(name: String): Boolean {
+        val workingDirs = shellExecutors.map { exec ->
+            parseWorkingDir(exec.currentPrompt)
+        }
+        val ok = workspaceManager.saveSession(name, shellExecutors.size, workingDirs)
+        if (ok) {
+            workspaceSessions.clear()
+            workspaceSessions.addAll(workspaceManager.sessions)
+            Toast.makeText(this, "Session '$name' tersimpan (${shellExecutors.size} tab)", Toast.LENGTH_SHORT).show()
+        } else {
+            Toast.makeText(this, "Gagal simpan (nama duplikat atau max 20 session)", Toast.LENGTH_SHORT).show()
+        }
+        return ok
+    }
+
+    /** Restore workspace session: tutup semua tab tanpa auto-create, buat sesuai session, cd ke working dir. */
+    private suspend fun restoreWorkspace(session: WorkspaceSession) {
+        /* Tutup semua tab tanpa trigger auto-create (closeTab auto-create kalau list kosong).
+         * Destroy semua executors dulu, baru clear list. */
+        shellExecutors.toList().forEach { it.destroy() }
+        shellExecutors.clear()
+        activeExecutorId = 0
+        /* Buat tab sesuai session. */
+        for (i in 0 until session.tabCount) {
+            createNewTab()
+            /* Kirim cd ke working dir jika ada. */
+            val dir = session.workingDirs.getOrNull(i)
+            if (!dir.isNullOrBlank()) {
+                delay(150) /* Tunggu shell siap. */
+                shellExecutors.lastOrNull()?.executeCommand("cd $dir")
+            }
+        }
+        Toast.makeText(this, "Session '${session.name}' restored (${session.tabCount} tab)", Toast.LENGTH_SHORT).show()
+    }
+
+    /** Delete workspace session. */
+    private fun deleteWorkspace(name: String) {
+        if (workspaceManager.deleteSession(name)) {
+            workspaceSessions.clear()
+            workspaceSessions.addAll(workspaceManager.sessions)
+        }
+    }
+
+    /* ─── Phase 19: File Explorer ─── */
+
+    /** Buka file dari explorer di TunnelEditor. */
+    private fun openFileFromExplorer(file: File) {
+        if (file.isFile) {
+            editingFile = file.absolutePath
+            shellExecutors.find { it.id == activeExecutorId }?.let { exec ->
+                exec.emulator.process("\u001B[32m[Editor] Membuka ${file.name}...\u001B[0m\n")
+                exec.triggerScreenUpdate()
+            }
+        }
+    }
+
+    /** Cd ke folder dari explorer di terminal aktif. */
+    private fun cdFromExplorer(dir: File) {
+        shellExecutors.find { it.id == activeExecutorId }?.executeCommand("cd ${dir.absolutePath}")
     }
 
     private fun requestNotificationPermission() {
@@ -176,7 +347,8 @@ class MainActivity : ComponentActivity() {
             modelName = prefs.getString("modelName", "gpt-4o-mini")!!,
             temperature = prefs.getDouble("temperature", 0.2),
             maxTokens = prefs.getInt("maxTokens", 2000),
-            requestTimeoutMs = prefs.getInt("requestTimeoutMs", 30000)
+            requestTimeoutMs = prefs.getInt("requestTimeoutMs", 30000),
+            supportsVision = prefs.getBoolean("supportsVision", false)
         )
     }
 
@@ -190,6 +362,7 @@ class MainActivity : ComponentActivity() {
         prefs.putDouble("temperature", newSettings.temperature)
         prefs.putInt("maxTokens", newSettings.maxTokens)
         prefs.putInt("requestTimeoutMs", newSettings.requestTimeoutMs)
+        prefs.putBoolean("supportsVision", newSettings.supportsVision)
         prefs.apply()
     }
 
@@ -313,6 +486,48 @@ class MainActivity : ComponentActivity() {
             )
         }
 
+        /* Phase 19: File Explorer Dialog. */
+        if (showFileExplorer) {
+            AlertDialog(
+                onDismissRequest = { showFileExplorer = false },
+                modifier = Modifier.fillMaxSize(0.95f).background(currentTheme.uiBg),
+                title = { Text("File Explorer", color = currentTheme.uiText, fontFamily = FontFamily.Monospace) },
+                text = {
+                    Box(modifier = Modifier.fillMaxSize().padding(4.dp)) {
+                        FileExplorerPanel(
+                            initialDir = File(applicationContext.filesDir, "home"),
+                            theme = currentTheme,
+                            onFileOpen = { file ->
+                                openFileFromExplorer(file)
+                                showFileExplorer = false
+                            },
+                            onFolderNavigate = { dir -> cdFromExplorer(dir) },
+                            onClose = { showFileExplorer = false }
+                        )
+                    }
+                },
+                confirmButton = {
+                    Button(
+                        onClick = { showFileExplorer = false },
+                        colors = ButtonDefaults.buttonColors(containerColor = currentTheme.uiSurface)
+                    ) { Text("Close", color = currentTheme.uiText) }
+                }
+            )
+        }
+
+        /* Phase 19: Workspace Sessions Dialog. */
+        if (showWorkspaceDrawer) {
+            WorkspaceSessionDialog(
+                theme = currentTheme,
+                sessions = workspaceSessions,
+                currentTabCount = shellExecutors.size,
+                onSaveSession = { name -> saveWorkspace(name) },
+                onRestoreSession = { session -> scope.launch { restoreWorkspace(session); showWorkspaceDrawer = false } },
+                onDeleteSession = { name -> deleteWorkspace(name) },
+                onDismiss = { showWorkspaceDrawer = false }
+            )
+        }
+
         ModalNavigationDrawer(
             drawerState = drawerState,
             drawerContent = {
@@ -341,7 +556,17 @@ class MainActivity : ComponentActivity() {
                         onDeleteSnippet = { id -> deleteSnippet(id) },
                         onThemeChanged = { changeTheme(it) },
                         onClearChat = { clearChat() },
-                        onClose = { scope.launch { drawerState.close() } }
+                        onClose = { scope.launch { drawerState.close() } },
+                        /* Phase 19: Image Vision. */
+                        pendingImages = pendingImages,
+                        onAttachImage = { attachImage() },
+                        onRemoveImage = { idx -> removeImage(idx) },
+                        /* Phase 19: Model fetcher. */
+                        availableModels = availableModels,
+                        isLoadingModels = isLoadingModels,
+                        modelsFetchError = modelsFetchError,
+                        onFetchModels = { fetchModels() },
+                        onSelectModel = { m -> selectModel(m) }
                     )
                 }
             }
@@ -478,7 +703,10 @@ class MainActivity : ComponentActivity() {
                         },
                         onNewTab = { lifecycleScope.launch { createNewTab() } },
                         onTabClosed = { closeTab(it) },
-                        onOpenAI = { scope.launch { drawerState.open() } }
+                        onOpenAI = { scope.launch { drawerState.open() } },
+                        onOpenFileExplorer = { showFileExplorer = true },
+                        onOpenWorkspace = { showWorkspaceDrawer = true },
+                        theme = currentTheme
                     )
 
                     Box(modifier = Modifier.weight(1f)) {
@@ -487,7 +715,8 @@ class MainActivity : ComponentActivity() {
                             screenDirty = screenDirty,
                             isAlive = activeExecutor.isAlive,
                             onRestartSession = { scope.launch { activeExecutor.restart() } },
-                            onResize = { rows, cols, fontSize -> activeExecutor.resizeTerminal(rows, cols, fontSize) }
+                            onResize = { rows, cols, fontSize -> activeExecutor.resizeTerminal(rows, cols, fontSize) },
+                            theme = currentTheme
                         )
 
                         /* Hidden BasicTextField untuk menangkap input keyboard fisik.
@@ -705,9 +934,18 @@ class MainActivity : ComponentActivity() {
         }
         isProcessingAI = true
 
-        /* Tambah user message ke history (untuk display + multi-turn memory). */
-        val userMsg = ChatMessage("user", prompt, conversationRole = "user")
+        /* Tambah user message ke history (untuk display + multi-turn memory).
+         * Phase 19: Attach pending images jika ada. */
+        val imagesToSend = pendingImages.toList()
+        val userMsg = ChatMessage(
+            role = "user",
+            content = if (prompt.isBlank() && imagesToSend.isNotEmpty()) "Tolong analisa gambar ini." else prompt,
+            conversationRole = "user",
+            images = imagesToSend
+        )
         chatMessages.add(userMsg)
+        /* Clear pending images setelah di-attach ke pesan. */
+        pendingImages.clear()
 
         val activeExecutor = shellExecutors.find { it.id == activeExecutorId }
         val terminalContext = activeExecutor?.getCleanOutput() ?: ""

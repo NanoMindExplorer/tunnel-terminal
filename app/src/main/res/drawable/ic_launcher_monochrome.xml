@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Tunnel Terminal - Monochrome Launcher Icon (Android 13+ themed icons)
+    Same design as foreground but single-color (system applies tint dynamically).
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Terminal window frame outline only -->
+    <path
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="2"
+        android:fillColor="#00000000"
+        android:pathData="M18,26 L90,26 Q94,26 94,30 L94,80 Q94,84 90,84 L18,84 Q14,84 14,80 L14,30 Q14,26 18,26 Z"/>
+
+    <!-- Title bar divider -->
+    <path
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="1"
+        android:pathData="M14,36 L94,36"/>
+
+    <!-- Prompt chevron > -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M22,46 L30,52 L22,58 L22,55 L26,52 L22,49 Z"/>
+
+    <!-- Cursor block _ -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M34,55 L46,55 L46,58 L34,58 Z"/>
+
+    <!-- AI nodes -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M68,46 m-2.5,0 a2.5,2.5 0 1,0 5,0 a2.5,2.5 0 1,0 -5,0"/>
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M62,62 m-2.5,0 a2.5,2.5 0 1,0 5,0 a2.5,2.5 0 1,0 -5,0"/>
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M76,62 m-2.5,0 a2.5,2.5 0 1,0 5,0 a2.5,2.5 0 1,0 -5,0"/>
+    <path
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="1"
+        android:pathData="M68,46 L62,62 M68,46 L76,62 M62,62 L76,62"/>
+
+</vector>

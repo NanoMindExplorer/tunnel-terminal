@@ -3,8 +3,8 @@
 **Tunnel Terminal** adalah aplikasi terminal Android tingkat lanjut yang menggabungkan kekuatan mesin C/C++ NDK (Pseudo-Terminal) dengan AI Copilot Multi-Provider untuk pengembang modern.
 
 ![Architecture](https://img.shields.io/badge/Architecture-NDK%20%2B%20Jetpack%20Compose-purple)
-![AI](https://img.shields.io/badge/AI-Streaming%20SSE-cyan)
-![Version](https://img.shields.io/badge/version-3.1.0--phase18-blue)
+![AI](https://img.shields.io/badge/AI-Multi%20Provider%20%2B%20Vision-cyan)
+![Version](https://img.shields.io/badge/version-3.2.0--phase19-blue)
 
 ## Fitur Utama
 
@@ -120,6 +120,95 @@ Membutuhkan:
 | 16 | Built-in help command & open-source README |
 | **17** | **Major Bug Fix Release** — see below |
 | **18** | **AI Streaming SSE + Multi-turn Memory + Theme Picker** — see below |
+| **19** | **Free AI Provider + Image Vision + File Explorer + Workspace Sessions + Icon Redesign** — see below |
+
+## Phase 19 — Free AI Provider + Image Vision + File Explorer + Workspace Sessions
+
+This release focuses on **provider freedom**, **multimodal AI**, **file management UX**, dan **launcher icon redesign**.
+
+### Launcher Icon Redesign
+Icon baru dengan desain yang merepresentasikan "tunnel + terminal + AI":
+- Background: dark gradient (deep purple to black) dengan tunnel ring effect
+- Foreground: terminal window frame dengan title bar (3 traffic-light dots)
+- Inside window: neon green `>` prompt + white cursor `_` block
+- AI accent: 3 connected cyan nodes (bottom-right, Auto-Pilot agentic workflow)
+- Monochrome variant untuk Android 13+ themed icons
+- Added `ic_launcher_round.xml` untuk round icon
+
+### Free AI Provider + All Models
+User sekarang bisa:
+- **Custom provider**: tambah provider apapun dengan baseUrl + apiKey + model bebas (tidak terikat preset)
+- **Fetch model list**: tombol "🔄 Fetch Models" panggil endpoint `/models` untuk ambil daftar model tersedia
+- **Searchable dropdown**: list model dengan vision indicator (👁) dan owner
+- **13 preset providers** (naik dari 6): OpenAI, DeepSeek, Groq, OpenRouter, Gemini, Anthropic, **Mistral**, **Together AI**, **Fireworks AI**, **Perplexity**, Ollama, LM Studio, Custom
+- **Vision capability detection**: heuristic by model name (gpt-4o, gemini-1.5, claude-3, llama-3.2-vision, pixtral, qwen-vl, phi-3-vision, generic "vision"/"vl")
+- **Popularity sorting**: model populer (gpt-4o-mini, claude-3-5-sonnet, gemini-1.5-flash) muncul di atas
+
+### AI Image Vision (Phase 19)
+- **Image picker**: tombol 📎 di input bar chat AI, support multi-select
+- **Gallery/camera**: pakai `ActivityResultContracts.GetMultipleContents()` dengan mime `image/*`
+- **Auto-compress**: scale to max 1024px + JPEG quality 85 + base64 encode (~33% overhead)
+- **Pending images preview**: thumbnail chips dengan remove button
+- **Vision capability warning**: kalau model tidak support vision, tampilkan warning + saran pilih model vision
+- **Multi-modal message format**: content sebagai array of parts (text + image_url) untuk OpenAI-compatible vision API
+- **Auto-fallback prompt**: kalau user kirim image tanpa text, otomatis isi "Tolong analisa gambar ini."
+- **Models tested**: gpt-4o, gpt-4o-mini, gemini-1.5-flash/pro, claude-3-5-sonnet, claude-3-haiku, llama-3.2-11b-vision, pixtral, qwen-vl
+
+### File Explorer Drawer (Phase 19)
+- **Sidebar browser**: tombol 📁 di tab bar buka file explorer dialog
+- **Navigate folders**: tap folder untuk masuk, tombol ↑ untuk parent, 🏠 untuk home
+- **File type icons**: Folder (blue), Code files (green), Image files, Generic files
+- **File size display**: B/KB/MB/GB
+- **Tap file**: buka di TunnelEditor (file) atau cd ke dir (folder navigate juga kirim `cd`)
+- **Refresh button**: reload current directory
+- **Permission-aware**: error message kalau permission denied
+- **Initial dir**: `~/home` (app sandbox home), bisa navigate ke /sdcard jika setup-storage sudah
+
+### Workspace Sessions (Phase 19)
+- **Save tab state**: tombol 💾 di tab bar buka workspace dialog
+- **Named sessions**: simpan dengan nama bebas (max 20 sessions)
+- **Tab count + working dirs**: di-snapshot saat save (working dir di-parse dari prompt)
+- **Restore**: tutup semua tab, buat ulang sesuai session, kirim `cd <dir>` ke setiap tab
+- **Delete sessions**: tombol hapus per session
+- **Timestamp display**: kapan session di-save
+- **Limitations**: tidak save shell env vars, aliases, atau command history (per-tab history milik ShellExecutor, tidak dipersist)
+
+### Additional Improvements
+- **AISettings.supportsVision**: flag baru untuk track vision capability
+- **13 preset providers** (up from 6) + Custom
+- **material-icons-extended** dependency untuk FileExplorer icons
+- **ImageHelper.kt**: utilitas compress + base64 encode
+- **ModelFetcher.kt**: fetch + parse /models endpoint
+- **WorkspaceManager.kt**: persist sessions ke SharedPreferences
+- **FileExplorer.kt**: composable + WorkspaceSessionDialog
+
+### Files Changed (Phase 19)
+- **NEW**: `ModelFetcher.kt` — fetch model list dari /models endpoint
+- **NEW**: `ImageHelper.kt` — image compress + base64 encode
+- **NEW**: `WorkspaceManager.kt` — workspace session persistence
+- **NEW**: `FileExplorer.kt` — FileExplorerPanel + WorkspaceSessionDialog composable
+- **NEW**: `ic_launcher_monochrome.xml` — Android 13+ themed icon
+- **NEW**: `ic_launcher_round.xml` — round icon variant
+- **REWRITTEN**: `ic_launcher_background.xml` — tunnel ring + gradient
+- **REWRITTEN**: `ic_launcher_foreground.xml` — terminal window + AI nodes
+- **MODIFIED**: `AISettings.kt` — supportsVision flag + 13 presets + Custom
+- **MODIFIED**: `AIAgent.kt` — ChatMessage.images field + multi-modal message format
+- **MODIFIED**: `MainActivity.kt` — wire image picker, model fetcher, file explorer, workspace
+- **MODIFIED**: `TerminalUI.kt` — AIChatPanel signature + image preview + model picker UI + theme support
+- **MODIFIED**: `AndroidManifest.xml` — ic_launcher_round + READ_MEDIA_IMAGES
+- **MODIFIED**: `build.gradle.kts` — material-icons-extended + version bump
+
+### Version
+- `versionCode`: 5 → 6
+- `versionName`: `3.1.0-phase18-streaming-themes` → `3.2.0-phase19-providers-vision-explorer`
+
+### Deferred to Phase 20+
+Fitur yang diminta tapi di-defer karena kompleksitas (butuh native lib / UI restructure major):
+- **SSH Client** (JSch/libssh2) — feasible but ~1000+ lines + dedicated UI
+- **Syntax Highlighting Editor** (Tree-sitter) — butuh NDK grammar builds, very heavy
+- **Split Pane** (tmux-style) — UI restructure major
+
+---
 
 ## Phase 18 — AI Streaming + Multi-turn Memory + Theme Picker
 

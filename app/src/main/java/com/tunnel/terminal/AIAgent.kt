@@ -22,6 +22,7 @@ import java.net.URL
  *
  * Phase 18: Tambah isStreaming flag untuk indikasi pesan sedang di-stream.
  * Tambah conversationRole untuk multi-turn memory (role yang dikirim ke AI).
+ * Phase 19: Tambah images field untuk AI image vision (base64-encoded).
  */
 data class ChatMessage(
     val role: String,                  // "user" / "assistant" - untuk display
@@ -30,7 +31,9 @@ data class ChatMessage(
     val commands: List<String> = emptyList(),
     val isError: Boolean = false,
     val isStreaming: Boolean = false,  // true jika sedang di-stream (token-by-token)
-    val conversationRole: String = role // role untuk dikirim ke AI ("system"/"user"/"assistant")
+    val conversationRole: String = role, // role untuk dikirim ke AI ("system"/"user"/"assistant")
+    /** Phase 19: List of base64-encoded images attached to this message (untuk vision models). */
+    val images: List<String> = emptyList()
 )
 
 /**
@@ -260,10 +263,30 @@ class AIAgent {
              * untuk hindari token bloat). Filter pesan error & streaming-in-progress.
              * Multi-turn: send conversation history (cap 20 to avoid token bloat). */
             val history = conversation
-                .filter { !it.isError && !it.isStreaming && !it.isCommand && it.content.isNotBlank() }
+                .filter { !it.isError && !it.isStreaming && !it.isCommand && (it.content.isNotBlank() || it.images.isNotEmpty()) }
                 .takeLast(20)
             history.forEach { msg ->
-                put(JSONObject().put("role", msg.conversationRole).put("content", msg.content))
+                /* Phase 19: Multi-modal message format untuk vision.
+                 * Jika ada images, format content sebagai array of parts (text + image_url).
+                 * Format: {"role":"user","content":[{"type":"text","text":"..."},{"type":"image_url","image_url":{"url":"data:image/jpeg;base64,..."}}]}
+                 *
+                 * Multi-modal message format for vision models. */
+                if (msg.images.isNotEmpty()) {
+                    val contentArray = JSONArray()
+                    /* Text part (wajib ada meski kosong). */
+                    contentArray.put(JSONObject().put("type", "text").put("text", msg.content))
+                    /* Image parts. */
+                    msg.images.forEach { base64 ->
+                        contentArray.put(JSONObject()
+                            .put("type", "image_url")
+                            .put("image_url", JSONObject().put("url", "data:image/jpeg;base64,$base64"))
+                        )
+                    }
+                    put(JSONObject().put("role", msg.conversationRole).put("content", contentArray))
+                } else {
+                    /* Text-only message (format lama). */
+                    put(JSONObject().put("role", msg.conversationRole).put("content", msg.content))
+                }
             }
 
             /* Tambahkan terminal context sebagai pesan system tambahan jika ada.

@@ -46,34 +46,49 @@ import kotlin.math.roundToInt
 fun TabBar(
     tabs: List<Pair<Int, Int>>, activeTabId: Int,
     onTabSelected: (Int) -> Unit, onNewTab: () -> Unit,
-    onTabClosed: (Int) -> Unit, onOpenAI: () -> Unit
+    onTabClosed: (Int) -> Unit, onOpenAI: () -> Unit,
+    onOpenFileExplorer: () -> Unit = {},
+    onOpenWorkspace: () -> Unit = {},
+    theme: TerminalTheme = ThemeManager.defaultTheme
 ) {
     LazyRow(
-        modifier = Modifier.fillMaxWidth().background(Color(0xFF1E1E1E)).padding(4.dp),
+        modifier = Modifier.fillMaxWidth().background(theme.uiBg).padding(4.dp),
         horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically
     ) {
         items(tabs) { tab ->
             val isActive = tab.first == activeTabId
             Row(
-                modifier = Modifier.background(if (isActive) Color(0xFF333333) else Color(0xFF222222), RoundedCornerShape(4.dp))
+                modifier = Modifier.background(if (isActive) theme.uiSurface else theme.uiBg, RoundedCornerShape(4.dp))
                     .clickable { onTabSelected(tab.first) }
                     .padding(start = 12.dp, top = 6.dp, bottom = 6.dp, end = 4.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text("Tab ${tab.second}  ", color = if (isActive) Color.White else Color.Gray, fontSize = 12.sp, fontFamily = FontFamily.Monospace)
+                Text("Tab ${tab.second}  ", color = if (isActive) theme.uiText else theme.uiTextMuted, fontSize = 12.sp, fontFamily = FontFamily.Monospace)
                 Box(modifier = Modifier.clickable { onTabClosed(tab.first) }.padding(4.dp)) {
                     Text("X", color = Color(0xFFFF5252), fontSize = 12.sp, fontFamily = FontFamily.Monospace)
                 }
             }
         }
         item {
-            Box(modifier = Modifier.background(Color(0xFF3A3A3A), RoundedCornerShape(4.dp)).clickable { onNewTab() }.padding(horizontal = 12.dp, vertical = 10.dp)) {
-                Text("+", color = Color.White, fontSize = 14.sp, fontFamily = FontFamily.Monospace)
+            Box(modifier = Modifier.background(theme.uiSurface, RoundedCornerShape(4.dp)).clickable { onNewTab() }.padding(horizontal = 12.dp, vertical = 10.dp)) {
+                Text("+", color = theme.uiText, fontSize = 14.sp, fontFamily = FontFamily.Monospace)
+            }
+        }
+        /* Phase 19: File Explorer button. */
+        item {
+            Box(modifier = Modifier.background(theme.uiSurface, RoundedCornerShape(4.dp)).clickable { onOpenFileExplorer() }.padding(horizontal = 10.dp, vertical = 10.dp)) {
+                Text("📁", color = theme.uiText, fontSize = 12.sp)
+            }
+        }
+        /* Phase 19: Workspace Sessions button. */
+        item {
+            Box(modifier = Modifier.background(theme.uiSurface, RoundedCornerShape(4.dp)).clickable { onOpenWorkspace() }.padding(horizontal = 10.dp, vertical = 10.dp)) {
+                Text("💾", color = theme.uiText, fontSize = 12.sp)
             }
         }
         item {
-            Box(modifier = Modifier.background(Color(0xFF6200EE), RoundedCornerShape(4.dp)).clickable { onOpenAI() }.padding(horizontal = 12.dp, vertical = 10.dp)) {
-                Text("AI", color = Color.White, fontSize = 12.sp, fontFamily = FontFamily.Monospace)
+            Box(modifier = Modifier.background(theme.uiAccent, RoundedCornerShape(4.dp)).clickable { onOpenAI() }.padding(horizontal = 12.dp, vertical = 10.dp)) {
+                Text("AI", color = theme.uiText, fontSize = 12.sp, fontFamily = FontFamily.Monospace)
             }
         }
     }
@@ -127,7 +142,8 @@ fun TerminalScreenView(
     screenDirty: Int,
     isAlive: Boolean,
     onRestartSession: () -> Unit,
-    onResize: (rows: Int, cols: Int, fontSize: Float) -> Unit
+    onResize: (rows: Int, cols: Int, fontSize: Float) -> Unit,
+    theme: TerminalTheme = ThemeManager.defaultTheme
 ) {
     var fontSize by remember { mutableStateOf(12f) }
     var lastResizeTime by remember { mutableStateOf(0L) }
@@ -243,7 +259,17 @@ fun AIChatPanel(
     onDeleteSnippet: (Long) -> Unit,
     onThemeChanged: (TerminalTheme) -> Unit,
     onClearChat: () -> Unit,
-    onClose: () -> Unit
+    onClose: () -> Unit,
+    /* Phase 19: Image Vision. */
+    pendingImages: List<String> = emptyList(),
+    onAttachImage: () -> Unit = {},
+    onRemoveImage: (Int) -> Unit = {},
+    /* Phase 19: Model fetcher. */
+    availableModels: List<ModelInfo> = emptyList(),
+    isLoadingModels: Boolean = false,
+    modelsFetchError: String? = null,
+    onFetchModels: () -> Unit = {},
+    onSelectModel: (ModelInfo) -> Unit = {}
 ) {
     var inputText by remember { mutableStateOf("") }
     var selectedTab by remember { mutableStateOf(0) }
@@ -455,8 +481,55 @@ fun AIChatPanel(
                     }
                 }
             }
+            /* Pending images preview (Phase 19). */
+            if (pendingImages.isNotEmpty()) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    pendingImages.forEachIndexed { idx, _ ->
+                        Box(
+                            modifier = Modifier
+                                .background(theme.uiSurface, RoundedCornerShape(4.dp))
+                                .padding(horizontal = 8.dp, vertical = 4.dp)
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text("🖼", fontSize = 14.sp)
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("img${idx + 1}", color = theme.uiText, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
+                                Box(
+                                    modifier = Modifier
+                                        .padding(start = 4.dp)
+                                        .clickable { onRemoveImage(idx) }
+                                ) {
+                                    Text("X", color = Color(0xFFFF5252), fontSize = 10.sp, fontFamily = FontFamily.Monospace)
+                                }
+                            }
+                        }
+                    }
+                }
+                Text(
+                    "ℹ ${pendingImages.size} gambar akan dikirim dengan pesan ini. " +
+                    if (settings.supportsVision) "Model vision OK." else "Pilih model vision di Settings (gpt-4o/gemini/claude-3).",
+                    color = if (settings.supportsVision) theme.ansi.getOrElse(2) { Color(0xFF4CAF50) } else Color(0xFFFFC107),
+                    fontSize = 9.sp,
+                    fontFamily = FontFamily.Monospace,
+                    modifier = Modifier.padding(horizontal = 16.dp)
+                )
+            }
             /* Input bar. */
             Row(modifier = Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                /* Phase 19: Image attach button. */
+                Button(
+                    onClick = onAttachImage,
+                    enabled = !isProcessingAI,
+                    colors = ButtonDefaults.buttonColors(containerColor = theme.uiSurface),
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
+                    modifier = Modifier.padding(end = 8.dp)
+                ) {
+                    Text("📎", fontSize = 14.sp)
+                }
                 OutlinedTextField(
                     value = inputText,
                     onValueChange = { inputText = it },
@@ -473,12 +546,13 @@ fun AIChatPanel(
                 Spacer(modifier = Modifier.width(8.dp))
                 Button(
                     onClick = {
-                        if (inputText.isNotEmpty() && !isProcessingAI) {
+                        /* Phase 19: allow send with just images (no text) if vision model. */
+                        if ((inputText.isNotEmpty() || pendingImages.isNotEmpty()) && !isProcessingAI) {
                             onSendPrompt(inputText)
                             inputText = ""
                         }
                     },
-                    enabled = inputText.isNotEmpty() && !isProcessingAI,
+                    enabled = (inputText.isNotEmpty() || pendingImages.isNotEmpty()) && !isProcessingAI,
                     colors = ButtonDefaults.buttonColors(containerColor = theme.uiAccent)
                 ) {
                     Text(if (isProcessingAI) "..." else "Kirim")
@@ -587,6 +661,91 @@ fun AIChatPanel(
                             modifier = Modifier.fillMaxWidth(),
                             textStyle = TextStyle(color = theme.uiText, fontFamily = FontFamily.Monospace)
                         )
+                        /* Phase 19: Fetch Models button + dropdown. */
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Button(
+                                onClick = onFetchModels,
+                                enabled = !isLoadingModels && settingsDraft.baseUrl.isNotBlank(),
+                                colors = ButtonDefaults.buttonColors(containerColor = theme.uiAccent),
+                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                            ) {
+                                Text(
+                                    if (isLoadingModels) "Loading..." else "🔄 Fetch Models",
+                                    color = theme.uiText,
+                                    fontSize = 11.sp
+                                )
+                            }
+                            /* Vision capability indicator. */
+                            if (settingsDraft.supportsVision) {
+                                Text(
+                                    "👁 Vision",
+                                    color = theme.ansi.getOrElse(2) { Color(0xFF4CAF50) },
+                                    fontSize = 10.sp,
+                                    fontFamily = FontFamily.Monospace
+                                )
+                            }
+                        }
+                        /* Error message. */
+                        if (modelsFetchError != null) {
+                            Text(
+                                "⚠ $modelsFetchError",
+                                color = Color(0xFFFF8A80),
+                                fontSize = 10.sp,
+                                fontFamily = FontFamily.Monospace,
+                                modifier = Modifier.padding(top = 4.dp)
+                            )
+                        }
+                        /* Model list dropdown. */
+                        if (availableModels.isNotEmpty()) {
+                            Text(
+                                "${availableModels.size} model tersedia (tap untuk pilih):",
+                                color = theme.uiTextMuted,
+                                fontSize = 10.sp,
+                                fontFamily = FontFamily.Monospace,
+                                modifier = Modifier.padding(top = 8.dp)
+                            )
+                            /* Scrollable list of models (max 5 visible). */
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .heightIn(max = 200.dp)
+                                    .verticalScroll(rememberScrollState())
+                                    .padding(top = 4.dp)
+                            ) {
+                                availableModels.forEach { model ->
+                                    val isCurrent = model.id == settingsDraft.modelName
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .background(
+                                                if (isCurrent) theme.uiAccent.copy(alpha = 0.3f) else theme.uiSurface,
+                                                RoundedCornerShape(4.dp)
+                                            )
+                                            .clickable { onSelectModel(model) }
+                                            .padding(horizontal = 8.dp, vertical = 6.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            model.id,
+                                            color = if (isCurrent) theme.uiAccent else theme.uiText,
+                                            fontSize = 11.sp,
+                                            fontFamily = FontFamily.Monospace,
+                                            modifier = Modifier.weight(1f)
+                                        )
+                                        if (model.supportsVision) {
+                                            Text("👁", fontSize = 10.sp)
+                                        }
+                                        Text(
+                                            " ${model.ownedBy}",
+                                            color = theme.uiTextMuted,
+                                            fontSize = 9.sp,
+                                            fontFamily = FontFamily.Monospace
+                                        )
+                                    }
+                                }
+                            }
+                        }
                         Spacer(modifier = Modifier.height(16.dp))
                         Text("API Key:", color = theme.uiTextMuted, fontSize = 12.sp)
                         OutlinedTextField(
@@ -690,33 +849,40 @@ fun AIChatPanel(
                     /* About tab. */
                     Column(modifier = Modifier.weight(1f).padding(16.dp).verticalScroll(scrollState)) {
                         Text(
-                            "Tunnel Terminal v3.1.0",
+                            "Tunnel Terminal v3.2.0",
                             color = theme.uiText,
                             fontSize = 16.sp,
                             fontFamily = FontFamily.Monospace
                         )
                         Text(
-                            "Phase 18: AI Streaming + Multi-turn Memory + Theme Picker",
+                            "Phase 19: Free AI Provider + Image Vision + File Explorer + Workspace Sessions",
                             color = theme.uiTextMuted,
                             fontSize = 11.sp,
                             fontFamily = FontFamily.Monospace
                         )
                         Spacer(modifier = Modifier.height(16.dp))
                         Text(
-                            "Fitur Phase 18:",
+                            "Fitur Phase 19:",
                             color = theme.ansi.getOrElse(6) { Color(0xFF00BCD4) },
                             fontSize = 12.sp,
                             fontFamily = FontFamily.Monospace
                         )
                         Text(
+                            "• 13 AI Provider presets + Custom (bebas masukin provider apapun)\n" +
+                            "• Fetch Models dari /models endpoint (semua model tersedia)\n" +
+                            "• AI Image Vision (gpt-4o, gemini-1.5, claude-3, llama-3.2-vision)\n" +
+                            "• File Explorer Drawer (browse tanpa cd)\n" +
+                            "• Workspace Sessions (save/restore tab sets)\n" +
+                            "• Launcher icon redesign (terminal + AI nodes)\n" +
+                            "• Vision capability detection per model\n" +
+                            "• Image auto-compress (max 1024px, JPEG 85)\n\n" +
+                            "Fitur Phase 18 (masih aktif):\n" +
                             "• AI Streaming SSE - response token-by-token\n" +
                             "• Multi-turn conversation memory (max 20 pesan)\n" +
                             "• 6 theme presets: Matrix, Dracula, Solarized, Monokai, Nord, Tokyo Night\n" +
                             "• Theme-aware UI (drawer, buttons, text)\n" +
                             "• Streaming cursor indicator (▋ blink)\n" +
-                            "• Clear chat button untuk reset memory\n" +
-                            "• Auto-scroll selama streaming\n" +
-                            "• Settings sub-tabs (AI / Theme / About)",
+                            "• Auto-scroll selama streaming",
                             color = theme.uiText,
                             fontSize = 11.sp,
                             fontFamily = FontFamily.Monospace

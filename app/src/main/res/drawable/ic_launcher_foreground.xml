@@ -1,12 +1,87 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Tunnel Terminal - Launcher Icon Foreground
+    Design concept: stylized terminal window with neon green prompt + AI accent nodes.
+
+    Layout (within 108x108 viewport, safe zone is center 72x72 = 18..90):
+    - Terminal window frame: rounded rect from (18,24) to (90,84), 60x60
+    - Title bar with 3 traffic-light dots (terminal window aesthetic)
+    - Inside window: large green ">" prompt + blinking cursor "_"
+    - AI accent: 3 small cyan nodes connected by lines (bottom-right, suggesting AI Auto-Pilot)
+
+    Color palette:
+    - Neon green (#00FF87) for prompt - signature hacker green
+    - Cyan (#00D9FF) for AI nodes - intelligence/connectivity
+    - White (#FFFFFF) for cursor - high contrast
+    - Dark surface (#1A1A2E) for terminal window body
+-->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
+
+    <!-- Terminal window frame (rounded rect, 60x60 centered) -->
     <path
-        android:fillColor="#6200EE"
-        android:pathData="M0,0h108v108h-108z"/>
+        android:fillColor="#1A1A2E"
+        android:strokeColor="#00FF87"
+        android:strokeWidth="1.5"
+        android:pathData="M18,26 L90,26 Q94,26 94,30 L94,80 Q94,84 90,84 L18,84 Q14,84 14,80 L14,30 Q14,26 18,26 Z"/>
+
+    <!-- Title bar (slightly lighter strip at top of window) -->
     <path
-        android:fillColor="#00FF00"
-        android:pathData="M30,30 L30,70 L40,70 L40,45 L60,70 L70,70 L70,30 L60,30 L60,55 L40,30 Z"/>
+        android:fillColor="#252540"
+        android:pathData="M14,30 L94,30 L94,36 L14,36 Z"/>
+
+    <!-- Traffic light dots (red, yellow, green) - terminal window signature -->
+    <path
+        android:fillColor="#FF5F56"
+        android:pathData="M19,33 m-1.5,0 a1.5,1.5 0 1,0 3,0 a1.5,1.5 0 1,0 -3,0"/>
+    <path
+        android:fillColor="#FFBD2E"
+        android:pathData="M25,33 m-1.5,0 a1.5,1.5 0 1,0 3,0 a1.5,1.5 0 1,0 -3,0"/>
+    <path
+        android:fillColor="#27C93F"
+        android:pathData="M31,33 m-1.5,0 a1.5,1.5 0 1,0 3,0 a1.5,1.5 0 1,0 -3,0"/>
+
+    <!-- Terminal prompt ">" (large neon green chevron) -->
+    <path
+        android:fillColor="#00FF87"
+        android:strokeColor="#00FF87"
+        android:strokeWidth="0.5"
+        android:strokeLineJoin="round"
+        android:pathData="M22,46 L30,52 L22,58 L22,55 L26,52 L22,49 Z"/>
+
+    <!-- Cursor block "_" (white, blinking aesthetic) -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M34,55 L46,55 L46,58 L34,58 Z"/>
+
+    <!-- AI Auto-Pilot accent: 3 connected nodes (bottom-right of window) -->
+    <!-- Node 1 (top) -->
+    <path
+        android:fillColor="#00D9FF"
+        android:pathData="M68,46 m-2.5,0 a2.5,2.5 0 1,0 5,0 a2.5,2.5 0 1,0 -5,0"/>
+    <!-- Node 2 (bottom-left of cluster) -->
+    <path
+        android:fillColor="#00D9FF"
+        android:pathData="M62,62 m-2.5,0 a2.5,2.5 0 1,0 5,0 a2.5,2.5 0 1,0 -5,0"/>
+    <!-- Node 3 (bottom-right of cluster) -->
+    <path
+        android:fillColor="#00D9FF"
+        android:pathData="M76,62 m-2.5,0 a2.5,2.5 0 1,0 5,0 a2.5,2.5 0 1,0 -5,0"/>
+    <!-- Connection lines between nodes -->
+    <path
+        android:strokeColor="#00D9FF"
+        android:strokeWidth="0.8"
+        android:pathData="M68,46 L62,62 M68,46 L76,62 M62,62 L76,62"/>
+
+    <!-- Small text-like horizontal lines (suggesting code/output) -->
+    <path
+        android:fillColor="#00FF8740"
+        android:pathData="M22,68 L40,68 L40,70 L22,70 Z"/>
+    <path
+        android:fillColor="#00FF8730"
+        android:pathData="M22,72 L34,72 L34,74 L22,74 Z"/>
+
 </vector>
