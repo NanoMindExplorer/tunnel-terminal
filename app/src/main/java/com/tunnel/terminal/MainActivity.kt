@@ -1192,7 +1192,7 @@ class MainActivity : ComponentActivity() {
      * Tunggu sampai prompt shell muncul kembali di output terminal.
      * Wait for shell prompt to reappear.
      */
-    private suspend fun waitForPrompt(executor: ShellExecutor, outputBeforeLen: Int, timeoutMs: Long): Boolean {
+    private suspend fun waitForPrompt(executor: TerminalSession, outputBeforeLen: Int, timeoutMs: Long): Boolean {
         val startTime = System.currentTimeMillis()
         val promptRegex = Regex("""\$\s*$|#\s*$|tunnel@android:[^\$]*\$\s*$""")
         while (System.currentTimeMillis() - startTime < timeoutMs) {
