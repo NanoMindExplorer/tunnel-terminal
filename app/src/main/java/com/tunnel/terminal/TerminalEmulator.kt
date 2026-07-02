@@ -166,9 +166,10 @@ class TerminalEmulator(private val themeHolder: ThemeHolder = ThemeHolder()) {
         }
     }
 
-    /** Phase 26: Thread-safe rows/cols reads (avoid ArrayIndexOutOfBounds during resize). */
-    fun getRows(): Int = synchronized(lock) { rows }
-    fun getCols(): Int = synchronized(lock) { cols }
+    /** Phase 26: Thread-safe rows/cols reads (avoid ArrayIndexOutOfBounds during resize).
+     * Named snapshotRows/snapshotCols to avoid JVM signature clash with var rows getter. */
+    fun snapshotRows(): Int = synchronized(lock) { rows }
+    fun snapshotCols(): Int = synchronized(lock) { cols }
 
     fun setCursor(row: Int, col: Int) {
         synchronized(lock) {

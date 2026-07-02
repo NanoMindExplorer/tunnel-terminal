@@ -256,8 +256,8 @@ fun TerminalScreenView(
         val screenSnapshot = remember(screenDirty) { emulator.getScreenSnapshot() }
         val cursorState = remember(screenDirty) { emulator.getCursorState() }
         /* Phase 26: Thread-safe rows/cols reads (avoid ArrayIndexOutOfBounds during resize). */
-        val renderRows = emulator.getRows()
-        val renderCols = emulator.getCols()
+        val renderRows = emulator.snapshotRows()
+        val renderCols = emulator.snapshotCols()
 
         Column(
             modifier = Modifier
