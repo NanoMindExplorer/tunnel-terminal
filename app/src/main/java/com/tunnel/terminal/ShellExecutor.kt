@@ -36,6 +36,9 @@ class ShellExecutor(private val themeHolder: ThemeHolder = ThemeHolder()) {
     private var masterFd: Int = -1
     private var childPid: Int = -1
     private var pfd: ParcelFileDescriptor? = null
+    /** Track readLoop thread untuk interrupt saat destroy. */
+    @Volatile
+    private var readThread: Thread? = null
     val id: Int = System.currentTimeMillis().toInt() and 0x7FFFFFFF
 
     var emulator = TerminalEmulator(themeHolder)
@@ -54,6 +57,15 @@ class ShellExecutor(private val themeHolder: ThemeHolder = ThemeHolder()) {
 
     /** Riwayat perintah per-executor (per-tab). Per-tab command history. */
     val commandHistory = mutableListOf<String>()
+
+    /** Per-tab current input line buffer (Phase 19.5: was global in MainActivity).
+     * Saat user switch tab, input yang sedang diketik tidak hilang. */
+    @Volatile
+    var currentCommandBuffer: String = ""
+
+    /** Per-tab history navigation index (-1 = tidak browsing history). */
+    @Volatile
+    var historyIndex: Int = -1
 
     /** Prompt saat ini (dideteksi dari output shell). Current prompt. */
     @Volatile
@@ -86,7 +98,7 @@ class ShellExecutor(private val themeHolder: ThemeHolder = ThemeHolder()) {
 
             /* Thread pembaca output shell - set sebagai daemon agar tidak block JVM exit.
              * Shell output reader thread - daemon so it never blocks JVM exit. */
-            Thread({ readLoop() }, "pty-read-$id").apply {
+            readThread = Thread({ readLoop() }, "pty-read-$id").apply {
                 isDaemon = true
                 start()
             }
@@ -127,7 +139,7 @@ class ShellExecutor(private val themeHolder: ThemeHolder = ThemeHolder()) {
 
         var bytesRead: Int
         try {
-            while (inputStream.read(buffer).also { bytesRead = it } != -1) {
+            while (isAlive && inputStream.read(buffer).also { bytesRead = it } != -1) {
                 if (!isAlive) break
                 if (bytesRead <= 0) continue
 
@@ -147,9 +159,15 @@ class ShellExecutor(private val themeHolder: ThemeHolder = ThemeHolder()) {
                 _lastCommandOutput.value = outputBuffer.toString()
                 triggerScreenUpdate()
             }
+        } catch (e: InterruptedException) {
+            /* Thread di-interrupt saat destroy() — exit gracefully. */
+            Log.i(tag, "readLoop interrupted (destroy)")
         } catch (e: Exception) {
             Log.w(tag, "readLoop berakhir: ${e.message}")
         } finally {
+            /* Phase 19.5: Close FileInputStream untuk hindari fd leak. */
+            try { inputStream.close() } catch (_: Exception) {}
+            try { emulator.flush() } catch (_: Exception) {}
             isAlive = false
             emulator.process("\n\u001B[33m[Process Exited. Tap screen to restart session.]\u001B[0m\n")
             triggerScreenUpdate()
@@ -206,8 +224,15 @@ class ShellExecutor(private val themeHolder: ThemeHolder = ThemeHolder()) {
      * Destroy session: kill child, close fd, reap zombie.
      */
     fun destroy() {
-        if (!isAlive && masterFd < 0 && childPid < 0) return
+        if (!isAlive && masterFd < 0 && childPid < 0 && readThread == null) return
         isAlive = false
+        /* Phase 19.5: Interrupt readLoop thread agar exit dari blocking read().
+         * Tanpa ini, readLoop bisa block di inputStream.read() selama shell masih hidup. */
+        try {
+            readThread?.interrupt()
+            readThread?.join(500)  /* Tunggu max 500ms */
+        } catch (_: Exception) {}
+        readThread = null
         try {
             if (childPid > 1) {
                 /* Kirim SIGHUP dulu (sopan), tunggu 100ms, lalu SIGKILL.

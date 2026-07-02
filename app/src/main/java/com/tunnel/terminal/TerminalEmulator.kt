@@ -135,16 +135,85 @@ class TerminalEmulator(private val themeHolder: ThemeHolder = ThemeHolder()) {
         isCursorVisible = visible
     }
 
+    /**
+     * Buffer untuk partial ANSI sequence yang ter-split antar process() call.
+     * Saat streaming/chunked reads, escape sequence bisa terpotong di tengah
+     * (e.g., "\u001B[3" lalu next chunk "3m"). Buffer ini simpan sisa yang
+     * belum complete, flush di process() berikutnya.
+     *
+     * Buffer for partial ANSI sequences split across process() calls.
+     */
+    private val pendingBuffer = StringBuilder()
+
     fun process(data: String) {
+        /* Prepend pending buffer dari process() sebelumnya.
+         * Prepend pending buffer from previous process() call. */
+        val fullData = if (pendingBuffer.isNotEmpty()) {
+            val combined = pendingBuffer.toString() + data
+            pendingBuffer.setLength(0)
+            combined
+        } else {
+            data
+        }
+
+        /* Cari last complete escape sequence. Sisa setelah itu mungkin partial.
+         * Find last complete escape; remainder may be partial. */
+        var lastCompleteEnd = 0
+        ansiRegex.findAll(fullData).forEach { match ->
+            /* Hanya consider match complete jika tidak ada ESC setelahnya yang belum ter-match. */
+            lastCompleteEnd = match.range.last + 1
+        }
+
+        /* Cek apakah ada ESC (\u001B) di sisa data setelah lastCompleteEnd.
+         * Jika ya, simpan sisa ke pendingBuffer (mulai dari ESC tersebut). */
+        val remaining = fullData.substring(lastCompleteEnd)
+        val escIndex = remaining.indexOf('\u001B')
+
+        val processNow: String
+        val pending: String
+        if (escIndex >= 0) {
+            /* Ada ESC di remaining — split di sana.
+             * Process text sebelum ESC (yang pasti complete),
+             * simpan dari ESC onwards ke pending. */
+            val completeText = remaining.substring(0, escIndex)
+            processNow = fullData.substring(0, lastCompleteEnd) + completeText
+            pending = remaining.substring(escIndex)
+        } else {
+            /* Tidak ada ESC di remaining — semua complete. */
+            processNow = fullData
+            pending = ""
+        }
+
+        if (pending.isNotEmpty()) {
+            /* Batasi pending buffer agar tidak bengkak (max 64 bytes). */
+            if (pending.length <= 64) {
+                pendingBuffer.append(pending)
+            }
+            /* Jika > 64 bytes, kemungkinan bukan escape valid, buang saja. */
+        }
+
+        /* Process yang pasti complete. */
+        if (processNow.isEmpty()) return
+
         var lastIndex = 0
-        ansiRegex.findAll(data).forEach { match ->
-            val textBefore = data.substring(lastIndex, match.range.first)
+        ansiRegex.findAll(processNow).forEach { match ->
+            val textBefore = processNow.substring(lastIndex, match.range.first)
             if (textBefore.isNotEmpty()) printText(textBefore)
             handleEscape(match.value)
             lastIndex = match.range.last + 1
         }
-        val remainingText = data.substring(lastIndex)
+        val remainingText = processNow.substring(lastIndex)
         if (remainingText.isNotEmpty()) printText(remainingText)
+    }
+
+    /** Flush pending buffer (force process apa pun yang tersisa). */
+    fun flush() {
+        if (pendingBuffer.isNotEmpty()) {
+            val data = pendingBuffer.toString()
+            pendingBuffer.setLength(0)
+            /* Print sebagai text biasa (kemungkinan partial escape yang tidak complete). */
+            printText(data)
+        }
     }
 
     private fun printText(text: String) {

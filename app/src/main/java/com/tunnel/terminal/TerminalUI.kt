@@ -2,6 +2,7 @@ package com.tunnel.terminal
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
@@ -16,6 +17,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.key.*
+import androidx.compose.ui.input.pointer.PointerEvent
+import androidx.compose.ui.input.pointer.awaitPointerEvent
+import androidx.compose.ui.input.pointer.awaitPointerEventScope
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.text.AnnotatedString
@@ -143,7 +147,10 @@ fun TerminalScreenView(
     isAlive: Boolean,
     onRestartSession: () -> Unit,
     onResize: (rows: Int, cols: Int, fontSize: Float) -> Unit,
-    theme: TerminalTheme = ThemeManager.defaultTheme
+    theme: TerminalTheme = ThemeManager.defaultTheme,
+    /* Phase 19.5: Tap-to-focus + mouse scroll support. */
+    onTap: () -> Unit = {},
+    onScroll: (Float) -> Unit = {}
 ) {
     var fontSize by remember { mutableStateOf(12f) }
     var lastResizeTime by remember { mutableStateOf(0L) }
@@ -159,7 +166,7 @@ fun TerminalScreenView(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color.Black)
+            .background(theme.background)
             .onSizeChanged { size ->
                 /* Debounce resize: skip jika < 100ms sejak resize terakhir.
                  * Debounce: skip if < 100ms since last resize. */
@@ -175,6 +182,31 @@ fun TerminalScreenView(
                     onResize(newRows, newCols, fontSize)
                 }
             }
+            /* Phase 19.5: Tap-to-focus (untuk show soft keyboard). */
+            .pointerInput(Unit) {
+                detectTapGestures(
+                    onTap = { _ -> onTap() }
+                )
+            }
+            /* Phase 19.5: Mouse scroll wheel support. */
+            .pointerInput(Unit) {
+                awaitPointerEventScope {
+                    while (true) {
+                        val event = awaitPointerEvent()
+                        val scrollDelta = event.changes
+                            .filter { it.scrollDelta.y != 0.0f }
+                            .sumOf { it.scrollDelta.y.toDouble() }
+                            .toFloat()
+                        if (scrollDelta != 0f) {
+                            onScroll(scrollDelta)
+                            /* Scroll internal state (mouse wheel = 20px per notch). */
+                            scrollState.dispatchRawDelta(scrollDelta * 20)
+                            event.changes.forEach { it.consume() }
+                        }
+                    }
+                }
+            }
+            /* Phase 19.5: Pinch-to-zoom (tetap dipertahankan). */
             .pointerInput(Unit) {
                 detectTransformGestures { _, _, zoom, _ ->
                     val newFont = (fontSize * zoom).coerceIn(8f, 24f)

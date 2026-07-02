@@ -33,6 +33,9 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import java.io.File
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 
 /**
  * MainActivity - Entry point aplikasi Tunnel Terminal.
@@ -68,9 +71,9 @@ class MainActivity : ComponentActivity() {
     private lateinit var snippetManager: SnippetManager
     private val snippetsState = mutableStateListOf<Snippet>()
 
-    /** Shared command buffer for the currently focused tab's input line. */
-    private var currentCommandBuffer = ""
-    private var historyIndex = -1
+    /** Shared command buffer for the currently focused tab's input line.
+     * Phase 19.5: Moved to ShellExecutor (per-tab). These kept for backward-compat
+     * but no longer used — see activeExecutor.currentCommandBuffer. */
 
     /** Storage Access Framework manager. */
     private lateinit var storageManager: StorageManager
@@ -439,18 +442,18 @@ class MainActivity : ComponentActivity() {
         if (history.isEmpty()) return
 
         if (forward) {
-            if (historyIndex > 0) historyIndex--
-            else if (historyIndex == 0) historyIndex = -1
+            if (activeExecutor.historyIndex > 0) activeExecutor.historyIndex--
+            else if (activeExecutor.historyIndex == 0) activeExecutor.historyIndex = -1
         } else {
-            if (historyIndex < history.size - 1) historyIndex++
+            if (activeExecutor.historyIndex < history.size - 1) activeExecutor.historyIndex++
         }
 
         /* Clear current line (Ctrl+U) lalu tulis history. */
         activeExecutor.writeRaw("\u0015")
-        currentCommandBuffer = ""
-        if (historyIndex != -1) {
-            val cmd = history[history.size - 1 - historyIndex]
-            currentCommandBuffer = cmd
+        activeExecutor.currentCommandBuffer = ""
+        if (activeExecutor.historyIndex != -1) {
+            val cmd = history[history.size - 1 - activeExecutor.historyIndex]
+            activeExecutor.currentCommandBuffer = cmd
             activeExecutor.writeRaw(cmd)
         }
     }
@@ -631,7 +634,7 @@ class MainActivity : ComponentActivity() {
                     /* Cap history size. */
                     if (h.size > 500) h.removeAt(0)
                 }
-                historyIndex = -1
+                activeExecutor.historyIndex = -1
 
                 /* Built-in commands yang ditangani lokal. */
                 when {
@@ -692,14 +695,109 @@ class MainActivity : ComponentActivity() {
                 return char.toString()
             }
 
+            /**
+             * Phase 19.5: Handle physical key event dari keyboard/mouse.
+             * Returns true jika event di-consume, false untuk fallback ke BasicTextField.
+             *
+             * Penting: Handle special keys di KeyDown (bukan KeyUp) untuk mencegah
+             * double-firing. BasicTextField bisa trigger onValueChange di KeyDown,
+             * lalu KeyUp trigger lagi → double input.
+             *
+             * Handle special keys at KeyDown to prevent double-firing.
+             */
+            fun handleKeyEvent(event: androidx.compose.ui.input.key.KeyEvent): Boolean {
+                /* Hanya handle KeyDown untuk special keys. KeyUp diabaikan. */
+                if (event.type != KeyEventType.KeyDown) return false
+                val key = event.key
+                val ctrl = event.isCtrlPressed
+                val alt = event.isAltPressed
+                val shift = event.isShiftPressed
+
+                /* Ctrl+key combos (priority). */
+                if (ctrl) {
+                    val ch = when (key) {
+                        Key.C -> 3.toChar()    /* SIGINT */
+                        Key.D -> 4.toChar()    /* EOF */
+                        Key.Z -> 26.toChar()   /* SIGTSTP */
+                        Key.L -> 12.toChar()   /* clear */
+                        Key.A -> 1.toChar()    /* line start */
+                        Key.E -> 5.toChar()    /* line end */
+                        Key.K -> 11.toChar()   /* kill to EOL */
+                        Key.U -> 21.toChar()   /* kill line */
+                        Key.W -> 23.toChar()   /* kill word */
+                        Key.R -> 18.toChar()   /* reverse search */
+                        Key.X -> 24.toChar()   /* cancel */
+                        else -> '\u0000'
+                    }
+                    if (ch != '\u0000') {
+                        activeExecutor.writeRaw(ch.toString())
+                        return true
+                    }
+                }
+
+                /* Alt+key → ESC + key. */
+                if (alt) {
+                    val ch = keyToChar(key, shift)
+                    if (ch != '\u0000') {
+                        activeExecutor.writeRaw("\u001B$ch")
+                        return true
+                    }
+                }
+
+                /* Special keys — handle di KeyDown, return true untuk consume. */
+                when (key) {
+                    Key.Enter -> {
+                        /* Enter: process buffer + newline. Consume agar tidak double-fire. */
+                        processInput(activeExecutor.currentCommandBuffer + "\n")
+                        activeExecutor.currentCommandBuffer = ""
+                        return true
+                    }
+                    Key.Backspace -> {
+                        if (activeExecutor.currentCommandBuffer.isNotEmpty()) {
+                            activeExecutor.currentCommandBuffer = activeExecutor.currentCommandBuffer.dropLast(1)
+                        }
+                        activeExecutor.writeRaw("\u007F")
+                        return true
+                    }
+                    Key.Tab -> { activeExecutor.writeRaw("\t"); return true }
+                    Key.DirectionUp -> { activeExecutor.writeRaw("\u001B[A"); return true }
+                    Key.DirectionDown -> { activeExecutor.writeRaw("\u001B[B"); return true }
+                    Key.DirectionRight -> { activeExecutor.writeRaw("\u001B[C"); return true }
+                    Key.DirectionLeft -> { activeExecutor.writeRaw("\u001B[D"); return true }
+                    Key.Escape -> { activeExecutor.writeRaw("\u001B"); return true }
+                    Key.MoveHome -> { activeExecutor.writeRaw("\u001B[H"); return true }
+                    Key.MoveEnd -> { activeExecutor.writeRaw("\u001B[F"); return true }
+                    Key.PageUp -> { activeExecutor.writeRaw("\u001B[5~"); return true }
+                    Key.PageDown -> { activeExecutor.writeRaw("\u001B[6~"); return true }
+                    Key.Delete -> { activeExecutor.writeRaw("\u001B[3~"); return true }
+                    Key.F1 -> { activeExecutor.writeRaw("\u001BOP"); return true }
+                    Key.F2 -> { activeExecutor.writeRaw("\u001BOQ"); return true }
+                    Key.F3 -> { activeExecutor.writeRaw("\u001BOR"); return true }
+                    Key.F4 -> { activeExecutor.writeRaw("\u001BOS"); return true }
+                }
+
+                /* Regular character keys (a-z, 0-9, symbols) — fallback to BasicTextField.
+                 * BasicTextField.onValueChange akan handle via commitText dari IME. */
+                return false
+            }
+
+            /** Map Compose Key to char untuk Alt+key handling. */
+            fun keyToChar(key: Key, shift: Boolean): Char {
+                val name = key.toString().lowercase()
+                if (name.length == 1 && name[0] in 'a'..'z') {
+                    return if (shift) name[0].uppercaseChar() else name[0]
+                }
+                return '\u0000'
+            }
+
             Box(modifier = Modifier.fillMaxSize()) {
                 Column(modifier = Modifier.fillMaxSize()) {
                     TabBar(
                         tabs = tabsData, activeTabId = activeExecutorId,
                         onTabSelected = {
                             activeExecutorId = it
-                            currentCommandBuffer = ""
-                            historyIndex = -1
+                            /* Phase 19.5: currentCommandBuffer & historyIndex sekarang per-tab
+                             * (disimpan di ShellExecutor), tidak perlu reset di sini. */
                         },
                         onNewTab = { lifecycleScope.launch { createNewTab() } },
                         onTabClosed = { closeTab(it) },
@@ -710,50 +808,103 @@ class MainActivity : ComponentActivity() {
                     )
 
                     Box(modifier = Modifier.weight(1f)) {
+                        /* Phase 19.5: FocusRequester untuk auto-focus BasicTextField.
+                         * Tap pada terminal area = request focus = show soft keyboard. */
+                        val focusRequester = remember { FocusRequester() }
+                        val keyboardController = LocalSoftwareKeyboardController.current
+
+                        /* Auto-focus saat tab aktif berubah, agar input langsung ready. */
+                        LaunchedEffect(activeExecutorId) {
+                            try {
+                                focusRequester.requestFocus()
+                                keyboardController?.show()
+                            } catch (_: Exception) {
+                                /* FocusRequester belum siap, coba lagi nanti. */
+                            }
+                        }
+
+                        /* Phase 19.5: BasicTextField DI BAWAH (z-order pertama).
+                         * Invisible, terima keyboard via FocusRequester.
+                         * Pointer events di-handle oleh TerminalScreenView di atas. */
+                        var lastInputValue by remember { mutableStateOf("") }
+
+                        BasicTextField(
+                            value = hiddenInput,
+                            onValueChange = { newValue ->
+                                /* Delta tracking: bandingkan dengan lastValue. */
+                                val oldText = lastInputValue
+                                lastInputValue = newValue
+
+                                if (newValue.length > oldText.length) {
+                                    /* Karakter baru ditambahkan di akhir. */
+                                    val added = newValue.substring(oldText.length)
+                                    for (ch in added) {
+                                        when (ch) {
+                                            '\n', '\r' -> {
+                                                processInput(activeExecutor.currentCommandBuffer + "\n")
+                                                activeExecutor.currentCommandBuffer = ""
+                                            }
+                                            '\u007F' -> {
+                                                /* Backspace dari soft keyboard (DEL char). */
+                                                if (activeExecutor.currentCommandBuffer.isNotEmpty()) {
+                                                    activeExecutor.currentCommandBuffer = activeExecutor.currentCommandBuffer.dropLast(1)
+                                                }
+                                                activeExecutor.writeRaw("\u007F")
+                                            }
+                                            '\b' -> {
+                                                /* Backspace (BS char). */
+                                                if (activeExecutor.currentCommandBuffer.isNotEmpty()) {
+                                                    activeExecutor.currentCommandBuffer = activeExecutor.currentCommandBuffer.dropLast(1)
+                                                }
+                                                activeExecutor.writeRaw("\u007F")
+                                            }
+                                            else -> {
+                                                val translated = handleChar(ch)
+                                                activeExecutor.currentCommandBuffer += translated
+                                                activeExecutor.writeRaw(translated)
+                                            }
+                                        }
+                                    }
+                                }
+                                /* Jika value berkurang (backspace soft keyboard), handle via onPreviewKeyEvent. */
+
+                                /* Reset hiddenInput ke "" via LaunchedEffect agar IME tidak confused.
+                                 * Reset hiddenInput to "" via LaunchedEffect so IME doesn't get confused. */
+                                if (newValue.isNotEmpty()) {
+                                    hiddenInput = ""
+                                    lastInputValue = ""
+                                }
+                            },
+                            textStyle = TextStyle(color = Color.Transparent),
+                            cursorBrush = SolidColor(Color.Transparent),
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .focusRequester(focusRequester)
+                                .onPreviewKeyEvent { event ->
+                                    /* Phase 19.5: Handle SEMUA special keys via preview. */
+                                    handleKeyEvent(event)
+                                }
+                        )
+
+                        /* Phase 19.5: TerminalScreenView DI ATAS (z-order terakhir).
+                         * Terima tap/click/scroll, forward focus request ke BasicTextField. */
                         TerminalScreenView(
                             emulator = activeExecutor.emulator,
                             screenDirty = screenDirty,
                             isAlive = activeExecutor.isAlive,
                             onRestartSession = { scope.launch { activeExecutor.restart() } },
                             onResize = { rows, cols, fontSize -> activeExecutor.resizeTerminal(rows, cols, fontSize) },
-                            theme = currentTheme
-                        )
-
-                        /* Hidden BasicTextField untuk menangkap input keyboard fisik.
-                         * Hidden BasicTextField to capture physical keyboard input. */
-                        BasicTextField(
-                            value = hiddenInput,
-                            onValueChange = { typed ->
-                                if (typed.isNotEmpty()) {
-                                    hiddenInput = ""
-                                    when {
-                                        typed == "\n" || typed == "\r" -> {
-                                            processInput(currentCommandBuffer + "\n")
-                                            currentCommandBuffer = ""
-                                        }
-                                        typed == "\u007F" -> {
-                                            if (currentCommandBuffer.isNotEmpty()) {
-                                                currentCommandBuffer = currentCommandBuffer.dropLast(1)
-                                            }
-                                            activeExecutor.writeRaw(typed)
-                                        }
-                                        else -> {
-                                            val translated = typed.map { handleChar(it) }.joinToString("")
-                                            currentCommandBuffer += translated
-                                            activeExecutor.writeRaw(translated)
-                                        }
-                                    }
-                                }
+                            theme = currentTheme,
+                            /* Phase 19.5: Tap-to-focus + mouse click support. */
+                            onTap = {
+                                try {
+                                    focusRequester.requestFocus()
+                                    keyboardController?.show()
+                                } catch (_: Exception) {}
                             },
-                            textStyle = TextStyle(color = Color.Transparent),
-                            cursorBrush = SolidColor(Color.Transparent),
-                            modifier = Modifier.fillMaxSize().onPreviewKeyEvent { event ->
-                                if (event.key == Key.Enter && event.type == KeyEventType.KeyUp) {
-                                    processInput(currentCommandBuffer + "\n")
-                                    currentCommandBuffer = ""
-                                    hiddenInput = ""
-                                    true
-                                } else false
+                            /* Phase 19.5: Mouse scroll wheel untuk scroll terminal history. */
+                            onScroll = { delta ->
+                                /* Forward ke TerminalScreenView internal scroll (handled di composable). */
                             }
                         )
                     }
