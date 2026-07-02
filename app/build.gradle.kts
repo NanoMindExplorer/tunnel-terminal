@@ -11,9 +11,9 @@ android {
         applicationId = "com.tunnel.terminal"
         minSdk = 24
         targetSdk = 34
-        // Phase 23: @context + MCP + Diff + Autocomplete + Voice + Agent Workflows
-        versionCode = 10
-        versionName = "4.2.0-phase23-context-mcp-diff-voice"
+        // Phase 24: Comprehensive Stability Fix (thread safety + pinch-zoom + block mode input)
+        versionCode = 11
+        versionName = "4.3.0-phase24-stability-fix"
     }
 
     buildTypes {

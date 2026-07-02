@@ -140,6 +140,8 @@ class MainActivity : ComponentActivity() {
     private var pendingDiff by mutableStateOf<Triple<String, String, String>?>(null)
     /** Phase 23: MCP tools discovered. */
     private val mcpTools = mutableStateListOf<McpTool>()
+    /** Phase 24: Global font size untuk terminal (persist pinch-to-zoom across tabs/modes). */
+    private var terminalFontSize by mutableStateOf(12f)
     /** Phase 19: Available models dari fetch /models. */
     private val availableModels = mutableStateListOf<ModelInfo>()
     private var isLoadingModels by mutableStateOf(false)
@@ -354,7 +356,13 @@ class MainActivity : ComponentActivity() {
             chatMessages.add(ChatMessage("assistant", "▶ Step: ${step.displayText}", false))
             when (step.type) {
                 AgentStep.StepType.AI_STEP -> {
+                    /* Phase 24: Tunggu AI selesai sebelum lanjut ke step berikutnya.
+                     * Old code: handleAIPrompt di-guard isProcessingAI → skip jika AI masih jalan.
+                     * Fix: tunggu AI idle sebelum call, lalu call. */
+                    while (isProcessingAI) { delay(100) }
                     handleAIPrompt(step.prompt)
+                    /* Tunggu AI selesai sebelum next step. */
+                    while (isProcessingAI) { delay(100) }
                 }
                 AgentStep.StepType.COMMAND_STEP -> {
                     activeExecutor.executeCommand(step.command)
@@ -1186,7 +1194,9 @@ class MainActivity : ComponentActivity() {
                                     onRestartSession = { scope.launch { activeExecutor.restart() } },
                                     onResize = { r, c, f -> activeExecutor.resizeTerminal(r, c, f) },
                                     theme = currentTheme,
-                                    onTap = { try { focusRequester.requestFocus(); keyboardController?.show() } catch (_: Exception) {} }
+                                    onTap = { try { focusRequester.requestFocus(); keyboardController?.show() } catch (_: Exception) {} },
+                                    fontSizeState = terminalFontSize,
+                                    onFontSizeChange = { terminalFontSize = it }
                                 )
                             }
                             /* Divider. */
@@ -1202,28 +1212,60 @@ class MainActivity : ComponentActivity() {
                                         isAlive = exec.isAlive,
                                         onRestartSession = { scope.launch { exec.restart() } },
                                         onResize = { r, c, f -> exec.resizeTerminal(r, c, f) },
-                                        theme = currentTheme
+                                        theme = currentTheme,
+                                        fontSizeState = terminalFontSize,
+                                        onFontSizeChange = { terminalFontSize = it }
                                     )
                                 }
                             }
                         }
                     } else if (blockMode) {
-                        /* Phase 22: Block mode (Warp-style block terminal). */
-                        BlockTerminalView(
-                            blocks = blockManager.blocks,
-                            theme = currentTheme,
-                            onBlockClick = { /* TODO: navigate to block */ },
-                            onBlockRerun = { block ->
-                                shellExecutors.find { it.id == activeExecutorId }?.executeCommand(block.command)
-                            },
-                            onBlockExplain = { block ->
-                                scope.launch {
-                                    handleAIPrompt("Jelaskan output dari command ini:\n$ ${block.command}\n${block.output}")
-                                    drawerState.open()
-                                }
-                            },
-                            onToggleCollapse = { id -> blockManager.toggleCollapse(id) }
-                        )
+                        /* Phase 22: Block mode (Warp-style block terminal).
+                         * Phase 24: Tambah BasicTextField untuk input (was missing). */
+                        Box(modifier = Modifier.weight(1f)) {
+                            val focusRequester = remember { FocusRequester() }
+                            val keyboardController = LocalSoftwareKeyboardController.current
+                            LaunchedEffect(activeExecutorId, blockMode) {
+                                try { focusRequester.requestFocus(); keyboardController?.show() } catch (_: Exception) {}
+                            }
+                            var lastInputValue by remember { mutableStateOf("") }
+                            BasicTextField(
+                                value = hiddenInput,
+                                onValueChange = { newValue ->
+                                    val oldText = lastInputValue
+                                    lastInputValue = newValue
+                                    if (newValue.length > oldText.length) {
+                                        val added = newValue.substring(oldText.length)
+                                        for (ch in added) {
+                                            when (ch) {
+                                                '\n', '\r' -> { processInput(activeExecutor.currentCommandBuffer + "\n"); activeExecutor.currentCommandBuffer = "" }
+                                                '\u007F', '\b' -> { if (activeExecutor.currentCommandBuffer.isNotEmpty()) activeExecutor.currentCommandBuffer = activeExecutor.currentCommandBuffer.dropLast(1); activeExecutor.writeRaw("\u007F") }
+                                                else -> { val t = handleChar(ch); activeExecutor.currentCommandBuffer += t; activeExecutor.writeRaw(t) }
+                                            }
+                                        }
+                                    }
+                                    if (newValue.isNotEmpty()) { hiddenInput = ""; lastInputValue = "" }
+                                },
+                                textStyle = TextStyle(color = Color.Transparent),
+                                cursorBrush = SolidColor(Color.Transparent),
+                                modifier = Modifier.fillMaxSize().focusRequester(focusRequester).onPreviewKeyEvent { event -> handleKeyEvent(event) }
+                            )
+                            BlockTerminalView(
+                                blocks = blockManager.blocks,
+                                theme = currentTheme,
+                                onBlockClick = { /* TODO: navigate to block */ },
+                                onBlockRerun = { block ->
+                                    shellExecutors.find { it.id == activeExecutorId }?.executeCommand(block.command)
+                                },
+                                onBlockExplain = { block ->
+                                    scope.launch {
+                                        handleAIPrompt("Jelaskan output dari command ini:\n$ ${block.command}\n${block.output}")
+                                        drawerState.open()
+                                    }
+                                },
+                                onToggleCollapse = { id -> blockManager.toggleCollapse(id) }
+                            )
+                        }
                     } else {
                         /* Normal mode: single terminal (existing logic). */
                         Box(modifier = Modifier.weight(1f)) {
@@ -1324,7 +1366,10 @@ class MainActivity : ComponentActivity() {
                             /* Phase 19.5: Mouse scroll wheel untuk scroll terminal history. */
                             onScroll = { delta ->
                                 /* Forward ke TerminalScreenView internal scroll (handled di composable). */
-                            }
+                            },
+                            /* Phase 24: External fontSize state untuk persist pinch-to-zoom. */
+                            fontSizeState = terminalFontSize,
+                            onFontSizeChange = { terminalFontSize = it }
                         )
                     }
                     } /* end else (normal mode) */

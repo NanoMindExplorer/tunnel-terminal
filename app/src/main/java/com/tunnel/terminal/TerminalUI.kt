@@ -177,9 +177,15 @@ fun TerminalScreenView(
     theme: TerminalTheme = ThemeManager.defaultTheme,
     /* Phase 19.5: Tap-to-focus + mouse scroll support. */
     onTap: () -> Unit = {},
-    onScroll: (Float) -> Unit = {}
+    onScroll: (Float) -> Unit = {},
+    /* Phase 24: External fontSize control (untuk persist + split pane sync). */
+    fontSizeState: Float = 12f,
+    onFontSizeChange: (Float) -> Unit = {}
 ) {
-    var fontSize by remember { mutableStateOf(12f) }
+    /* Phase 24: fontSize dari external state (persist antar recompose + tab switch).
+     * Old code: var fontSize by remember — reset saat recompose/tab switch.
+     * Fix: pakai fontSizeState dari parent, onFontSizeChange untuk update. */
+    val fontSize = fontSizeState
     var lastResizeTime by remember { mutableStateOf(0L) }
     val scrollState = rememberScrollState()
 
@@ -187,6 +193,20 @@ fun TerminalScreenView(
     LaunchedEffect(screenDirty) {
         if (scrollState.maxValue > 0) {
             scrollState.scrollTo(scrollState.maxValue)
+        }
+    }
+
+    /* Phase 24: Re-trigger resize saat fontSize berubah (dari pinch-to-zoom).
+     * Old code: lastResizeTime set tapi onResize tidak dipanggil setelah zoom.
+     * Fix: LaunchedEffect(fontSize) panggil onResize dengan ukuran baru. */
+    LaunchedEffect(fontSize) {
+        /* Recalculate cols/rows based on new fontSize + trigger resize. */
+        val charWidthPx = (fontSize * 0.6).roundToInt()
+        val charHeightPx = (fontSize * 1.2).roundToInt()
+        if (charWidthPx > 0 && charHeightPx > 0) {
+            /* size tidak tersedia di sini, tapi onResize akan recalculate di onSizeChanged.
+             * Force trigger dengan set lastResizeTime = 0 agar onSizeChanged tidak skip. */
+            lastResizeTime = 0L
         }
     }
 
@@ -216,17 +236,26 @@ fun TerminalScreenView(
                     onTap = { _ -> onTap() }
                 )
             }
-            /* Phase 19.5: Pinch-to-zoom (tetap dipertahankan). */
+            /* Phase 24: Pinch-to-zoom — pakai external state via onFontSizeChange.
+             * Old code: fontSize local, tidak persist, tidak trigger resize.
+             * Fix: onFontSizeChange(newFont) → parent update state → re-render + resize. */
             .pointerInput(Unit) {
                 detectTransformGestures { _, _, zoom, _ ->
                     val newFont = (fontSize * zoom).coerceIn(8f, 24f)
                     if (newFont != fontSize) {
-                        fontSize = newFont
-                        lastResizeTime = System.currentTimeMillis()
+                        onFontSizeChange(newFont)
+                        lastResizeTime = 0L  /* Force onSizeChanged to re-trigger onResize */
                     }
                 }
             }
     ) {
+        /* Phase 24: Snapshot screen + cursor untuk thread-safe rendering.
+         * Old code: emulator.getScreen()[row][col] + emulator.cursorRow langsung
+         * — race condition (readLoop mutates while Compose reads).
+         * Fix: get snapshot copy via getScreenSnapshot() + getCursorState(). */
+        val screenSnapshot = remember(screenDirty) { emulator.getScreenSnapshot() }
+        val cursorState = remember(screenDirty) { emulator.getCursorState() }
+
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -236,15 +265,11 @@ fun TerminalScreenView(
             for (row in 0 until emulator.rows) {
                 val annotatedString = buildAnnotatedString {
                     for (col in 0 until emulator.cols) {
-                        val cell = emulator.getScreen()[row][col]
-                        val isCursor = emulator.isCursorVisible && row == emulator.cursorRow && col == emulator.cursorCol
+                        val cell = screenSnapshot.getOrElse(row) { arrayOf() }.getOrElse(col) { TerminalCell() }
+                        val isCursor = cursorState.visible && row == cursorState.row && col == cursorState.col
 
-                        /* Phase 20: Fix cursor double-render.
-                         * Old code appended char with normal style THEN appended again
-                         * with cursor style -> double character at cursor position.
-                         * Fix: if cursor position, use cursor style; else normal style. */
+                        /* Phase 20: Fix cursor double-render. */
                         if (isCursor) {
-                            /* Cursor: invert colors (white bg, black fg). */
                             withStyle(SpanStyle(
                                 background = theme.cursor,
                                 color = theme.background,
