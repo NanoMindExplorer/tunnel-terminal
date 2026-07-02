@@ -130,7 +130,9 @@ class MainActivity : ComponentActivity() {
                 ?.getStringArrayListExtra(android.speech.RecognizerIntent.EXTRA_RESULTS)
                 ?.firstOrNull()
             if (!spokenText.isNullOrBlank()) {
-                /* Inject spoken text ke AI chat input. */
+                /* Phase 24.5: Set pending voice text, akan di-process di composable.
+                 * Old code: set _pendingVoiceText tapi tidak pernah dirender.
+                 * Fix: set flag, LaunchedEffect di TerminalApp() akan handle. */
                 _pendingVoiceText.value = spokenText
             }
         }
@@ -312,7 +314,11 @@ class MainActivity : ComponentActivity() {
                 if (parts.size == 2) {
                     val serverName = parts[0]
                     val toolName = parts[1]
-                    val args = JSONObject(call.args).toString()
+                    /* Phase 24.5: Fix JSONObject(Map) crash — org.json doesn't have Map constructor.
+                     * Build JSONObject manually dari call.args Map. */
+                    val argsJson = org.json.JSONObject()
+                    call.args.forEach { (k, v) -> argsJson.put(k, v) }
+                    val args = argsJson.toString()
                     lifecycleScope.launch {
                         val result = mcpManager.invokeTool(serverName, toolName, args)
                         chatMessages.add(ChatMessage("assistant", "📋 MCP Result:\n$result", false))
@@ -581,10 +587,12 @@ class MainActivity : ComponentActivity() {
 
     private suspend fun createNewTab() {
         val newExecutor = ShellExecutor(themeHolder)
-        /* Tampilkan MOTD sebelum start. */
-        newExecutor.start()
+        /* Phase 24.5: Add to list BEFORE start() agar Compose bisa observe.
+         * Old code: start() sebelum add() — jika start() lambat, UI render null.
+         * Fix: add first, then start, then set active. */
         shellExecutors.add(newExecutor)
         activeExecutorId = newExecutor.id
+        newExecutor.start()
 
         /* Tampilkan MOTD dinamis. */
         newExecutor.emulator.process(SystemInfo.buildMotd(this))
@@ -605,11 +613,20 @@ class MainActivity : ComponentActivity() {
     private fun closeTab(id: Int) {
         shellExecutors.find { it.id == id }?.destroy()
         shellExecutors.removeAll { it.id == id }
+        /* Phase 24.5: Fix activeExecutorId=0 invalid state.
+         * Old code: set to 0 if no tabs, but 0 is not a valid session id.
+         * Fix: set to first available tab, atau biarkan 0 sementara (createNewTab akan set). */
         if (activeExecutorId == id) {
             activeExecutorId = shellExecutors.firstOrNull()?.id ?: 0
         }
         if (shellExecutors.isEmpty()) {
+            /* createNewTab akan set activeExecutorId ke id baru. */
             lifecycleScope.launch { createNewTab() }
+        }
+        /* Phase 24.5: Clear block mode jika tab ditutup (avoid stale blocks). */
+        if (blockMode) {
+            blockManager.clear()
+            blockMode = false
         }
     }
 
@@ -680,6 +697,16 @@ class MainActivity : ComponentActivity() {
 
         var isCtrlActive by remember { mutableStateOf(false) }
         var isAltActive by remember { mutableStateOf(false) }
+
+        /* Phase 24.5: Process pending voice text — kirim sebagai AI prompt + open drawer. */
+        val voiceText by _pendingVoiceText
+        LaunchedEffect(voiceText) {
+            if (voiceText.isNotBlank()) {
+                drawerState.open()
+                handleAIPrompt(voiceText)
+                _pendingVoiceText.value = ""
+            }
+        }
 
         /* Back button handler: tutup drawer/editor dulu sebelum exit. */
         BackHandler(enabled = editingFile != null || drawerState.isOpen) {

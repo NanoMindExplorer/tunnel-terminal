@@ -11,9 +11,9 @@ android {
         applicationId = "com.tunnel.terminal"
         minSdk = 24
         targetSdk = 34
-        // Phase 24: Comprehensive Stability Fix (thread safety + pinch-zoom + block mode input)
-        versionCode = 11
-        versionName = "4.3.0-phase24-stability-fix"
+        // Phase 24.5: Continued audit fixes (MCP crash, voice input, block mode cleanup)
+        versionCode = 12
+        versionName = "4.3.1-phase24.5-audit-continued"
     }
 
     buildTypes {
