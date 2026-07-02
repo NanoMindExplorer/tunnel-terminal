@@ -45,34 +45,7 @@ object ThemeManager {
     private const val KEY_THEME_NAME = "theme_name"
     private const val DEFAULT_THEME = "Matrix"
 
-    /** Preset tema yang tersedia.
-     * Available theme presets. */
-    val presets: List<TerminalTheme> = listOf(
-        matrixTheme,
-        draculaTheme,
-        solarizedDarkTheme,
-        monokaiProTheme,
-        nordTheme,
-        tokyoNightTheme
-    )
-
-    /** Tema default. Default theme. */
-    val defaultTheme: TerminalTheme = matrixTheme
-
-    /** Ambil tema aktif dari SharedPreferences. Get active theme from prefs. */
-    fun getActiveTheme(context: Context): TerminalTheme {
-        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        val name = prefs.getString(KEY_THEME_NAME, DEFAULT_THEME) ?: DEFAULT_THEME
-        return presets.firstOrNull { it.name == name } ?: defaultTheme
-    }
-
-    /** Simpan pilihan tema. Save theme selection. */
-    fun setActiveTheme(context: Context, theme: TerminalTheme) {
-        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        prefs.edit().putString(KEY_THEME_NAME, theme.name).apply()
-    }
-
-    // ─── Theme Definitions ────────────────────────────────────────────
+    // ─── Theme Definitions (MUST be declared before presets list) ─────
 
     /** Matrix - tema hijau neon default (signature Tunnel Terminal). */
     val matrixTheme = TerminalTheme(
@@ -193,4 +166,32 @@ object ThemeManager {
             Color(0xFF7AA2F7), Color(0xFFBB9AF7), Color(0xFF7DCFFF), Color(0xFFC0CAF5)
         )
     )
+
+    // ─── Presets & API (declared AFTER theme definitions) ─────────────
+
+    /** Preset tema yang tersedia. Available theme presets. */
+    val presets: List<TerminalTheme> = listOf(
+        matrixTheme,
+        draculaTheme,
+        solarizedDarkTheme,
+        monokaiProTheme,
+        nordTheme,
+        tokyoNightTheme
+    )
+
+    /** Tema default. Default theme. */
+    val defaultTheme: TerminalTheme = matrixTheme
+
+    /** Ambil tema aktif dari SharedPreferences. Get active theme from prefs. */
+    fun getActiveTheme(context: Context): TerminalTheme {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val name = prefs.getString(KEY_THEME_NAME, DEFAULT_THEME) ?: DEFAULT_THEME
+        return presets.firstOrNull { it.name == name } ?: defaultTheme
+    }
+
+    /** Simpan pilihan tema. Save theme selection. */
+    fun setActiveTheme(context: Context, theme: TerminalTheme) {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        prefs.edit().putString(KEY_THEME_NAME, theme.name).apply()
+    }
 }

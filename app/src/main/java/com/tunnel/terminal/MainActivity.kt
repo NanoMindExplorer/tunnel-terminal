@@ -963,10 +963,14 @@ class MainActivity : ComponentActivity() {
 
         val fullResponse = StringBuilder()
         var firstChunk = true
+        /* Phase 19 hotfix: Flow.collect pakai crossinline lambda, jadi non-local return
+         * dilarang. Pakai flag aborted untuk handle client-side error tanpa return. */
+        var abortedWithError: String? = null
 
         try {
             /* Koleksi token-by-token dari streaming Flow. */
             aiAgent.askAIStreaming(aiSettings, chatMessages.toList(), terminalContext).collect { delta ->
+                if (abortedWithError != null) return@collect  /* skip further chunks */
                 if (firstChunk) {
                     firstChunk = false
                     /* Cek apakah delta pertama adalah error message (client-side error). */
@@ -976,13 +980,13 @@ class MainActivity : ComponentActivity() {
                                         delta.startsWith("Akses ditolak") || delta.startsWith("Endpoint") ||
                                         delta.startsWith("Rate limit") || delta.startsWith("Server")
                     if (isClientError) {
+                        abortedWithError = delta
                         chatMessages[streamingIdx] = streamingMsg.copy(
                             content = delta,
                             isStreaming = false,
                             isError = true
                         )
-                        isProcessingAI = false
-                        return
+                        return@collect  /* stop processing this chunk */
                     }
                 }
                 fullResponse.append(delta)
@@ -992,6 +996,13 @@ class MainActivity : ComponentActivity() {
                     content = fullResponse.toString(),
                     isStreaming = true
                 )
+            }
+
+            /* Kalau client error di chunk pertama, exit early (return di sini allowed
+             * karena di suspend fun langsung, bukan di lambda). */
+            if (abortedWithError != null) {
+                isProcessingAI = false
+                return
             }
 
             /* Stream selesai. Parse bash blocks untuk deteksi command/autopilot.
