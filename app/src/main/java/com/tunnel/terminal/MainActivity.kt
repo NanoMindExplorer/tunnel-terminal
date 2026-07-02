@@ -115,6 +115,31 @@ class MainActivity : ComponentActivity() {
     /** Phase 22: Tool executor + permission manager. */
     private lateinit var toolExecutor: ToolExecutor
     private lateinit var permissionManager: PermissionManager
+    /** Phase 23: Context manager (@mentions), MCP manager, Agent workflow manager, Voice input. */
+    private lateinit var contextManager: ContextManager
+    private lateinit var mcpManager: McpManager
+    private lateinit var agentWorkflowManager: AgentWorkflowManager
+    private lateinit var voiceInputManager: VoiceInputManager
+    private val agentWorkflows = mutableStateListOf<AgentWorkflow>()
+    /** Phase 23: Voice input launcher. */
+    private val voiceInputLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == android.app.Activity.RESULT_OK) {
+            val spokenText = result.data
+                ?.getStringArrayListExtra(android.speech.RecognizerIntent.EXTRA_RESULTS)
+                ?.firstOrNull()
+            if (!spokenText.isNullOrBlank()) {
+                /* Inject spoken text ke AI chat input. */
+                _pendingVoiceText.value = spokenText
+            }
+        }
+    }
+    private val _pendingVoiceText = mutableStateOf("")
+    /** Phase 23: Pending diff untuk review (AI file edit). */
+    private var pendingDiff by mutableStateOf<Triple<String, String, String>?>(null)
+    /** Phase 23: MCP tools discovered. */
+    private val mcpTools = mutableStateListOf<McpTool>()
     /** Phase 19: Available models dari fetch /models. */
     private val availableModels = mutableStateListOf<ModelInfo>()
     private var isLoadingModels by mutableStateOf(false)
@@ -176,6 +201,11 @@ class MainActivity : ComponentActivity() {
         workspaceSessions.addAll(workspaceManager.sessions)
         toolExecutor = ToolExecutor(this)
         permissionManager = PermissionManager(this)
+        contextManager = ContextManager(this)
+        mcpManager = McpManager(this)
+        agentWorkflowManager = AgentWorkflowManager(this)
+        voiceInputManager = VoiceInputManager(this)
+        agentWorkflows.addAll(agentWorkflowManager.workflows)
         loadAISettings()
         loadTheme()
 
@@ -256,16 +286,95 @@ class MainActivity : ComponentActivity() {
     private fun executeToolCall(call: AiToolCall, alwaysAllow: Boolean) {
         chatMessages.add(ChatMessage("assistant", "🔧 Tool: ${call.displayText}", false))
 
-        when (call.tool) {
-            "run_command" -> {
+        when {
+            call.tool == "run_command" -> {
                 val cmd = call.args["cmd"] ?: return
                 shellExecutors.find { it.id == activeExecutorId }?.executeCommand(cmd)
+            }
+            call.tool == "write_file" -> {
+                /* Phase 23: Inline diff view untuk AI file edits.
+                 * Show diff sebelum apply — user bisa review/reject. */
+                val path = call.args["path"] ?: return
+                val content = call.args["content"] ?: return
+                val file = java.io.File(path)
+                val original = if (file.exists()) file.readText() else ""
+                if (original != content) {
+                    pendingDiff = Triple(path, original, content)
+                } else {
+                    chatMessages.add(ChatMessage("assistant", "No changes needed for $path", false))
+                }
+            }
+            call.tool.startsWith("mcp.") -> {
+                /* Phase 23: MCP tool invocation. */
+                val parts = call.tool.removePrefix("mcp.").split(".", limit = 2)
+                if (parts.size == 2) {
+                    val serverName = parts[0]
+                    val toolName = parts[1]
+                    val args = JSONObject(call.args).toString()
+                    lifecycleScope.launch {
+                        val result = mcpManager.invokeTool(serverName, toolName, args)
+                        chatMessages.add(ChatMessage("assistant", "📋 MCP Result:\n$result", false))
+                    }
+                }
             }
             else -> {
                 val result = toolExecutor.execute(call)
                 chatMessages.add(ChatMessage("assistant", "📋 Result:\n$result", false))
             }
         }
+    }
+
+    /* ─── Phase 23: Voice Input ─── */
+    private fun startVoiceInput() {
+        if (voiceInputManager.isAvailable()) {
+            voiceInputLauncher.launch(voiceInputManager.createIntent())
+        } else {
+            Toast.makeText(this, "Speech recognition not available", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    /* ─── Phase 23: MCP Discovery ─── */
+    private fun discoverMcpTools() {
+        lifecycleScope.launch {
+            val tools = mcpManager.discoverAllTools()
+            mcpTools.clear()
+            mcpTools.addAll(tools)
+            if (tools.isNotEmpty()) {
+                Toast.makeText(this@MainActivity, "Discovered ${tools.size} MCP tools", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    /* ─── Phase 23: Agent Workflow Execution ─── */
+    private suspend fun executeAgentWorkflow(workflow: AgentWorkflow) {
+        val activeExecutor = shellExecutors.find { it.id == activeExecutorId } ?: return
+        chatMessages.add(ChatMessage("assistant", "🤖 Starting workflow: ${workflow.name}", false))
+
+        for (step in workflow.steps) {
+            chatMessages.add(ChatMessage("assistant", "▶ Step: ${step.displayText}", false))
+            when (step.type) {
+                AgentStep.StepType.AI_STEP -> {
+                    handleAIPrompt(step.prompt)
+                }
+                AgentStep.StepType.COMMAND_STEP -> {
+                    activeExecutor.executeCommand(step.command)
+                    if (step.waitForOutput) {
+                        delay(step.timeoutMs)
+                    }
+                }
+                AgentStep.StepType.DELAY_STEP -> {
+                    delay(step.timeoutMs)
+                }
+                AgentStep.StepType.CONDITIONAL_STEP -> {
+                    val output = activeExecutor.getCleanOutput().lowercase()
+                    if (output.contains(step.prompt.lowercase())) {
+                        activeExecutor.executeCommand(step.command)
+                        if (step.waitForOutput) delay(step.timeoutMs)
+                    }
+                }
+            }
+        }
+        chatMessages.add(ChatMessage("assistant", "✅ Workflow '${workflow.name}' completed", false))
     }
 
     /* ─── Phase 19: AI Provider Model Fetcher ─── */
@@ -613,6 +722,16 @@ class MainActivity : ComponentActivity() {
                 add(PaletteItem("cmd_pwd", "Run: pwd", "Command", Icons.Default.Terminal, PaletteCategory.COMMAND) { shellExecutors.find { it.id == activeExecutorId }?.executeCommand("pwd") })
                 add(PaletteItem("cmd_clear", "Run: clear", "Command", Icons.Default.Clear, PaletteCategory.COMMAND) { shellExecutors.find { it.id == activeExecutorId }?.clearScreen() })
                 add(PaletteItem("cmd_help", "Run: help", "Command", Icons.Default.Help, PaletteCategory.COMMAND) { shellExecutors.find { it.id == activeExecutorId }?.executeCommand("help") })
+                /* Phase 23: MCP discovery. */
+                add(PaletteItem("mcp_discover", "Discover MCP Tools", "AI", Icons.Default.CloudSync, PaletteCategory.AI) { discoverMcpTools() })
+                /* Phase 23: Voice input. */
+                add(PaletteItem("voice_input", "Voice Input (speak AI prompt)", "AI", Icons.Default.Mic, PaletteCategory.AI) { startVoiceInput() })
+                /* Phase 23: Agent workflows. */
+                agentWorkflows.forEach { wf ->
+                    add(PaletteItem("workflow_${wf.id}", "Run workflow: ${wf.name}", "AI", Icons.Default.AutoMode, PaletteCategory.AI) {
+                        scope.launch { executeAgentWorkflow(wf) }
+                    })
+                }
             }
             val recentCmds = shellExecutors.find { it.id == activeExecutorId }?.commandHistory?.reversed() ?: emptyList()
             CommandPalette(
@@ -641,6 +760,25 @@ class MainActivity : ComponentActivity() {
                 onDeny = {
                     chatMessages.add(ChatMessage("assistant", "Permission denied for: ${call.displayText}", false, isError = true))
                     pendingToolCall = null
+                }
+            )
+        }
+
+        /* Phase 23: Inline Diff View untuk AI file edits. */
+        pendingDiff?.let { (path, original, modified) ->
+            DiffViewDialog(
+                fileName = java.io.File(path).name,
+                originalContent = original,
+                modifiedContent = modified,
+                theme = currentTheme,
+                onApply = {
+                    java.io.File(path).writeText(modified)
+                    chatMessages.add(ChatMessage("assistant", "✅ Applied changes to ${java.io.File(path).name}", false))
+                    pendingDiff = null
+                },
+                onReject = {
+                    chatMessages.add(ChatMessage("assistant", "Changes rejected for ${java.io.File(path).name}", false))
+                    pendingDiff = null
                 }
             )
         }
@@ -1393,6 +1531,16 @@ class MainActivity : ComponentActivity() {
         val activeExecutor = shellExecutors.find { it.id == activeExecutorId }
         val terminalContext = activeExecutor?.getCleanOutput() ?: ""
 
+        /* Phase 23: Resolve @context mentions (@file, @block, @command, @terminal, @snippet).
+         * Mentions di-resolve ke content dan di-append ke terminalContext. */
+        val (resolvedMentions, mentionContext) = contextManager.resolveAll(
+            text = prompt,
+            blockManager = blockManager,
+            terminalSession = activeExecutor,
+            snippetManager = snippetManager
+        )
+        val fullContext = terminalContext + mentionContext
+
         /* Placeholder assistant message yang akan di-update selama streaming.
          * Placeholder assistant message updated during streaming. */
         val streamingMsg = ChatMessage(
@@ -1412,7 +1560,8 @@ class MainActivity : ComponentActivity() {
 
         try {
             /* Koleksi token-by-token dari streaming Flow. */
-            aiAgent.askAIStreaming(aiSettings, chatMessages.toList(), terminalContext).collect { delta ->
+            /* Phase 23: Pass fullContext (dengan @mentions resolved) ke AI. */
+            aiAgent.askAIStreaming(aiSettings, chatMessages.toList(), fullContext).collect { delta ->
                 if (abortedWithError != null) return@collect  /* skip further chunks */
                 if (firstChunk) {
                     firstChunk = false

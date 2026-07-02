@@ -11,9 +11,9 @@ android {
         applicationId = "com.tunnel.terminal"
         minSdk = 24
         targetSdk = 34
-        // Phase 22: AI-Native Terminal Revolution (blocks, palette, tool calls, markdown)
-        versionCode = 9
-        versionName = "4.1.0-phase22-ai-native-revolution"
+        // Phase 23: @context + MCP + Diff + Autocomplete + Voice + Agent Workflows
+        versionCode = 10
+        versionName = "4.2.0-phase23-context-mcp-diff-voice"
     }
 
     buildTypes {
