@@ -21,6 +21,7 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.launch
 
 /**
  * PaletteItem - Satu item di command palette.
@@ -66,6 +67,8 @@ fun CommandPalette(
 ) {
     var query by remember { mutableStateOf("") }
     var selectedIndex by remember { mutableStateOf(0) }
+    /* Phase 26 hotfix: Use rememberCoroutineScope for suspend calls. */
+    val paletteScope = rememberCoroutineScope()
 
     /* Build full item list dengan recent commands. */
     val allItems = remember(items, recentCommands) {
@@ -123,8 +126,7 @@ fun CommandPalette(
                                 Key.DirectionDown -> {
                                     if (filtered.isNotEmpty()) {
                                         selectedIndex = (selectedIndex + 1) % filtered.size
-                                        /* Scroll to selected. */
-                                        kotlinx.coroutines.MainScope().launch {
+                                        paletteScope.launch {
                                             listState.scrollToItem(selectedIndex)
                                         }
                                     }
@@ -133,7 +135,7 @@ fun CommandPalette(
                                 Key.DirectionUp -> {
                                     if (filtered.isNotEmpty()) {
                                         selectedIndex = if (selectedIndex == 0) filtered.size - 1 else selectedIndex - 1
-                                        kotlinx.coroutines.MainScope().launch {
+                                        paletteScope.launch {
                                             listState.scrollToItem(selectedIndex)
                                         }
                                     }
