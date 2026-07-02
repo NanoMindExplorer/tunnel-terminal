@@ -222,38 +222,46 @@ class ShellExecutor(private val themeHolder: ThemeHolder = ThemeHolder()) {
     /**
      * Hancurkan sesi: kill child process, close fd, reap zombie.
      * Destroy session: kill child, close fd, reap zombie.
+     *
+     * Phase 20: Fix double-close fd. pfd owns the fd via adoptFd,
+     * so ONLY close pfd (not TerminalJni.close + pfd.close).
+     * Also: make destroy non-blocking by closing pfd FIRST to unblock
+     * readLoop's inputStream.read(), then interrupt thread.
      */
     fun destroy() {
         if (!isAlive && masterFd < 0 && childPid < 0 && readThread == null) return
         isAlive = false
-        /* Phase 19.5: Interrupt readLoop thread agar exit dari blocking read().
-         * Tanpa ini, readLoop bisa block di inputStream.read() selama shell masih hidup. */
+
+        /* Phase 20: Close pfd FIRST to unblock readLoop's inputStream.read().
+         * When pfd is closed, read() returns -1, readLoop exits naturally.
+         * This is more reliable than Thread.interrupt() which doesn't unblock
+         * FileInputStream.read() on all platforms. */
+        try {
+            pfd?.close()
+        } catch (_: Exception) {}
+        pfd = null
+
+        /* Now interrupt + join readLoop thread (should exit quickly since pfd closed). */
         try {
             readThread?.interrupt()
-            readThread?.join(500)  /* Tunggu max 500ms */
+            readThread?.join(300)  /* Reduced from 500ms since pfd close should unblock */
         } catch (_: Exception) {}
         readThread = null
+
+        /* Kill child process. */
         try {
             if (childPid > 1) {
-                /* Kirim SIGHUP dulu (sopan), tunggu 100ms, lalu SIGKILL.
-                 * SIGHUP first (polite), wait, then SIGKILL. */
                 TerminalJni.killSession(childPid, 15) // SIGTERM
-                Thread.sleep(100)
+                Thread.sleep(50)  /* Reduced from 100ms */
                 TerminalJni.killSession(childPid, 9)  // SIGKILL + reap
                 childPid = -1
             }
         } catch (e: Exception) {
             Log.w(tag, "killSession error: ${e.message}")
         }
-        try {
-            if (masterFd >= 0) {
-                TerminalJni.close(masterFd)
-                masterFd = -1
-            }
-            pfd?.close()
-            pfd = null
-        } catch (e: Exception) {
-            Log.w(tag, "close fd error: ${e.message}")
-        }
+
+        /* Phase 20: fd already closed via pfd.close() above. Just reset state.
+         * Don't call TerminalJni.close(masterFd) — pfd owns it, double-close bug. */
+        masterFd = -1
     }
 }

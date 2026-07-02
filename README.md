@@ -4,7 +4,7 @@
 
 ![Architecture](https://img.shields.io/badge/Architecture-NDK%20%2B%20Jetpack%20Compose-purple)
 ![AI](https://img.shields.io/badge/AI-Multi%20Provider%20%2B%20Vision-cyan)
-![Version](https://img.shields.io/badge/version-3.2.0--phase19-blue)
+![Version](https://img.shields.io/badge/version-3.3.0--phase20-blue)
 
 ## Fitur Utama
 
@@ -121,6 +121,84 @@ Membutuhkan:
 | **17** | **Major Bug Fix Release** — see below |
 | **18** | **AI Streaming SSE + Multi-turn Memory + Theme Picker** — see below |
 | **19** | **Free AI Provider + Image Vision + File Explorer + Workspace Sessions + Icon Redesign** — see below |
+| **19.5** | **Input Reliability + Mouse Support** (fix: cannot type in terminal) |
+| **20** | **Comprehensive Bug Fix + Compose BOM Upgrade** — see below |
+
+## Phase 20 — Comprehensive Bug Fix Release
+
+Deep audit of all 17 source files (6100+ lines) found 22 bugs. This release fixes 12 critical/high bugs + upgrades Compose BOM.
+
+### Critical Fixes
+
+1. **Cursor double-render** (TerminalUI.kt): Cursor position showed DOUBLE character ("ll" instead of "l" with cursor). Root cause: char appended with normal style THEN appended again with cursor style. Fix: use if/else — cursor style for cursor position, normal style otherwise. Also use theme colors instead of hardcoded white/black.
+
+2. **fd double-close** (ShellExecutor.kt): `ParcelFileDescriptor.adoptFd(masterFd)` takes fd ownership, but `destroy()` called BOTH `TerminalJni.close(masterFd)` AND `pfd?.close()` — double-close on same fd. Fix: only close `pfd` (which owns the fd).
+
+3. **Alt screen restore loses main screen** (TerminalEmulator.kt): Entering alt screen overwrote `screen` reference without saving. Exiting created BLANK screen — vim/less exit showed empty terminal. Fix: save `mainScreen` before entering alt, restore on exit.
+
+4. **destroy() blocks main thread** (MainActivity.kt): `onDestroy()` called `destroy()` on main thread — each tab blocks ~400ms (Thread.sleep + join). 5 tabs = 2s ANR. Fix: run destroy on background thread.
+
+### High Priority Fixes
+
+5. **C++ write() partial write** (native-lib.cpp): `write(fd, bytes, len)` may write less than `len` bytes (especially for large writes or slow PTY). Fix: loop until all bytes written, handle EINTR.
+
+6. **TERM env not set** (native-lib.cpp): `execl("/system/bin/sh")` without setting `TERM` env. TUI apps (vim, htop, less) couldn't detect terminal type → no colors. Fix: `setenv("TERM", "xterm-256color", 1)` + `TERM_PROGRAM` + `HOME` before execl.
+
+7. **Volume keys intercept always** (MainActivity.kt): Volume keys intercepted globally even when AI drawer / editor / file explorer was open. User couldn't adjust media volume. Fix: only intercept when terminal is focused (no overlay open).
+
+8. **runAutoPilot outputBefore index invalid** (MainActivity.kt): `outputBefore` was length-based. If outputBuffer was trimmed (capped at 4000 chars), `substring(outputBefore)` threw `StringIndexOutOfBoundsException`. Fix: capture snapshot String, use `startsWith` + `substring` safely.
+
+9. **auto-error-detection race** (MainActivity.kt): LaunchedEffect could add error-detection message during AI streaming, shifting `streamingIdx`. Fix: guard with `isProcessingAI` + check existing error notification (avoid duplicate).
+
+### Compose BOM Upgrade
+
+10. **compose-bom: 2023.08.00 → 2024.02.00** (build.gradle.kts):
+    - material3 1.1.1 → 1.2.0+ (HorizontalDivider available, better stability)
+    - Security patches
+    - Performance improvements
+
+### destroy() Reliability
+
+11. **destroy() order fix** (ShellExecutor.kt): Old order: interrupt thread → kill child → close fd. Problem: `Thread.interrupt()` doesn't unblock `FileInputStream.read()` on all platforms. Fix: close pfd FIRST (unblocks read() → readLoop exits naturally) → then interrupt + join (300ms) → then kill child.
+
+12. **Reduced destroy() blocking time**: Thread.sleep(100) → 50ms, join(500) → 300ms. Combined with pfd-close-first, destroy is now ~350ms per tab (was ~600ms).
+
+### Files Changed (Phase 20)
+- **MODIFIED**: `native-lib.cpp` — TERM env + write() partial write loop
+- **MODIFIED**: `TerminalEmulator.kt` — alt screen save/restore (mainScreen field)
+- **MODIFIED**: `ShellExecutor.kt` — destroy() order fix + no double-close
+- **MODIFIED**: `MainActivity.kt` — volume keys focus guard + onDestroy async + runAutoPilot snapshot + auto-error guard
+- **MODIFIED**: `TerminalUI.kt` — cursor if/else (no double-render) + theme cursor colors
+- **MODIFIED**: `build.gradle.kts` — compose-bom upgrade + version bump
+- **MODIFIED**: `README.md` — Phase 20 section
+
+### Version
+- `versionCode`: 6 → 7
+- `versionName`: `3.2.0-phase19-providers-vision-explorer` → `3.3.0-phase20-comprehensive-fix`
+
+### Bugs Found But Deferred
+- Thread safety: `emulator.screen` + `outputBuffer` accessed from readLoop + main without synchronization. Fix requires copy-on-read or lock — complex, deferred to Phase 21.
+- `writeRaw`/`clearScreen` not synchronized (concurrent JNI writes from main + background).
+- `AIAgent.askAI` (non-streaming) is dead code — still exists but not called.
+- `isAlive` uses `kill(pid, 0)` which has PID recycling risk.
+
+---
+
+## Phase 19.5 — Input Reliability + Mouse Support
+
+User reported: cannot type anything in terminal (since pre-Phase 17). Deep audit found 21 bugs in input handling. This release fixes the critical input bugs + adds mouse support.
+
+Key fixes:
+- BasicTextField delta tracking (IME confused by value reset)
+- FocusRequester auto-focus on tab switch
+- handleKeyEvent() handles ALL special keys at KeyDown (prevent double-fire)
+- Physical keyboard: Enter, Backspace, Tab, Arrows, Home/End, PageUp/Down, Delete, F1-F4, Ctrl+key combos, Alt+key
+- Mouse: tap-to-focus, scroll wheel
+- Per-tab input buffer (currentCommandBuffer moved to ShellExecutor)
+- TerminalEmulator partial ANSI sequence handling (pendingBuffer)
+- ShellExecutor: readThread tracking + interrupt, close FileInputStream, flush emulator
+
+---
 
 ## Phase 19 — Free AI Provider + Image Vision + File Explorer + Workspace Sessions
 

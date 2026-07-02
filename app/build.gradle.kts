@@ -11,9 +11,9 @@ android {
         applicationId = "com.tunnel.terminal"
         minSdk = 24
         targetSdk = 34
-        // Phase 19: Free AI Provider + Image Vision + File Explorer + Workspace Sessions
-        versionCode = 6
-        versionName = "3.2.0-phase19-providers-vision-explorer"
+        // Phase 20: Comprehensive Bug Fix + Compose BOM Upgrade
+        versionCode = 7
+        versionName = "3.3.0-phase20-comprehensive-fix"
     }
 
     buildTypes {
@@ -54,7 +54,10 @@ dependencies {
     implementation("androidx.core:core-ktx:1.12.0")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.6.2")
     implementation("androidx.activity:activity-compose:1.8.0")
-    implementation(platform("androidx.compose:compose-bom:2023.08.00"))
+    /* Phase 20: Upgrade compose-bom from 2023.08.00 to 2024.02.00
+     * - material3 1.1.1 -> 1.2.0+ (HorizontalDivider available, security fixes)
+     * - Better stability + performance */
+    implementation(platform("androidx.compose:compose-bom:2024.02.00"))
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-graphics")
     implementation("androidx.compose.material3:material3")

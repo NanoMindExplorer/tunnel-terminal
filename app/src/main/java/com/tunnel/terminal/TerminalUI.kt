@@ -227,24 +227,32 @@ fun TerminalScreenView(
                 val annotatedString = buildAnnotatedString {
                     for (col in 0 until emulator.cols) {
                         val cell = emulator.getScreen()[row][col]
-                        val bgColor = if (cell.reverse) cell.fgColor else cell.bgColor
-                        val fgColor = if (cell.reverse) cell.bgColor else cell.fgColor
+                        val isCursor = emulator.isCursorVisible && row == emulator.cursorRow && col == emulator.cursorCol
 
-                        val style = SpanStyle(
-                            color = fgColor,
-                            background = bgColor,
-                            fontFamily = FontFamily.Monospace,
-                            fontWeight = if (cell.bold) FontWeight.Bold else FontWeight.Normal,
-                            fontStyle = if (cell.italic) FontStyle.Italic else FontStyle.Normal,
-                            textDecoration = if (cell.underline) androidx.compose.ui.text.style.TextDecoration.Underline else androidx.compose.ui.text.style.TextDecoration.None
-                        )
-                        withStyle(style) { append(cell.char) }
-
-                        /* Render cursor block pada posisi cursor. Cursor block. */
-                        if (emulator.isCursorVisible && row == emulator.cursorRow && col == emulator.cursorCol) {
-                            withStyle(SpanStyle(background = Color.White, color = Color.Black)) {
-                                append(cell.char)
-                            }
+                        /* Phase 20: Fix cursor double-render.
+                         * Old code appended char with normal style THEN appended again
+                         * with cursor style -> double character at cursor position.
+                         * Fix: if cursor position, use cursor style; else normal style. */
+                        if (isCursor) {
+                            /* Cursor: invert colors (white bg, black fg). */
+                            withStyle(SpanStyle(
+                                background = theme.cursor,
+                                color = theme.background,
+                                fontFamily = FontFamily.Monospace,
+                                fontWeight = if (cell.bold) FontWeight.Bold else FontWeight.Normal,
+                                fontStyle = if (cell.italic) FontStyle.Italic else FontStyle.Normal
+                            )) { append(cell.char) }
+                        } else {
+                            val bgColor = if (cell.reverse) cell.fgColor else cell.bgColor
+                            val fgColor = if (cell.reverse) cell.bgColor else cell.fgColor
+                            withStyle(SpanStyle(
+                                color = fgColor,
+                                background = bgColor,
+                                fontFamily = FontFamily.Monospace,
+                                fontWeight = if (cell.bold) FontWeight.Bold else FontWeight.Normal,
+                                fontStyle = if (cell.italic) FontStyle.Italic else FontStyle.Normal,
+                                textDecoration = if (cell.underline) androidx.compose.ui.text.style.TextDecoration.Underline else androidx.compose.ui.text.style.TextDecoration.None
+                            )) { append(cell.char) }
                         }
                     }
                 }

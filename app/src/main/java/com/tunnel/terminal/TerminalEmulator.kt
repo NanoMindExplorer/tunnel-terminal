@@ -584,24 +584,39 @@ class TerminalEmulator(private val themeHolder: ThemeHolder = ThemeHolder()) {
         currentReverse = false
     }
 
+    /**
+     * Main screen buffer (saved saat entering alt screen, restored saat exiting).
+     * Phase 20: Fix alt screen restore losing main screen content.
+     */
+    private var mainScreen: Array<Array<TerminalCell>>? = null
+
     private fun handlePrivateMode(params: List<Int>, set: Boolean) {
         params.forEach { mode ->
             when (mode) {
                 /* Alternate screen buffer */
                 1049, 1047, 1048 -> {
                     if (set) {
-                        /* Simpan cursor + masuk alt screen. Save cursor + enter alt. */
+                        /* Phase 20: Save main screen BEFORE switching to alt.
+                         * Old code overwrote screen ref without saving -> main content lost. */
+                        if (!inAltScreen) {
+                            mainScreen = screen
+                        }
                         if (altScreen == null) altScreen = Array(rows) { Array(cols) { TerminalCell() } }
-                        inAltScreen = true
+                        /* Clear alt screen. */
                         for (r in 0 until rows) {
                             for (c in 0 until cols) altScreen!![r][c] = TerminalCell()
                         }
+                        inAltScreen = true
                         screen = altScreen!!
                         cursorRow = 0; cursorCol = 0
                     } else {
-                        /* Kembali ke main screen. Restore main screen. */
+                        /* Phase 20: Restore main screen (was creating blank screen). */
                         inAltScreen = false
-                        screen = Array(rows) { Array(cols) { TerminalCell() } }
+                        screen = mainScreen ?: Array(rows) { Array(cols) { TerminalCell() } }
+                        mainScreen = null
+                        /* Note: cursor position not restored (1048 handles that separately).
+                         * 1049 = save cursor + switch; 1047 = switch only; 1048 = save cursor only.
+                         * Simplifikasi: reset cursor on exit. */
                         cursorRow = 0; cursorCol = 0
                     }
                 }

@@ -417,22 +417,37 @@ class MainActivity : ComponentActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
-        shellExecutors.forEach { it.destroy() }
+        /* Phase 20: destroy() blocks (Thread.sleep + join). Run on background thread
+         * to avoid ANR. Old code: forEach on main thread = 5 tabs × 400ms = 2s ANR. */
+        Thread {
+            shellExecutors.toList().forEach { it.destroy() }
+        }.start()
         stopService(Intent(this, TerminalForegroundService::class.java))
     }
 
     /* ─── Volume key command history navigation (per-active-executor) ─── */
+    /* Phase 20: Only intercept volume keys when terminal is focused
+     * (not when AI drawer / editor / file explorer is open).
+     * Old code intercepted ALL volume keys globally — annoying when
+     * user wants to adjust media volume in other contexts. */
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
-        if (keyCode == KeyEvent.KEYCODE_VOLUME_UP) {
-            navigateHistory(forward = false); return true
-        } else if (keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) {
-            navigateHistory(forward = true); return true
+        /* Only intercept volume keys when no overlay is open. */
+        val terminalFocused = editingFile == null && !showFileExplorer && !showWorkspaceDrawer
+        if (terminalFocused) {
+            if (keyCode == KeyEvent.KEYCODE_VOLUME_UP) {
+                navigateHistory(forward = false); return true
+            } else if (keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) {
+                navigateHistory(forward = true); return true
+            }
         }
         return super.onKeyDown(keyCode, event)
     }
 
     override fun onKeyUp(keyCode: Int, event: KeyEvent?): Boolean {
-        if (keyCode == KeyEvent.KEYCODE_VOLUME_UP || keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) return true
+        val terminalFocused = editingFile == null && !showFileExplorer && !showWorkspaceDrawer
+        if (terminalFocused) {
+            if (keyCode == KeyEvent.KEYCODE_VOLUME_UP || keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) return true
+        }
         return super.onKeyUp(keyCode, event)
     }
 
@@ -586,14 +601,22 @@ class MainActivity : ComponentActivity() {
             val tabsData = shellExecutors.mapIndexed { index, executor -> Pair(executor.id, index + 1) }
             var hiddenInput by remember { mutableStateOf("") }
 
-            /* Deteksi error di output terakhir (debounced). */
+            /* Phase 20: Deteksi error di output terakhir (debounced).
+             * Guard dengan isProcessingAI flag + check apakah message error-detection
+             * sudah ada (avoid spam). Old code bisa race dengan handleAIPrompt
+             * yang menambah streamingMsg — streamingIdx shift. */
             LaunchedEffect(activeExecutor.id, activeExecutor.lastCommandOutput.value) {
+                /* Skip jika AI sedang processing (streaming atau non-streaming). */
+                if (isProcessingAI) return@LaunchedEffect
                 val lastOut = activeExecutor.getCleanOutput().lowercase()
                 val hasError = lastOut.contains("error") || lastOut.contains("not found") ||
                                lastOut.contains("no such file") || lastOut.contains("permission denied")
-                if (hasError && !isProcessingAI) {
-                    val lastMsg = chatMessages.lastOrNull()
-                    if (lastMsg?.role != "assistant" || !lastMsg.content.contains("mendeteksi error")) {
+                if (hasError) {
+                    /* Cek apakah message error-detection sudah ada (avoid duplicate). */
+                    val hasExistingErrorNotification = chatMessages.any {
+                        it.role == "assistant" && it.content.contains("mendeteksi error")
+                    }
+                    if (!hasExistingErrorNotification) {
                         chatMessages.add(ChatMessage(
                             "assistant",
                             "⚠️ Saya mendeteksi error di terminal. Klik 🛠 untuk minta solusi, " +
@@ -1008,13 +1031,15 @@ class MainActivity : ComponentActivity() {
             val cmd = commands[i]
             chatMessages.add(ChatMessage("assistant", "▶ [${i + 1}/${commands.size}] Menjalankan: $cmd", false))
 
-            /* Capture output sebelum perintah untuk deteksi delta. */
-            val outputBefore = activeExecutor.getCleanOutput().length
+            /* Phase 20: Capture output snapshot SEBELUM perintah untuk deteksi delta.
+             * Simpan snapshot String (bukan length) agar tahan terhadap buffer trim.
+             * Old code: simpan length, substring(length) -> crash jika buffer di-trim
+             * (capped at 4000 chars, outputBefore > current length). */
+            val outputBefore = activeExecutor.getCleanOutput()
             activeExecutor.executeCommand(cmd)
 
-            /* Tunggu sampai prompt shell muncul kembali (timeout 15s).
-             * Wait for shell prompt to reappear (15s timeout). */
-            val ok = waitForPrompt(activeExecutor, outputBefore, timeoutMs = 15000)
+            /* Tunggu sampai prompt shell muncul kembali (timeout 15s). */
+            val ok = waitForPrompt(activeExecutor, outputBefore.length, timeoutMs = 15000)
             if (!ok) {
                 chatMessages.add(ChatMessage(
                     "assistant",
@@ -1024,8 +1049,16 @@ class MainActivity : ComponentActivity() {
                 return
             }
 
-            /* Deteksi error di output baru. */
-            val newOutput = activeExecutor.getCleanOutput().substring(outputBefore)
+            /* Phase 20: Deteksi error di output baru. Bandingkan dengan snapshot
+             * string, bukan substring(length) yang bisa out of bounds. */
+            val outputAfter = activeExecutor.getCleanOutput()
+            val newOutput = if (outputAfter.length > outputBefore.length && outputAfter.startsWith(outputBefore)) {
+                /* Normal case: output appended. */
+                outputAfter.substring(outputBefore.length)
+            } else {
+                /* Buffer was trimmed or changed — just use full output. */
+                outputAfter
+            }
             val lower = newOutput.lowercase()
             val hasError = lower.contains("error") || lower.contains("not found") ||
                            lower.contains("no such file") || lower.contains("permission denied") ||

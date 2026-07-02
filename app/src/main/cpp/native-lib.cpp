@@ -40,6 +40,15 @@ Java_com_tunnel_terminal_TerminalJni_createSession(JNIEnv *env, jobject thiz,
     if (pid == 0) {
         /* Proses Anak - jalankan shell Android.
          * Child process - exec Android shell. */
+
+        /* Phase 20: Set TERM env agar TUI apps (vim, htop, less) tahu
+         * terminal type. Tanpa ini, beberapa TUI apps tidak render color.
+         * Set TERM env so TUI apps know terminal type. */
+        setenv("TERM", "xterm-256color", 1);
+        setenv("TERM_PROGRAM", "tunnel-terminal", 1);
+        /* Set HOME ke app home agar shell config (.profile, .bashrc) bisa load. */
+        setenv("HOME", "/data/data/com.tunnel.terminal/files/home", 1);
+
         execl("/system/bin/sh", "sh", NULL);
         /* Jika execl gagal */
         LOGE("execl() gagal: %s", strerror(errno));
@@ -87,9 +96,21 @@ Java_com_tunnel_terminal_TerminalJni_write(JNIEnv *env, jobject thiz,
     }
     jsize len = env->GetArrayLength(data);
     if (len > 0) {
-        ssize_t written = write(fd, bytes, len);
-        if (written < 0) {
-            LOGE("write() ke fd=%d gagal: %s", fd, strerror(errno));
+        /* Phase 20: Loop untuk handle partial writes.
+         * write() may write less than requested (especially for large writes
+         * or slow PTY). Loop until all bytes written or error.
+         *
+         * Handle partial writes — write() may not write everything in one call. */
+        jsize offset = 0;
+        while (offset < len) {
+            ssize_t written = write(fd, bytes + offset, len - offset);
+            if (written < 0) {
+                if (errno == EINTR) continue;  /* Signal interrupted, retry. */
+                LOGE("write() ke fd=%d gagal: %s", fd, strerror(errno));
+                break;
+            }
+            if (written == 0) break;  /* Shouldn't happen for PTY, but guard. */
+            offset += written;
         }
     }
     env->ReleaseByteArrayElements(data, bytes, 0);
