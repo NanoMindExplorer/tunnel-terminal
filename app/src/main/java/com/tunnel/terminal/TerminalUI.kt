@@ -53,6 +53,9 @@ fun TabBar(
     onOpenSsh: () -> Unit = {},
     onToggleSplit: () -> Unit = {},
     isSplitMode: Boolean = false,
+    onOpenPalette: () -> Unit = {},
+    onToggleBlockMode: () -> Unit = {},
+    isBlockMode: Boolean = false,
     theme: TerminalTheme = ThemeManager.defaultTheme
 ) {
     LazyRow(
@@ -100,6 +103,18 @@ fun TabBar(
         item {
             Box(modifier = Modifier.background(if (isSplitMode) theme.uiAccent else theme.uiSurface, RoundedCornerShape(4.dp)).clickable { onToggleSplit() }.padding(horizontal = 10.dp, vertical = 10.dp)) {
                 Text("⬡", color = theme.uiText, fontSize = 12.sp)
+            }
+        }
+        /* Phase 22: Block mode toggle (Warp-style block terminal). */
+        item {
+            Box(modifier = Modifier.background(if (isBlockMode) theme.uiAccent else theme.uiSurface, RoundedCornerShape(4.dp)).clickable { onToggleBlockMode() }.padding(horizontal = 10.dp, vertical = 10.dp)) {
+                Text("⊞", color = theme.uiText, fontSize = 12.sp)
+            }
+        }
+        /* Phase 22: Command palette (Ctrl+K). */
+        item {
+            Box(modifier = Modifier.background(theme.uiSurface, RoundedCornerShape(4.dp)).clickable { onOpenPalette() }.padding(horizontal = 10.dp, vertical = 10.dp)) {
+                Text("⌘K", color = theme.uiAccent, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
             }
         }
         item {
@@ -458,7 +473,8 @@ fun AIChatPanel(
                         fontSize = 14.sp,
                         fontFamily = FontFamily.Monospace
                     )
-                    /* Content - tambahkan cursor blink jika streaming. */
+                    /* Content - tambahkan cursor blink jika streaming.
+                     * Phase 22: AI messages render as markdown (headers, code blocks, lists). */
                     val displayContent = if (msg.isStreaming && cursorBlink) {
                         msg.content + "▋"
                     } else if (msg.isStreaming) {
@@ -466,13 +482,23 @@ fun AIChatPanel(
                     } else {
                         msg.content
                     }
-                    Text(
-                        displayContent,
-                        color = if (msg.isError) Color(0xFFFF8A80) else theme.uiText,
-                        fontSize = 14.sp,
-                        fontFamily = FontFamily.Monospace,
-                        modifier = Modifier.padding(bottom = 8.dp)
-                    )
+                    if (msg.role == "assistant" && !msg.isStreaming && !msg.isError) {
+                        /* Phase 22: Markdown rendering untuk AI responses. */
+                        MarkdownText(
+                            markdown = displayContent,
+                            theme = theme,
+                            fontSize = 13,
+                            modifier = Modifier.padding(bottom = 8.dp).fillMaxWidth()
+                        )
+                    } else {
+                        Text(
+                            displayContent,
+                            color = if (msg.isError) Color(0xFFFF8A80) else theme.uiText,
+                            fontSize = 14.sp,
+                            fontFamily = FontFamily.Monospace,
+                            modifier = Modifier.padding(bottom = 8.dp)
+                        )
+                    }
                     /* Command buttons. */
                     if (msg.commands.size > 1 && !msg.isStreaming) {
                         Text(

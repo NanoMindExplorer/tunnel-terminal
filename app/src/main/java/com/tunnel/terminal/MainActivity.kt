@@ -17,6 +17,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -102,6 +104,17 @@ class MainActivity : ComponentActivity() {
     private var splitMode by mutableStateOf(false)
     /** Phase 21: Second pane session ID (for split mode). */
     private var splitPaneId by mutableStateOf(0)
+    /** Phase 22: Command palette (Ctrl+K) visibility. */
+    private var showCommandPalette by mutableStateOf(false)
+    /** Phase 22: Block mode (Warp-style block terminal) toggle. */
+    private var blockMode by mutableStateOf(false)
+    /** Phase 22: Block manager per active session. */
+    private val blockManager = BlockManager()
+    /** Phase 22: AI tool call pending permission. */
+    private var pendingToolCall by mutableStateOf<AiToolCall?>(null)
+    /** Phase 22: Tool executor + permission manager. */
+    private lateinit var toolExecutor: ToolExecutor
+    private lateinit var permissionManager: PermissionManager
     /** Phase 19: Available models dari fetch /models. */
     private val availableModels = mutableStateListOf<ModelInfo>()
     private var isLoadingModels by mutableStateOf(false)
@@ -161,6 +174,8 @@ class MainActivity : ComponentActivity() {
         storageManager = StorageManager(this)
         workspaceManager = WorkspaceManager(this)
         workspaceSessions.addAll(workspaceManager.sessions)
+        toolExecutor = ToolExecutor(this)
+        permissionManager = PermissionManager(this)
         loadAISettings()
         loadTheme()
 
@@ -205,6 +220,52 @@ class MainActivity : ComponentActivity() {
     private fun clearChat() {
         chatMessages.clear()
         pendingImages.clear()
+    }
+
+    /* ─── Phase 22: AI Tool Call Execution ─── */
+
+    /**
+     * Process AI response untuk detect tool calls.
+     * Jika ada destructive tool call → set pendingToolCall (trigger permission dialog).
+     * Jika read-only → execute langsung.
+     * Returns true jika ada tool call yang diproses.
+     *
+     * Detect tool calls in AI response, execute with permission flow.
+     */
+    private fun processToolCalls(response: String): Boolean {
+        val calls = AiToolCall.parseFromResponse(response)
+        if (calls.isEmpty()) return false
+
+        for (call in calls) {
+            if (permissionManager.isApproved(call)) {
+                /* Read-only atau pre-approved — execute langsung. */
+                executeToolCall(call, alwaysAllow = permissionManager.getPermission(call.tool) == PermissionManager.PermissionState.ALWAYS_ALLOW)
+            } else if (permissionManager.needsPrompt(call)) {
+                /* Destructive + needs permission — trigger dialog. */
+                pendingToolCall = call
+                return true  /* Stop processing, wait for user permission. */
+            } else {
+                /* Always deny. */
+                chatMessages.add(ChatMessage("assistant", "Permission denied (always) for: ${call.displayText}", false, isError = true))
+            }
+        }
+        return true
+    }
+
+    /** Execute single tool call. */
+    private fun executeToolCall(call: AiToolCall, alwaysAllow: Boolean) {
+        chatMessages.add(ChatMessage("assistant", "🔧 Tool: ${call.displayText}", false))
+
+        when (call.tool) {
+            "run_command" -> {
+                val cmd = call.args["cmd"] ?: return
+                shellExecutors.find { it.id == activeExecutorId }?.executeCommand(cmd)
+            }
+            else -> {
+                val result = toolExecutor.execute(call)
+                chatMessages.add(ChatMessage("assistant", "📋 Result:\n$result", false))
+            }
+        }
     }
 
     /* ─── Phase 19: AI Provider Model Fetcher ─── */
@@ -522,6 +583,65 @@ class MainActivity : ComponentActivity() {
                     }
                 },
                 theme = currentTheme
+            )
+        }
+
+        /* Phase 22: Command Palette (Ctrl+K). */
+        if (showCommandPalette) {
+            val paletteItems = buildList {
+                /* AI actions. */
+                add(PaletteItem("ai_explain", "Ask AI to explain last output", "AI", Icons.Default.Psychology, PaletteCategory.AI) { scope.launch { handleAIPrompt("Jelaskan output terminal terakhir."); drawerState.open() } })
+                add(PaletteItem("ai_fix", "Ask AI to fix errors", "AI", Icons.Default.Build, PaletteCategory.AI) { scope.launch { handleAIPrompt("Perbaiki error di terminal."); drawerState.open() } })
+                add(PaletteItem("ai_autopilot", "Open AI Auto-Pilot", "AI", Icons.Default.SmartToy, PaletteCategory.AI) { scope.launch { drawerState.open() } })
+                /* Navigation. */
+                add(PaletteItem("new_tab", "New tab", "Navigation", Icons.Default.Add, PaletteCategory.NAVIGATION) { lifecycleScope.launch { createNewTab() } })
+                add(PaletteItem("close_tab", "Close current tab", "Navigation", Icons.Default.Close, PaletteCategory.NAVIGATION) { closeTab(activeExecutorId) })
+                add(PaletteItem("toggle_split", "Toggle split pane", "Navigation", Icons.Default.ViewColumn, PaletteCategory.NAVIGATION) { splitMode = !splitMode })
+                add(PaletteItem("toggle_block", "Toggle block mode", "Navigation", Icons.Default.ViewModule, PaletteCategory.NAVIGATION) {
+                    blockMode = !blockMode
+                    if (blockMode) {
+                        shellExecutors.find { it.id == activeExecutorId }?.let { blockManager.parseFromOutput(it.getCleanOutput()) }
+                    }
+                })
+                /* Settings. */
+                add(PaletteItem("open_settings", "Open AI Settings", "Setting", Icons.Default.Settings, PaletteCategory.SETTING) { scope.launch { drawerState.open() } })
+                add(PaletteItem("open_file_explorer", "Open File Explorer", "Setting", Icons.Default.Folder, PaletteCategory.SETTING) { showFileExplorer = true })
+                add(PaletteItem("open_workspace", "Workspace Sessions", "Setting", Icons.Default.Save, PaletteCategory.SETTING) { showWorkspaceDrawer = true })
+                add(PaletteItem("open_ssh", "SSH Connect", "Setting", Icons.Default.Cloud, PaletteCategory.SETTING) { showSshDialog = true })
+                /* Commands. */
+                add(PaletteItem("cmd_ls", "Run: ls -la", "Command", Icons.Default.Terminal, PaletteCategory.COMMAND) { shellExecutors.find { it.id == activeExecutorId }?.executeCommand("ls -la") })
+                add(PaletteItem("cmd_pwd", "Run: pwd", "Command", Icons.Default.Terminal, PaletteCategory.COMMAND) { shellExecutors.find { it.id == activeExecutorId }?.executeCommand("pwd") })
+                add(PaletteItem("cmd_clear", "Run: clear", "Command", Icons.Default.Clear, PaletteCategory.COMMAND) { shellExecutors.find { it.id == activeExecutorId }?.clearScreen() })
+                add(PaletteItem("cmd_help", "Run: help", "Command", Icons.Default.Help, PaletteCategory.COMMAND) { shellExecutors.find { it.id == activeExecutorId }?.executeCommand("help") })
+            }
+            val recentCmds = shellExecutors.find { it.id == activeExecutorId }?.commandHistory?.reversed() ?: emptyList()
+            CommandPalette(
+                theme = currentTheme,
+                items = paletteItems,
+                recentCommands = recentCmds,
+                onExecute = { it.action() },
+                onDismiss = { showCommandPalette = false }
+            )
+        }
+
+        /* Phase 22: AI Tool Call Permission Dialog. */
+        pendingToolCall?.let { call ->
+            PermissionDialog(
+                call = call,
+                theme = currentTheme,
+                onAllow = {
+                    executeToolCall(call, alwaysAllow = false)
+                    pendingToolCall = null
+                },
+                onAlwaysAllow = {
+                    permissionManager.setPermission(call.tool, PermissionManager.PermissionState.ALWAYS_ALLOW)
+                    executeToolCall(call, alwaysAllow = true)
+                    pendingToolCall = null
+                },
+                onDeny = {
+                    chatMessages.add(ChatMessage("assistant", "Permission denied for: ${call.displayText}", false, isError = true))
+                    pendingToolCall = null
+                }
             )
         }
 
@@ -875,6 +995,16 @@ class MainActivity : ComponentActivity() {
                             }
                         },
                         isSplitMode = splitMode,
+                        onOpenPalette = { showCommandPalette = true },
+                        onToggleBlockMode = {
+                            blockMode = !blockMode
+                            if (blockMode) {
+                                /* Parse current terminal output ke blocks. */
+                                val activeExec = shellExecutors.find { it.id == activeExecutorId }
+                                activeExec?.let { blockManager.parseFromOutput(it.getCleanOutput()) }
+                            }
+                        },
+                        isBlockMode = blockMode,
                         theme = currentTheme
                     )
 
@@ -939,6 +1069,23 @@ class MainActivity : ComponentActivity() {
                                 }
                             }
                         }
+                    } else if (blockMode) {
+                        /* Phase 22: Block mode (Warp-style block terminal). */
+                        BlockTerminalView(
+                            blocks = blockManager.blocks,
+                            theme = currentTheme,
+                            onBlockClick = { /* TODO: navigate to block */ },
+                            onBlockRerun = { block ->
+                                shellExecutors.find { it.id == activeExecutorId }?.executeCommand(block.command)
+                            },
+                            onBlockExplain = { block ->
+                                scope.launch {
+                                    handleAIPrompt("Jelaskan output dari command ini:\n$ ${block.command}\n${block.output}")
+                                    drawerState.open()
+                                }
+                            },
+                            onToggleCollapse = { id -> blockManager.toggleCollapse(id) }
+                        )
                     } else {
                         /* Normal mode: single terminal (existing logic). */
                         Box(modifier = Modifier.weight(1f)) {
@@ -1335,6 +1482,10 @@ class MainActivity : ComponentActivity() {
                     isStreaming = false
                 )
             }
+
+            /* Phase 22: Process AI tool calls (function calling).
+             * Parse <tool_call> dari response, execute dengan permission flow. */
+            processToolCalls(response)
         } catch (e: Exception) {
             /* Stream cancelled or error mid-stream. Keep partial content + mark as error. */
             val partial = fullResponse.toString()

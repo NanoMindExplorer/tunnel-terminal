@@ -11,9 +11,9 @@ android {
         applicationId = "com.tunnel.terminal"
         minSdk = 24
         targetSdk = 34
-        // Phase 21: Thread Safety + SSH Client + Syntax Highlighting + Split Pane
-        versionCode = 8
-        versionName = "4.0.0-phase21-ssh-syntax-split"
+        // Phase 22: AI-Native Terminal Revolution (blocks, palette, tool calls, markdown)
+        versionCode = 9
+        versionName = "4.1.0-phase22-ai-native-revolution"
     }
 
     buildTypes {
