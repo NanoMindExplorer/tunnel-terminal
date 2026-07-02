@@ -14,6 +14,7 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material3.*
@@ -750,6 +751,17 @@ class MainActivity : ComponentActivity() {
                 return char.toString()
             }
 
+            /** Map Compose Key to char untuk Alt+key handling.
+             * Phase 21 hotfix: Dipindahkan SEBELUM handleKeyEvent (forward reference
+             * tidak allowed untuk local functions di Kotlin). */
+            fun keyToChar(key: Key, shift: Boolean): Char {
+                val name = key.toString().lowercase()
+                if (name.length == 1 && name[0] in 'a'..'z') {
+                    return if (shift) name[0].uppercaseChar() else name[0]
+                }
+                return '\u0000'
+            }
+
             /**
              * Phase 19.5: Handle physical key event dari keyboard/mouse.
              * Returns true jika event di-consume, false untuk fallback ke BasicTextField.
@@ -834,15 +846,6 @@ class MainActivity : ComponentActivity() {
                 /* Regular character keys (a-z, 0-9, symbols) — fallback to BasicTextField.
                  * BasicTextField.onValueChange akan handle via commitText dari IME. */
                 return false
-            }
-
-            /** Map Compose Key to char untuk Alt+key handling. */
-            fun keyToChar(key: Key, shift: Boolean): Char {
-                val name = key.toString().lowercase()
-                if (name.length == 1 && name[0] in 'a'..'z') {
-                    return if (shift) name[0].uppercaseChar() else name[0]
-                }
-                return '\u0000'
             }
 
             Box(modifier = Modifier.fillMaxSize()) {
@@ -1106,7 +1109,7 @@ class MainActivity : ComponentActivity() {
         ==========================================
     """.trimIndent()
 
-    private fun resolveAndOpen(fileName: String, executor: ShellExecutor) {
+    private fun resolveAndOpen(fileName: String, executor: TerminalSession) {
         /* Cari file di beberapa lokasi: absolute, ~/home, app filesDir.
          * Search: absolute, ~/home, app filesDir. */
         val candidates = listOf(

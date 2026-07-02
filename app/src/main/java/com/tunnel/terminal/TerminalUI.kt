@@ -17,9 +17,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.key.*
-import androidx.compose.ui.input.pointer.PointerEvent
-import androidx.compose.ui.input.pointer.awaitPointerEvent
-import androidx.compose.ui.input.pointer.awaitPointerEventScope
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.text.AnnotatedString
@@ -197,29 +194,12 @@ fun TerminalScreenView(
                     onResize(newRows, newCols, fontSize)
                 }
             }
-            /* Phase 19.5: Tap-to-focus (untuk show soft keyboard). */
+            /* Phase 19.5/21 hotfix: Tap-to-focus (untuk show soft keyboard).
+             * Mouse scroll wheel handled otomatis oleh verticalScroll di Column bawah. */
             .pointerInput(Unit) {
                 detectTapGestures(
                     onTap = { _ -> onTap() }
                 )
-            }
-            /* Phase 19.5: Mouse scroll wheel support. */
-            .pointerInput(Unit) {
-                awaitPointerEventScope {
-                    while (true) {
-                        val event = awaitPointerEvent()
-                        val scrollDelta = event.changes
-                            .filter { it.scrollDelta.y != 0.0f }
-                            .sumOf { it.scrollDelta.y.toDouble() }
-                            .toFloat()
-                        if (scrollDelta != 0f) {
-                            onScroll(scrollDelta)
-                            /* Scroll internal state (mouse wheel = 20px per notch). */
-                            scrollState.dispatchRawDelta(scrollDelta * 20)
-                            event.changes.forEach { it.consume() }
-                        }
-                    }
-                }
             }
             /* Phase 19.5: Pinch-to-zoom (tetap dipertahankan). */
             .pointerInput(Unit) {

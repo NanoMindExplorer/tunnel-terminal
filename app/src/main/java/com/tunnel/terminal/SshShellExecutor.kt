@@ -182,7 +182,7 @@ class SshShellExecutor(
         }
         val buffer = ByteArray(4096)
 
-        var bytesRead: Int
+        var bytesRead: Int = 0
         try {
             while (isAlive && inputStream.read(buffer).also { bytesRead = it } != -1) {
                 if (!isAlive) break

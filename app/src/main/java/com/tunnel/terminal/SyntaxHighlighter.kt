@@ -110,13 +110,13 @@ object SyntaxHighlighter {
         val typeRegex = Regex("\\b([A-Z][A-Za-z0-9_]*)\\b")
 
         highlightWithRegexes(text, this, listOf(
-            Triple(commentRegex, SpanStyle(color = colors.comment, fontStyle = FontStyle.Italic)),
-            Triple(stringRegex, SpanStyle(color = colors.string)),
-            Triple(annotationRegex, SpanStyle(color = colors.annotation)),
-            Triple(keywordRegex, SpanStyle(color = colors.keyword, fontWeight = FontWeight.Bold)),
-            Triple(numberRegex, SpanStyle(color = colors.number)),
-            Triple(typeRegex, SpanStyle(color = colors.type)),
-            Triple(functionRegex, SpanStyle(color = colors.function))
+            Pair(commentRegex, SpanStyle(color = colors.comment, fontStyle = FontStyle.Italic)),
+            Pair(stringRegex, SpanStyle(color = colors.string)),
+            Pair(annotationRegex, SpanStyle(color = colors.annotation)),
+            Pair(keywordRegex, SpanStyle(color = colors.keyword, fontWeight = FontWeight.Bold)),
+            Pair(numberRegex, SpanStyle(color = colors.number)),
+            Pair(typeRegex, SpanStyle(color = colors.type)),
+            Pair(functionRegex, SpanStyle(color = colors.function))
         ), colors.plain)
     }
 
@@ -137,12 +137,12 @@ object SyntaxHighlighter {
         val decoratorRegex = Regex("@[A-Za-z_][A-Za-z0-9_.]*")
 
         highlightWithRegexes(text, this, listOf(
-            Triple(commentRegex, SpanStyle(color = colors.comment, fontStyle = FontStyle.Italic)),
-            Triple(stringRegex, SpanStyle(color = colors.string)),
-            Triple(decoratorRegex, SpanStyle(color = colors.annotation)),
-            Triple(keywordRegex, SpanStyle(color = colors.keyword, fontWeight = FontWeight.Bold)),
-            Triple(numberRegex, SpanStyle(color = colors.number)),
-            Triple(functionRegex, SpanStyle(color = colors.function))
+            Pair(commentRegex, SpanStyle(color = colors.comment, fontStyle = FontStyle.Italic)),
+            Pair(stringRegex, SpanStyle(color = colors.string)),
+            Pair(decoratorRegex, SpanStyle(color = colors.annotation)),
+            Pair(keywordRegex, SpanStyle(color = colors.keyword, fontWeight = FontWeight.Bold)),
+            Pair(numberRegex, SpanStyle(color = colors.number)),
+            Pair(functionRegex, SpanStyle(color = colors.function))
         ), colors.plain)
     }
 
@@ -165,12 +165,12 @@ object SyntaxHighlighter {
         val decoratorRegex = Regex("@[A-Za-z_][A-Za-z0-9_]*")
 
         highlightWithRegexes(text, this, listOf(
-            Triple(commentRegex, SpanStyle(color = colors.comment, fontStyle = FontStyle.Italic)),
-            Triple(stringRegex, SpanStyle(color = colors.string)),
-            Triple(decoratorRegex, SpanStyle(color = colors.annotation)),
-            Triple(keywordRegex, SpanStyle(color = colors.keyword, fontWeight = FontWeight.Bold)),
-            Triple(numberRegex, SpanStyle(color = colors.number)),
-            Triple(functionRegex, SpanStyle(color = colors.function))
+            Pair(commentRegex, SpanStyle(color = colors.comment, fontStyle = FontStyle.Italic)),
+            Pair(stringRegex, SpanStyle(color = colors.string)),
+            Pair(decoratorRegex, SpanStyle(color = colors.annotation)),
+            Pair(keywordRegex, SpanStyle(color = colors.keyword, fontWeight = FontWeight.Bold)),
+            Pair(numberRegex, SpanStyle(color = colors.number)),
+            Pair(functionRegex, SpanStyle(color = colors.function))
         ), colors.plain)
     }
 
@@ -183,11 +183,11 @@ object SyntaxHighlighter {
         val numberRegex = Regex("\\b\\d+\\b")
 
         highlightWithRegexes(text, this, listOf(
-            Triple(commentRegex, SpanStyle(color = colors.comment, fontStyle = FontStyle.Italic)),
-            Triple(stringRegex, SpanStyle(color = colors.string)),
-            Triple(keywordRegex, SpanStyle(color = colors.keyword, fontWeight = FontWeight.Bold)),
-            Triple(variableRegex, SpanStyle(color = colors.type)),
-            Triple(numberRegex, SpanStyle(color = colors.number))
+            Pair(commentRegex, SpanStyle(color = colors.comment, fontStyle = FontStyle.Italic)),
+            Pair(stringRegex, SpanStyle(color = colors.string)),
+            Pair(keywordRegex, SpanStyle(color = colors.keyword, fontWeight = FontWeight.Bold)),
+            Pair(variableRegex, SpanStyle(color = colors.type)),
+            Pair(numberRegex, SpanStyle(color = colors.number))
         ), colors.plain)
     }
 
@@ -199,10 +199,10 @@ object SyntaxHighlighter {
         val booleanRegex = Regex("\\b(true|false|null)\\b")
 
         highlightWithRegexes(text, this, listOf(
-            Triple(keyRegex, SpanStyle(color = colors.type, fontWeight = FontWeight.Bold)),
-            Triple(stringRegex, SpanStyle(color = colors.string)),
-            Triple(numberRegex, SpanStyle(color = colors.number)),
-            Triple(booleanRegex, SpanStyle(color = colors.keyword))
+            Pair(keyRegex, SpanStyle(color = colors.type, fontWeight = FontWeight.Bold)),
+            Pair(stringRegex, SpanStyle(color = colors.string)),
+            Pair(numberRegex, SpanStyle(color = colors.number)),
+            Pair(booleanRegex, SpanStyle(color = colors.keyword))
         ), colors.plain)
     }
 
@@ -214,10 +214,10 @@ object SyntaxHighlighter {
         val commentRegex = Regex("<!--[\\s\\S]*?-->")
 
         highlightWithRegexes(text, this, listOf(
-            Triple(commentRegex, SpanStyle(color = colors.comment, fontStyle = FontStyle.Italic)),
-            Triple(tagRegex, SpanStyle(color = colors.keyword, fontWeight = FontWeight.Bold)),
-            Triple(stringRegex, SpanStyle(color = colors.string)),
-            Triple(attrRegex, SpanStyle(color = colors.type))
+            Pair(commentRegex, SpanStyle(color = colors.comment, fontStyle = FontStyle.Italic)),
+            Pair(tagRegex, SpanStyle(color = colors.keyword, fontWeight = FontWeight.Bold)),
+            Pair(stringRegex, SpanStyle(color = colors.string)),
+            Pair(attrRegex, SpanStyle(color = colors.type))
         ), colors.plain)
     }
 
@@ -230,11 +230,11 @@ object SyntaxHighlighter {
         val booleanRegex = Regex("\\b(true|false|null|yes|no)\\b")
 
         highlightWithRegexes(text, this, listOf(
-            Triple(commentRegex, SpanStyle(color = colors.comment, fontStyle = FontStyle.Italic)),
-            Triple(keyRegex, SpanStyle(color = colors.type, fontWeight = FontWeight.Bold)),
-            Triple(stringRegex, SpanStyle(color = colors.string)),
-            Triple(numberRegex, SpanStyle(color = colors.number)),
-            Triple(booleanRegex, SpanStyle(color = colors.keyword))
+            Pair(commentRegex, SpanStyle(color = colors.comment, fontStyle = FontStyle.Italic)),
+            Pair(keyRegex, SpanStyle(color = colors.type, fontWeight = FontWeight.Bold)),
+            Pair(stringRegex, SpanStyle(color = colors.string)),
+            Pair(numberRegex, SpanStyle(color = colors.number)),
+            Pair(booleanRegex, SpanStyle(color = colors.keyword))
         ), colors.plain)
     }
 
@@ -246,10 +246,10 @@ object SyntaxHighlighter {
         val boldRegex = Regex("\\*\\*[^*\\n]*\\*\\*|__[^_\\n]*__")
 
         highlightWithRegexes(text, this, listOf(
-            Triple(headerRegex, SpanStyle(color = colors.keyword, fontWeight = FontWeight.Bold)),
-            Triple(codeRegex, SpanStyle(color = colors.string, fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace)),
-            Triple(linkRegex, SpanStyle(color = colors.type)),
-            Triple(boldRegex, SpanStyle(color = colors.function, fontWeight = FontWeight.Bold))
+            Pair(headerRegex, SpanStyle(color = colors.keyword, fontWeight = FontWeight.Bold)),
+            Pair(codeRegex, SpanStyle(color = colors.string, fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace)),
+            Pair(linkRegex, SpanStyle(color = colors.type)),
+            Pair(boldRegex, SpanStyle(color = colors.function, fontWeight = FontWeight.Bold))
         ), colors.plain)
     }
 
@@ -262,14 +262,16 @@ object SyntaxHighlighter {
     private fun highlightWithRegexes(
         text: String,
         builder: AnnotatedString.Builder,
-        patterns: List<Triple<Regex, SpanStyle>>,
+        patterns: List<Pair<Regex, SpanStyle>>,
         plainColor: Color
     ) {
         /* Track which character ranges are already styled. */
         val styled = BooleanArray(text.length)
         val ranges = mutableListOf<Triple<Int, Int, SpanStyle>>()
 
-        for ((regex, style) in patterns) {
+        for (pattern in patterns) {
+            val regex = pattern.first
+            val style = pattern.second
             regex.findAll(text).forEach { match ->
                 val start = match.range.first
                 val end = match.range.last + 1

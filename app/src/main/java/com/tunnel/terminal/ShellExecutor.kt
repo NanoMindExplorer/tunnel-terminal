@@ -142,7 +142,7 @@ class ShellExecutor(private val themeHolder: ThemeHolder = ThemeHolder()) : Term
         val byteBuffer = ByteBuffer.wrap(buffer)
         val charBuffer = CharBuffer.allocate(8192)
 
-        var bytesRead: Int
+        var bytesRead: Int = 0
         try {
             while (isAlive && inputStream.read(buffer).also { bytesRead = it } != -1) {
                 if (!isAlive) break
