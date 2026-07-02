@@ -11,8 +11,9 @@ android {
         applicationId = "com.tunnel.terminal"
         minSdk = 24
         targetSdk = 34
-        versionCode = 3
-        versionName = "2.0-phase7-pty"
+        // Phase 17 (Major Bug Fix Release): bump version
+        versionCode = 4
+        versionName = "3.0.0-phase17-major-fix"
     }
 
     buildTypes {
@@ -39,7 +40,7 @@ android {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
         }
     }
-    
+
     // Konfigurasi NDK & CMake
     externalNativeBuild {
         cmake {
@@ -58,4 +59,7 @@ dependencies {
     implementation("androidx.compose.ui:ui-graphics")
     implementation("androidx.compose.material3:material3")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
+
+    // Phase 17: DocumentFile untuk Storage Access Framework (StorageManager)
+    implementation("androidx.documentfile:documentfile:1.0.1")
 }

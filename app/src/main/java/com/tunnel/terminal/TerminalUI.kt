@@ -14,6 +14,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.key.*
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.text.AnnotatedString
@@ -21,10 +22,24 @@ import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlin.math.roundToInt
+
+/**
+ * TerminalUI - Semua Composable UI terminal.
+ *
+ * Phase 17 (Major Bug Fix):
+ * - TerminalScreenView: render cursor block di (cursorRow, cursorCol)
+ * - ExtraKeysBar: tambah HOME, END, PGUP, PGDN keys
+ * - AIChatPanel: pakai Snippet ID (bukan index) untuk delete (anti bug urutan)
+ * - Auto-scroll ke bawah saat output baru
+ * - Style attributes (bold/italic/underline) dirender
+ * - Debounce resize saat zoom untuk hindari ioctl spam
+ */
 
 @Composable
 fun TabBar(
@@ -69,9 +84,10 @@ fun ExtraKeysBar(
     isAltActive: Boolean,
     onKeyPressed: (String) -> Unit
 ) {
-    val controlKeys = listOf("ESC", "TAB", "CTRL", "ALT", "↑", "↓", "←", "→", "BKSP", "DEL")
-    val symbolKeys = listOf("~", "*", "$", "\"", "'", ";", "&", "|", "-", "/", "(", ")")
-    
+    /* Dua baris: simbol + kontrol. Tambah HOME, END, PGUP, PGDN. */
+    val controlKeys = listOf("ESC", "TAB", "CTRL", "ALT", "↑", "↓", "←", "→", "HOME", "END", "PGUP", "PGDN", "BKSP", "DEL")
+    val symbolKeys = listOf("~", "*", "$", "\"", "'", ";", "&", "|", "-", "/", "(", ")", "<", ">", "=", "{", "}", "[", "]", "#", "!", "?", "\\", "@", "`")
+
     Column(modifier = Modifier.fillMaxWidth().background(Color(0xFF2B2B2B))) {
         LazyRow(
             modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
@@ -79,12 +95,12 @@ fun ExtraKeysBar(
         ) {
             items(symbolKeys) { key ->
                 Box(
-                    modifier = Modifier.background(Color(0xFF2A2A2A), RoundedCornerShape(4.dp)).clickable { onKeyPressed(key) }.padding(horizontal = 12.dp, vertical = 6.dp),
+                    modifier = Modifier.background(Color(0xFF2A2A2A), RoundedCornerShape(4.dp)).clickable { onKeyPressed(key) }.padding(horizontal = 10.dp, vertical = 6.dp),
                     contentAlignment = Alignment.Center
                 ) { Text(key, color = Color(0xFF00BCD4), fontSize = 14.sp, fontFamily = FontFamily.Monospace) }
             }
         }
-        
+
         LazyRow(
             modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
             horizontalArrangement = Arrangement.spacedBy(4.dp), contentPadding = PaddingValues(horizontal = 4.dp)
@@ -96,9 +112,9 @@ fun ExtraKeysBar(
                     else -> Color(0xFF3A3A3A)
                 }
                 Box(
-                    modifier = Modifier.background(bgColor, RoundedCornerShape(4.dp)).clickable { onKeyPressed(key) }.padding(horizontal = 12.dp, vertical = 8.dp),
+                    modifier = Modifier.background(bgColor, RoundedCornerShape(4.dp)).clickable { onKeyPressed(key) }.padding(horizontal = 10.dp, vertical = 8.dp),
                     contentAlignment = Alignment.Center
-                ) { Text(key, color = Color.White, fontSize = 12.sp, fontFamily = FontFamily.Monospace) }
+                ) { Text(key, color = Color.White, fontSize = 11.sp, fontFamily = FontFamily.Monospace) }
             }
         }
     }
@@ -113,15 +129,30 @@ fun TerminalScreenView(
     onResize: (rows: Int, cols: Int, fontSize: Float) -> Unit
 ) {
     var fontSize by remember { mutableStateOf(12f) }
-    
+    var lastResizeTime by remember { mutableStateOf(0L) }
+    val scrollState = rememberScrollState()
+
+    /* Auto-scroll ke bawah saat output baru. Auto-scroll to bottom on new output. */
+    LaunchedEffect(screenDirty) {
+        if (scrollState.maxValue > 0) {
+            scrollState.scrollTo(scrollState.maxValue)
+        }
+    }
+
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(Color.Black)
             .onSizeChanged { size ->
+                /* Debounce resize: skip jika < 100ms sejak resize terakhir.
+                 * Debounce: skip if < 100ms since last resize. */
+                val now = System.currentTimeMillis()
+                if (now - lastResizeTime < 100) return@onSizeChanged
+                lastResizeTime = now
+
                 val charWidthPx = (fontSize * 0.6).roundToInt()
                 val charHeightPx = (fontSize * 1.2).roundToInt()
-                if (charWidthPx > 0 && charHeightPx > 0) {
+                if (charWidthPx > 0 && charHeightPx > 0 && size.width > 0 && size.height > 0) {
                     val newCols = (size.width / charWidthPx).coerceAtLeast(20)
                     val newRows = (size.height / charHeightPx).coerceAtLeast(10)
                     onResize(newRows, newCols, fontSize)
@@ -130,19 +161,50 @@ fun TerminalScreenView(
             .pointerInput(Unit) {
                 detectTransformGestures { _, _, zoom, _ ->
                     val newFont = (fontSize * zoom).coerceIn(8f, 24f)
-                    if (newFont != fontSize) { fontSize = newFont }
+                    if (newFont != fontSize) {
+                        fontSize = newFont
+                        lastResizeTime = System.currentTimeMillis()
+                    }
                 }
             }
     ) {
-        Column(modifier = Modifier.fillMaxSize().padding(4.dp)) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(4.dp)
+                .verticalScroll(scrollState)
+        ) {
             for (row in 0 until emulator.rows) {
                 val annotatedString = buildAnnotatedString {
                     for (col in 0 until emulator.cols) {
                         val cell = emulator.getScreen()[row][col]
-                        withStyle(SpanStyle(color = cell.color)) { append(cell.char) }
+                        val bgColor = if (cell.reverse) cell.fgColor else cell.bgColor
+                        val fgColor = if (cell.reverse) cell.bgColor else cell.fgColor
+
+                        val style = SpanStyle(
+                            color = fgColor,
+                            background = bgColor,
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = if (cell.bold) FontWeight.Bold else FontWeight.Normal,
+                            fontStyle = if (cell.italic) FontStyle.Italic else FontStyle.Normal,
+                            textDecoration = if (cell.underline) androidx.compose.ui.text.style.TextDecoration.Underline else androidx.compose.ui.text.style.TextDecoration.None
+                        )
+                        withStyle(style) { append(cell.char) }
+
+                        /* Render cursor block pada posisi cursor. Cursor block. */
+                        if (emulator.isCursorVisible && row == emulator.cursorRow && col == emulator.cursorCol) {
+                            withStyle(SpanStyle(background = Color.White, color = Color.Black)) {
+                                append(cell.char)
+                            }
+                        }
                     }
                 }
-                Text(text = annotatedString, fontFamily = FontFamily.Monospace, fontSize = fontSize.sp, modifier = Modifier.fillMaxWidth())
+                Text(
+                    text = annotatedString,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = fontSize.sp,
+                    modifier = Modifier.fillMaxWidth()
+                )
             }
         }
 
@@ -151,7 +213,12 @@ fun TerminalScreenView(
                 modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.8f)).clickable { onRestartSession() },
                 contentAlignment = Alignment.Center
             ) {
-                Text("Session Exited.\nTap anywhere to restart.", color = Color.White, fontFamily = FontFamily.Monospace, fontSize = 16.sp)
+                Text(
+                    "Session Exited.\nTap anywhere to restart.",
+                    color = Color.White,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 16.sp
+                )
             }
         }
     }
@@ -164,7 +231,7 @@ fun AIChatPanel(
     onSettingsChanged: (AISettings) -> Unit, onSendPrompt: (String) -> Unit,
     onRunCommand: (String) -> Unit, onRunAutoPilot: (List<String>) -> Unit,
     onSaveSnippet: (String, String) -> Unit, onRunSnippet: (String) -> Unit,
-    onDeleteSnippet: (Int) -> Unit, onClose: () -> Unit
+    onDeleteSnippet: (Long) -> Unit, onClose: () -> Unit
 ) {
     var inputText by remember { mutableStateOf("") }
     var selectedTab by remember { mutableStateOf(0) }
@@ -172,21 +239,62 @@ fun AIChatPanel(
     var expandedProvider by remember { mutableStateOf(false) }
     var showSaveDialog by remember { mutableStateOf<String?>(null) }
     var snippetTitle by remember { mutableStateOf("") }
+    var settingsDraft by remember { mutableStateOf(settings) }
+    var showSaved by remember { mutableStateOf(false) }
+
+    /* Sync settingsDraft ketika settings prop berubah (e.g., dari provider preset click).
+     * Sync settingsDraft when settings prop changes externally. */
+    LaunchedEffect(settings) {
+        settingsDraft = settings
+    }
+
+    /* Debounce save: jika user berhenti ngetik 800ms, save. Debounce save. */
+    LaunchedEffect(settingsDraft) {
+        if (settingsDraft != settings) {
+            kotlinx.coroutines.delay(800)
+            onSettingsChanged(settingsDraft)
+            showSaved = true
+            kotlinx.coroutines.delay(1500)
+            showSaved = false
+        }
+    }
 
     if (showSaveDialog != null) {
         AlertDialog(
             onDismissRequest = { showSaveDialog = null },
             title = { Text("Simpan ke Workflow") },
-            text = { Column { Text("Perintah: ${showSaveDialog}"); OutlinedTextField(value = snippetTitle, onValueChange = { snippetTitle = it }, label = { Text("Nama Workflow") }, modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) } },
-            confirmButton = { Button(onClick = { if (snippetTitle.isNotEmpty()) onSaveSnippet(snippetTitle, showSaveDialog!!); snippetTitle = ""; showSaveDialog = null }) { Text("Simpan") } },
+            text = {
+                Column {
+                    Text("Perintah: ${showSaveDialog}")
+                    OutlinedTextField(
+                        value = snippetTitle,
+                        onValueChange = { snippetTitle = it },
+                        label = { Text("Nama Workflow") },
+                        modifier = Modifier.fillMaxWidth().padding(top = 8.dp)
+                    )
+                }
+            },
+            confirmButton = {
+                Button(onClick = {
+                    if (snippetTitle.isNotEmpty()) onSaveSnippet(snippetTitle, showSaveDialog!!)
+                    snippetTitle = ""
+                    showSaveDialog = null
+                }) { Text("Simpan") }
+            },
             dismissButton = { Button(onClick = { showSaveDialog = null }) { Text("Batal") } }
         )
     }
 
     Column(modifier = Modifier.fillMaxSize().background(Color(0xFF1A1A1A))) {
-        Row(modifier = Modifier.fillMaxWidth().padding(16.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(16.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
             Text("Tunnel Auto-Pilot", color = Color.White, fontSize = 18.sp, fontFamily = FontFamily.Monospace)
-            Button(onClick = onClose, colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF333333))) { Text("X", color = Color.White) }
+            Button(onClick = onClose, colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF333333))) {
+                Text("X", color = Color.White)
+            }
         }
         Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(onClick = { selectedTab = 0 }, colors = ButtonDefaults.buttonColors(containerColor = if (selectedTab == 0) Color(0xFF6200EE) else Color(0xFF333333))) { Text("Chat") }
@@ -197,12 +305,42 @@ fun AIChatPanel(
         if (selectedTab == 0) {
             Column(modifier = Modifier.weight(1f).padding(16.dp).verticalScroll(scrollState)) {
                 messages.forEach { msg ->
-                    val color = if (msg.role == "user") Color(0xFF00FF00) else Color.White
-                    Text("${if (msg.role == "user") "Anda" else "AI"}:", color = color, fontSize = 14.sp, fontFamily = FontFamily.Monospace)
-                    Text(msg.content, color = Color.White, fontSize = 14.sp, fontFamily = FontFamily.Monospace, modifier = Modifier.padding(bottom = 8.dp))
+                    val color = when {
+                        msg.isError -> Color(0xFFFF5252)
+                        msg.role == "user" -> Color(0xFF00FF00)
+                        else -> Color.White
+                    }
+                    Text(
+                        "${if (msg.role == "user") "Anda" else "AI"}:",
+                        color = color,
+                        fontSize = 14.sp,
+                        fontFamily = FontFamily.Monospace
+                    )
+                    Text(
+                        msg.content,
+                        color = Color.White,
+                        fontSize = 14.sp,
+                        fontFamily = FontFamily.Monospace,
+                        modifier = Modifier.padding(bottom = 8.dp)
+                    )
                     if (msg.commands.size > 1) {
-                        Text("🚀 Rangkaian Auto-Pilot (${msg.commands.size} langkah):", color = Color(0xFFFFEB3B), fontSize = 12.sp, fontFamily = FontFamily.Monospace)
-                        Row(modifier = Modifier.padding(bottom = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) { Button(onClick = { onRunAutoPilot(msg.commands) }, colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00BCD4))) { Text("Run Auto-Pilot") } }
+                        Text(
+                            "🚀 Rangkaian Auto-Pilot (${msg.commands.size} langkah):",
+                            color = Color(0xFFFFEB3B),
+                            fontSize = 12.sp,
+                            fontFamily = FontFamily.Monospace
+                        )
+                        msg.commands.forEachIndexed { i, c ->
+                            Text(
+                                "  ${i + 1}. $c",
+                                color = Color(0xFF00BCD4),
+                                fontSize = 11.sp,
+                                fontFamily = FontFamily.Monospace
+                            )
+                        }
+                        Row(modifier = Modifier.padding(bottom = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Button(onClick = { onRunAutoPilot(msg.commands) }, colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00BCD4))) { Text("Run Auto-Pilot") }
+                        }
                     } else if (msg.isCommand) {
                         Row(modifier = Modifier.padding(bottom = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             Button(onClick = { onRunCommand(msg.content) }, colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF6200EE))) { Text("▶ Run") }
@@ -212,22 +350,43 @@ fun AIChatPanel(
                 }
             }
             Row(modifier = Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                OutlinedTextField(value = inputText, onValueChange = { inputText = it }, modifier = Modifier.weight(1f), textStyle = TextStyle(color = Color.White, fontFamily = FontFamily.Monospace), placeholder = { Text("Minta AI menyelesaikan tugas...", color = Color.Gray) })
+                OutlinedTextField(
+                    value = inputText,
+                    onValueChange = { inputText = it },
+                    modifier = Modifier.weight(1f),
+                    textStyle = TextStyle(color = Color.White, fontFamily = FontFamily.Monospace),
+                    placeholder = { Text("Minta AI menyelesaikan tugas...", color = Color.Gray) }
+                )
                 Spacer(modifier = Modifier.width(8.dp))
                 Button(onClick = { if (inputText.isNotEmpty()) { onSendPrompt(inputText); inputText = "" } }) { Text("Kirim") }
             }
         } else if (selectedTab == 1) {
             Column(modifier = Modifier.weight(1f).padding(16.dp).verticalScroll(scrollState)) {
-                if (snippets.isEmpty()) { Text("Belum ada workflow tersimpan.", color = Color.Gray, fontSize = 14.sp) }
-                else {
-                    snippets.forEachIndexed { index, snippet ->
-                        Card(modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp), colors = CardDefaults.cardColors(containerColor = Color(0xFF2B2B2B))) {
+                if (snippets.isEmpty()) {
+                    Text(
+                        "Belum ada workflow tersimpan.\n\nKlik '💾 Save' di pesan AI bercommand untuk menyimpan.",
+                        color = Color.Gray,
+                        fontSize = 14.sp,
+                        fontFamily = FontFamily.Monospace
+                    )
+                } else {
+                    snippets.forEach { snippet ->
+                        Card(
+                            modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+                            colors = CardDefaults.cardColors(containerColor = Color(0xFF2B2B2B))
+                        ) {
                             Column(modifier = Modifier.padding(12.dp)) {
                                 Text(snippet.title, color = Color(0xFF00FF00), fontSize = 14.sp, fontFamily = FontFamily.Monospace)
-                                Text(snippet.command, color = Color.White, fontSize = 12.sp, fontFamily = FontFamily.Monospace, modifier = Modifier.padding(top = 4.dp))
+                                Text(
+                                    snippet.command,
+                                    color = Color.White,
+                                    fontSize = 12.sp,
+                                    fontFamily = FontFamily.Monospace,
+                                    modifier = Modifier.padding(top = 4.dp)
+                                )
                                 Row(modifier = Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                     Button(onClick = { onRunSnippet(snippet.command) }, colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF6200EE))) { Text("▶ Run") }
-                                    Button(onClick = { onDeleteSnippet(index) }, colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF5252))) { Text("Hapus") }
+                                    Button(onClick = { onDeleteSnippet(snippet.id) }, colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF5252))) { Text("Hapus") }
                                 }
                             }
                         }
@@ -235,23 +394,67 @@ fun AIChatPanel(
                 }
             }
         } else {
+            /* Settings tab - dengan draft + debounce save. */
             Column(modifier = Modifier.weight(1f).padding(16.dp).verticalScroll(scrollState)) {
                 Text("Provider:", color = Color.Gray, fontSize = 12.sp)
                 Box {
-                    OutlinedTextField(value = settings.providerName, onValueChange = {}, readOnly = true, modifier = Modifier.fillMaxWidth().clickable { expandedProvider = true }, textStyle = TextStyle(color = Color.White, fontFamily = FontFamily.Monospace), trailingIcon = { Text("▼", color = Color.White) })
+                    OutlinedTextField(
+                        value = settingsDraft.providerName,
+                        onValueChange = {},
+                        readOnly = true,
+                        modifier = Modifier.fillMaxWidth().clickable { expandedProvider = true },
+                        textStyle = TextStyle(color = Color.White, fontFamily = FontFamily.Monospace),
+                        trailingIcon = { Text("▼", color = Color.White) }
+                    )
                     DropdownMenu(expanded = expandedProvider, onDismissRequest = { expandedProvider = false }) {
-                        AIProviders.presets.forEach { preset -> DropdownMenuItem(text = { Text(preset.providerName) }, onClick = { onSettingsChanged(preset.copy(apiKey = settings.apiKey)); expandedProvider = false }) }
+                        AIProviders.presets.forEach { preset ->
+                            DropdownMenuItem(
+                                text = { Text(preset.providerName) },
+                                onClick = {
+                                    settingsDraft = preset.copy(apiKey = settingsDraft.apiKey)
+                                    expandedProvider = false
+                                }
+                            )
+                        }
                     }
                 }
                 Spacer(modifier = Modifier.height(16.dp))
                 Text("Base URL:", color = Color.Gray, fontSize = 12.sp)
-                OutlinedTextField(value = settings.baseUrl, onValueChange = { onSettingsChanged(settings.copy(baseUrl = it)) }, modifier = Modifier.fillMaxWidth(), textStyle = TextStyle(color = Color.White, fontFamily = FontFamily.Monospace))
+                OutlinedTextField(
+                    value = settingsDraft.baseUrl,
+                    onValueChange = { settingsDraft = settingsDraft.copy(baseUrl = it) },
+                    modifier = Modifier.fillMaxWidth(),
+                    textStyle = TextStyle(color = Color.White, fontFamily = FontFamily.Monospace)
+                )
                 Spacer(modifier = Modifier.height(16.dp))
                 Text("Model Name:", color = Color.Gray, fontSize = 12.sp)
-                OutlinedTextField(value = settings.modelName, onValueChange = { onSettingsChanged(settings.copy(modelName = it)) }, modifier = Modifier.fillMaxWidth(), textStyle = TextStyle(color = Color.White, fontFamily = FontFamily.Monospace))
+                OutlinedTextField(
+                    value = settingsDraft.modelName,
+                    onValueChange = { settingsDraft = settingsDraft.copy(modelName = it) },
+                    modifier = Modifier.fillMaxWidth(),
+                    textStyle = TextStyle(color = Color.White, fontFamily = FontFamily.Monospace)
+                )
                 Spacer(modifier = Modifier.height(16.dp))
                 Text("API Key:", color = Color.Gray, fontSize = 12.sp)
-                OutlinedTextField(value = settings.apiKey, onValueChange = { onSettingsChanged(settings.copy(apiKey = it)) }, modifier = Modifier.fillMaxWidth(), textStyle = TextStyle(color = Color.White, fontFamily = FontFamily.Monospace), placeholder = { Text("sk-...", color = Color.Gray) })
+                OutlinedTextField(
+                    value = settingsDraft.apiKey,
+                    onValueChange = { settingsDraft = settingsDraft.copy(apiKey = it) },
+                    modifier = Modifier.fillMaxWidth(),
+                    textStyle = TextStyle(color = Color.White, fontFamily = FontFamily.Monospace),
+                    placeholder = { Text("sk-...", color = Color.Gray) }
+                )
+                Spacer(modifier = Modifier.height(16.dp))
+                Text("Timeout (ms):", color = Color.Gray, fontSize = 12.sp)
+                OutlinedTextField(
+                    value = settingsDraft.requestTimeoutMs.toString(),
+                    onValueChange = { v -> v.toIntOrNull()?.let { settingsDraft = settingsDraft.copy(requestTimeoutMs = it.coerceIn(5000, 120000)) } },
+                    modifier = Modifier.fillMaxWidth(),
+                    textStyle = TextStyle(color = Color.White, fontFamily = FontFamily.Monospace)
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                if (showSaved) {
+                    Text("✓ Saved", color = Color(0xFF00FF00), fontSize = 11.sp, fontFamily = FontFamily.Monospace)
+                }
             }
         }
     }

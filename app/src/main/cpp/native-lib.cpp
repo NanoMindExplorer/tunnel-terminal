@@ -2,60 +2,173 @@
 #include <unistd.h>
 #include <pty.h>
 #include <sys/ioctl.h>
+#include <sys/wait.h>
 #include <termios.h>
+#include <signal.h>
 #include <stdlib.h>
 #include <string.h>
+#include <errno.h>
+#include <android/log.h>
+
+#define TAG "TunnelTerminalJNI"
+#define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  TAG, __VA_ARGS__)
+#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
 
 extern "C" {
 
-// Membuat sesi Pseudo-Terminal (PTY) baru
+/*
+ * Membuat sesi Pseudo-Terminal (PTY) baru menggunakan forkpty().
+ * Mengembalikan masterFd via parameter output, dan pid sebagai return value.
+ * Jika gagal, return -1.
+ *
+ * Creates a new PTY session via forkpty().
+ * Returns: child pid (>0) on success, -1 on failure.
+ * Output: masterFd set via pointer.
+ */
 JNIEXPORT jint JNICALL
-Java_com_tunnel_terminal_TerminalJni_createSession(JNIEnv *env, jobject thiz, jint rows, jint cols) {
-    int masterFd;
+Java_com_tunnel_terminal_TerminalJni_createSession(JNIEnv *env, jobject thiz,
+                                                    jint rows, jint cols,
+                                                    jintArray outFd) {
+    int masterFd = -1;
     pid_t pid = forkpty(&masterFd, NULL, NULL, NULL);
-    
+
     if (pid < 0) {
-        return -1; // Gagal fork
-    } else if (pid == 0) {
-        // Proses Anak (Child Process) - Ini yang akan menjadi shell
-        execl("/system/bin/sh", "sh", NULL);
-        exit(1); // Jika execl gagal
+        LOGE("forkpty() gagal: %s", strerror(errno));
+        return -1;
     }
-    
-    // Proses Induk (Parent) - Kembali ke aplikasi Android
-    // Atur ukuran terminal awal
+
+    if (pid == 0) {
+        /* Proses Anak - jalankan shell Android.
+         * Child process - exec Android shell. */
+        execl("/system/bin/sh", "sh", NULL);
+        /* Jika execl gagal */
+        LOGE("execl() gagal: %s", strerror(errno));
+        exit(1);
+    }
+
+    /* Proses Induk - atur ukuran terminal awal.
+     * Parent - set initial terminal size. */
     if (rows > 0 && cols > 0) {
         struct winsize ws;
-        ws.ws_row = rows;
-        ws.ws_col = cols;
-        ioctl(masterFd, TIOCSWINSZ, &ws);
+        memset(&ws, 0, sizeof(ws));
+        ws.ws_row = (unsigned short)rows;
+        ws.ws_col = (unsigned short)cols;
+        if (ioctl(masterFd, TIOCSWINSZ, &ws) < 0) {
+            LOGE("ioctl(TIOCSWINSZ) gagal: %s", strerror(errno));
+        }
     }
-    
-    return masterFd;
+
+    /* Kirim masterFd kembali ke Java via array output.
+     * Send masterFd back to Java via output array. */
+    if (outFd != NULL) {
+        jint fd = (jint)masterFd;
+        env->SetIntArrayRegion(outFd, 0, 1, &fd);
+    }
+
+    LOGI("Sesi PTY baru: pid=%d, masterFd=%d", pid, masterFd);
+    return (jint)pid;
 }
 
-// Menulis perintah ke terminal (seperti mengetik di keyboard)
+/*
+ * Menulis data ke terminal (seperti mengetik di keyboard).
+ * Writes data to the PTY (keyboard input).
+ */
 JNIEXPORT void JNICALL
-Java_com_tunnel_terminal_TerminalJni_write(JNIEnv *env, jobject thiz, jint fd, jbyteArray data) {
+Java_com_tunnel_terminal_TerminalJni_write(JNIEnv *env, jobject thiz,
+                                            jint fd, jbyteArray data) {
+    if (fd < 0) {
+        LOGE("write() dipanggil dengan fd tidak valid: %d", fd);
+        return;
+    }
     jbyte *bytes = env->GetByteArrayElements(data, NULL);
+    if (bytes == NULL) {
+        LOGE("GetByteArrayElements mengembalikan NULL");
+        return;
+    }
     jsize len = env->GetArrayLength(data);
-    write(fd, bytes, len);
+    if (len > 0) {
+        ssize_t written = write(fd, bytes, len);
+        if (written < 0) {
+            LOGE("write() ke fd=%d gagal: %s", fd, strerror(errno));
+        }
+    }
     env->ReleaseByteArrayElements(data, bytes, 0);
 }
 
-// Mengatur ukuran terminal saat layar di-rotate atau keyboard muncul
+/*
+ * Mengatur ukuran terminal saat layar di-rotate atau keyboard muncul.
+ * Resize PTY window (SIGWINCH).
+ */
 JNIEXPORT void JNICALL
-Java_com_tunnel_terminal_TerminalJni_resize(JNIEnv *env, jobject thiz, jint fd, jint rows, jint cols) {
+Java_com_tunnel_terminal_TerminalJni_resize(JNIEnv *env, jobject thiz,
+                                             jint fd, jint rows, jint cols) {
+    if (fd < 0 || rows <= 0 || cols <= 0) {
+        LOGE("resize() parameter tidak valid: fd=%d rows=%d cols=%d", fd, rows, cols);
+        return;
+    }
     struct winsize ws;
-    ws.ws_row = rows;
-    ws.ws_col = cols;
-    ioctl(fd, TIOCSWINSZ, &ws);
+    memset(&ws, 0, sizeof(ws));
+    ws.ws_row = (unsigned short)rows;
+    ws.ws_col = (unsigned short)cols;
+    if (ioctl(fd, TIOCSWINSZ, &ws) < 0) {
+        LOGE("ioctl(TIOCSWINSZ) gagal: %s", strerror(errno));
+    }
 }
 
-// Menutup terminal
+/*
+ * Menutup master fd terminal.
+ * Closes the master PTY file descriptor.
+ */
 JNIEXPORT void JNICALL
 Java_com_tunnel_terminal_TerminalJni_close(JNIEnv *env, jobject thiz, jint fd) {
-    close(fd);
+    if (fd < 0) return;
+    if (close(fd) < 0) {
+        LOGE("close(%d) gagal: %s", fd, strerror(errno));
+    }
+}
+
+/*
+ * Mengirim sinyal ke child process shell.
+ * Sends a signal to the child shell process.
+ * Returns: 0 on success, -1 on failure.
+ */
+JNIEXPORT jint JNICALL
+Java_com_tunnel_terminal_TerminalJni_killSession(JNIEnv *env, jobject thiz,
+                                                  jint pid, jint signal) {
+    if (pid <= 1) {
+        LOGE("killSession() menolak pid tidak valid: %d", pid);
+        return -1;
+    }
+    int sig = (signal == 0) ? SIGKILL : signal;
+    if (kill(pid, sig) < 0) {
+        LOGE("kill(pid=%d, sig=%d) gagal: %s", pid, sig, strerror(errno));
+        return -1;
+    }
+    LOGI("Sinyal %d terkirim ke pid %d", sig, pid);
+
+    /* Reap zombie child process untuk hindari fd/resource leak.
+     * Reap zombie to prevent resource leak. */
+    int status = 0;
+    /* Wait dengan timeout singkat (non-blocking lalu polling ringan). */
+    for (int i = 0; i < 10; i++) {
+        pid_t reaped = waitpid(pid, &status, WNOHANG);
+        if (reaped == pid || reaped == -1) break;
+        usleep(50000); /* 50ms */
+    }
+    return 0;
+}
+
+/*
+ * Mengecek apakah child process masih hidup.
+ * Checks if the child process is still alive.
+ * Returns: 1 if alive, 0 if exited, -1 on error.
+ */
+JNIEXPORT jint JNICALL
+Java_com_tunnel_terminal_TerminalJni_isAlive(JNIEnv *env, jobject thiz, jint pid) {
+    if (pid <= 1) return -1;
+    if (kill(pid, 0) == 0) return 1;
+    if (errno == ESRCH) return 0;
+    return -1;
 }
 
 }

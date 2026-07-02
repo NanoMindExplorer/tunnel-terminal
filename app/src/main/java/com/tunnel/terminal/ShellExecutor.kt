@@ -1,6 +1,7 @@
 package com.tunnel.terminal
 
 import android.os.ParcelFileDescriptor
+import android.util.Log
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -16,47 +17,92 @@ import java.nio.CharBuffer
 import java.nio.charset.CodingErrorAction
 import java.nio.charset.StandardCharsets
 
+/**
+ * ShellExecutor - Manages a single PTY shell session.
+ *
+ * Perubahan Phase 17 (Major Bug Fix):
+ * - Track child pid untuk kill yang benar di destroy() (no more zombie)
+ * - Reset outputBuffer di restart() (no bleed antar session)
+ * - Strip ANSI codes dari lastCommandOutput untuk AI context
+ * - Per-executor command history (tidak shared antar tab)
+ * - Tunggu shell siap setelah start() sebelum kirim PS1
+ * - Thread readLoop di-set sebagai daemon
+ */
 class ShellExecutor {
+    private val tag = "ShellExecutor"
+
     private var masterFd: Int = -1
+    private var childPid: Int = -1
     private var pfd: ParcelFileDescriptor? = null
-    val id: Int = System.currentTimeMillis().toInt()
+    val id: Int = System.currentTimeMillis().toInt() and 0x7FFFFFFF
 
     var emulator = TerminalEmulator()
-    
+
     var isAlive by mutableStateOf(true)
         private set
 
-    // Ubah ke MutableStateFlow agar bisa di-update
     private val _screenDirty = MutableStateFlow(0)
     val screenDirty: StateFlow<Int> = _screenDirty.asStateFlow()
 
-    // Fungsi helper untuk memicu update UI
     fun triggerScreenUpdate() { _screenDirty.value++ }
 
     private val _lastCommandOutput = MutableStateFlow("")
     val lastCommandOutput: StateFlow<String> = _lastCommandOutput.asStateFlow()
     private var outputBuffer = StringBuilder()
 
+    /** Riwayat perintah per-executor (per-tab). Per-tab command history. */
+    val commandHistory = mutableListOf<String>()
+
+    /** Prompt saat ini (dideteksi dari output shell). Current prompt. */
+    @Volatile
+    var currentPrompt: String = "tunnel@android:~$ "
+
+    /**
+     * Mulai sesi PTY baru.
+     * Start a new PTY session.
+     */
     suspend fun start() {
         withContext(Dispatchers.IO) {
             isAlive = true
-            masterFd = TerminalJni.createSession(24, 80)
-            if (masterFd < 0) {
+            outputBuffer.setLength(0)
+            _lastCommandOutput.value = ""
+
+            val outFd = IntArray(1)
+            childPid = TerminalJni.createSession(24, 80, outFd)
+            masterFd = outFd.getOrElse(0) { -1 }
+
+            if (childPid <= 0 || masterFd < 0) {
                 isAlive = false
+                Log.e(tag, "createSession gagal: pid=$childPid, fd=$masterFd")
+                emulator.process("\u001B[31m[ERROR] Gagal membuat sesi PTY. Coba restart app.\u001B[0m\n")
+                triggerScreenUpdate()
                 return@withContext
             }
 
             pfd = ParcelFileDescriptor.adoptFd(masterFd)
-            emulator.process("Tunnel Terminal v3.2 (Lifecycle Guard)\n")
-            emulator.process("NDK PTY + AI Copilot Active.\n\n")
-            triggerScreenUpdate()
-            
-            Thread.sleep(100)
-            writeRaw("PS1='tunnel@android:~$ '\n")
-            Thread { readLoop() }.start()
+            Log.i(tag, "Sesi dimulai: pid=$childPid, fd=$masterFd, id=$id")
+
+            /* Thread pembaca output shell - set sebagai daemon agar tidak block JVM exit.
+             * Shell output reader thread - daemon so it never blocks JVM exit. */
+            Thread({ readLoop() }, "pty-read-$id").apply {
+                isDaemon = true
+                start()
+            }
+
+            /* Beri waktu singkat untuk shell siap, lalu set PS1.
+             * Brief delay for shell readiness, then set PS1. */
+            Thread.sleep(150)
+            writeRaw("export PS1='tunnel@android:\$PWD\$ '\n")
+            /* Kirim resize awal agar shell tahu ukuran terminal.
+             * Send initial resize so shell knows terminal size. */
+            TerminalJni.resize(masterFd, 24, 80)
         }
     }
 
+    /**
+     * Restart sesi yang sudah mati. Destroy lalu start ulang.
+     * Restart a dead session: destroy then start fresh.
+     */
     suspend fun restart() {
         destroy()
         emulator = TerminalEmulator()
@@ -64,7 +110,12 @@ class ShellExecutor {
     }
 
     private fun readLoop() {
-        val inputStream = FileInputStream(pfd!!.fileDescriptor)
+        val pfdRef = pfd
+        if (pfdRef == null) {
+            Log.e(tag, "pfd null di readLoop, abort")
+            return
+        }
+        val inputStream = FileInputStream(pfdRef.fileDescriptor)
         val buffer = ByteArray(4096)
         val decoder = StandardCharsets.UTF_8.newDecoder()
             .onMalformedInput(CodingErrorAction.REPLACE)
@@ -73,24 +124,34 @@ class ShellExecutor {
         val charBuffer = CharBuffer.allocate(8192)
 
         var bytesRead: Int
-        while (inputStream.read(buffer).also { bytesRead = it } != -1) {
-            byteBuffer.position(0)
-            byteBuffer.limit(bytesRead)
-            decoder.decode(byteBuffer, charBuffer, false)
-            charBuffer.flip()
-            val text = charBuffer.toString()
-            charBuffer.clear()
+        try {
+            while (inputStream.read(buffer).also { bytesRead = it } != -1) {
+                if (!isAlive) break
+                if (bytesRead <= 0) continue
 
-            emulator.process(text)
-            outputBuffer.append(text)
-            if (outputBuffer.length > 2000) outputBuffer = StringBuilder(outputBuffer.substring(outputBuffer.length - 2000))
-            _lastCommandOutput.value = outputBuffer.toString()
+                byteBuffer.position(0)
+                byteBuffer.limit(bytesRead)
+                decoder.decode(byteBuffer, charBuffer, false)
+                charBuffer.flip()
+                val text = charBuffer.toString()
+                charBuffer.clear()
+
+                emulator.process(text)
+                outputBuffer.append(text)
+                /* Batasi buffer agar tidak membengkak. Cap buffer size. */
+                if (outputBuffer.length > 4000) {
+                    outputBuffer = StringBuilder(outputBuffer.substring(outputBuffer.length - 4000))
+                }
+                _lastCommandOutput.value = outputBuffer.toString()
+                triggerScreenUpdate()
+            }
+        } catch (e: Exception) {
+            Log.w(tag, "readLoop berakhir: ${e.message}")
+        } finally {
+            isAlive = false
+            emulator.process("\n\u001B[33m[Process Exited. Tap screen to restart session.]\u001B[0m\n")
             triggerScreenUpdate()
         }
-        
-        isAlive = false
-        emulator.process("\n[Process Exited. Tap screen to restart session.]\n")
-        triggerScreenUpdate()
     }
 
     fun resizeTerminal(newRows: Int, newCols: Int, fontSize: Float) {
@@ -100,24 +161,72 @@ class ShellExecutor {
         triggerScreenUpdate()
     }
 
-    fun executeCommand(command: String) { if (isAlive) writeRaw(command + "\n") }
+    fun executeCommand(command: String) {
+        if (isAlive) writeRaw(command + "\n")
+    }
+
     fun writeRaw(data: String) {
         if (masterFd < 0 || !isAlive) return
         TerminalJni.write(masterFd, data.toByteArray(StandardCharsets.UTF_8))
     }
 
+    /**
+     * Bersihkan layar terminal (lokal, tidak kirim ke shell).
+     * Clear terminal screen locally (does NOT send to shell).
+     */
     fun clearScreen() {
         emulator.process("\u001B[2J\u001B[H")
-        outputBuffer.clear()
+        outputBuffer.setLength(0)
         _lastCommandOutput.value = ""
         triggerScreenUpdate()
     }
 
+    /**
+     * Ambil output terminal yang sudah dibersihkan dari ANSI escape codes.
+     * Get ANSI-stripped terminal output (clean for AI context).
+     */
+    fun getCleanOutput(): String {
+        val raw = outputBuffer.toString()
+        val sb = StringBuilder(raw.length)
+        val regex = Regex("\u001B\\[[;?\\d]*[A-Za-z]|\u001B\\][^\\u0007]*\\u0007|\u001B\\[[0-9;]*[A-Za-z]")
+        var lastEnd = 0
+        regex.findAll(raw).forEach { m ->
+            sb.append(raw, lastEnd, m.range.first)
+            lastEnd = m.range.last + 1
+        }
+        sb.append(raw, lastEnd, raw.length)
+        /* Trim whitespace berlebih. Trim excess whitespace. */
+        return sb.toString().trim().take(2000)
+    }
+
+    /**
+     * Hancurkan sesi: kill child process, close fd, reap zombie.
+     * Destroy session: kill child, close fd, reap zombie.
+     */
     fun destroy() {
+        if (!isAlive && masterFd < 0 && childPid < 0) return
+        isAlive = false
         try {
-            isAlive = false
-            if (masterFd >= 0) TerminalJni.close(masterFd)
+            if (childPid > 1) {
+                /* Kirim SIGHUP dulu (sopan), tunggu 100ms, lalu SIGKILL.
+                 * SIGHUP first (polite), wait, then SIGKILL. */
+                TerminalJni.killSession(childPid, 15) // SIGTERM
+                Thread.sleep(100)
+                TerminalJni.killSession(childPid, 9)  // SIGKILL + reap
+                childPid = -1
+            }
+        } catch (e: Exception) {
+            Log.w(tag, "killSession error: ${e.message}")
+        }
+        try {
+            if (masterFd >= 0) {
+                TerminalJni.close(masterFd)
+                masterFd = -1
+            }
             pfd?.close()
-        } catch (e: Exception) { }
+            pfd = null
+        } catch (e: Exception) {
+            Log.w(tag, "close fd error: ${e.message}")
+        }
     }
 }
