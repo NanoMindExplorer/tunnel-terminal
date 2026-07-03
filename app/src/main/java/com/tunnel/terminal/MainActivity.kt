@@ -978,6 +978,10 @@ class MainActivity : ComponentActivity() {
             val hasPhysicalKeyboard = configuration.keyboard == android.content.res.Configuration.KEYBOARD_QWERTY &&
                 configuration.hardKeyboardHidden == android.content.res.Configuration.HARDKEYBOARDHIDDEN_NO
 
+            /* Phase 36: Flag untuk mencegah Enter double-fire antara handleKeyEvent
+             * (physical keyboard KeyDown) dan onValueChange (soft keyboard commitText). */
+            var enterHandledByKeyEvent by remember { mutableStateOf(false) }
+
             /* Phase 26: Fix auto-error-detection terlalu agresif.
              * Old code: trigger pada setiap output chunk yang mengandung "error"
              * → false positive untuk `grep error`, `cat error.log`, dll.
@@ -1222,6 +1226,8 @@ class MainActivity : ComponentActivity() {
                 /* Special keys. */
                 when (key) {
                     Key.Enter -> {
+                        /* Phase 36: Set flag agar onValueChange tidak double-fire. */
+                        enterHandledByKeyEvent = true
                         processInput(activeExecutor.currentCommandBuffer + "\n")
                         activeExecutor.currentCommandBuffer = ""
                         hiddenInput = ""
@@ -1465,9 +1471,9 @@ class MainActivity : ComponentActivity() {
                             }
                         }
 
-                        /* Phase 33 (A1 fix): onValueChange hanya tangani karakter CETAK biasa.
-                         * Enter, Backspace, Tab, dll sudah ditangani handleKeyEvent di onPreviewKeyEvent.
-                         * Hapus penanganan \n, \u007F, \b dari sini untuk mencegah double-fire. */
+                        /* Phase 36 fix: Soft keyboard Enter tidak trigger Key.Enter di
+                         * onPreviewKeyEvent — hanya trigger onValueChange dengan \n.
+                         * enterHandledByKeyEvent declared di scope luar. */
                         var lastInputValue by remember { mutableStateOf("") }
 
                         BasicTextField(
@@ -1479,14 +1485,24 @@ class MainActivity : ComponentActivity() {
                                 if (newValue.length > oldText.length) {
                                     val added = newValue.substring(oldText.length)
                                     for (ch in added) {
-                                        /* Phase 33: Hanya handle karakter cetak biasa.
-                                         * Enter/Backspace/Tab sudah ditangani handleKeyEvent. */
                                         when (ch) {
                                             '\n', '\r' -> {
-                                                /* Enter sudah ditangani handleKeyEvent — skip di sini. */
+                                                /* Phase 36: Enter dari soft keyboard — handle di sini.
+                                                 * Cek flag: jika handleKeyEvent sudah handle (physical keyboard),
+                                                 * skip untuk mencegah double-fire. */
+                                                if (!enterHandledByKeyEvent) {
+                                                    processInput(activeExecutor.currentCommandBuffer + "\n")
+                                                    activeExecutor.currentCommandBuffer = ""
+                                                    hiddenInput = ""
+                                                    lastInputValue = ""
+                                                }
+                                                enterHandledByKeyEvent = false
                                             }
                                             '\u007F', '\b' -> {
-                                                /* Backspace sudah ditangani handleKeyEvent — skip di sini. */
+                                                if (activeExecutor.currentCommandBuffer.isNotEmpty()) {
+                                                    activeExecutor.currentCommandBuffer = activeExecutor.currentCommandBuffer.dropLast(1)
+                                                }
+                                                activeExecutor.writeRaw("\u007F")
                                             }
                                             else -> {
                                                 val translated = handleChar(ch)

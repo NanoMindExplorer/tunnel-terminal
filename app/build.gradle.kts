@@ -11,9 +11,9 @@ android {
         applicationId = "com.tunnel.terminal"
         minSdk = 24
         targetSdk = 34
-        // Phase 35: Text selection + credit NanoMind + crypto addresses (audit v2 sprint 3)
-        versionCode = 23
-        versionName = "5.5.0-phase35-text-selection-credit"
+        // Phase 36: Fix Enter not working on soft keyboard
+        versionCode = 24
+        versionName = "5.5.1-phase36-enter-fix"
     }
 
     buildTypes {
