@@ -154,9 +154,12 @@ class SshShellExecutor(
                 session?.connect(30000)
 
                 /* BUG-02 REAL FIX: Verifikasi host key SETELAH connect.
-                 * Phase 35 hotfix: getHostKey() call — JSch 0.2.21 needs explicit method call. */
+                 * Phase 35 hotfix 2: getFingerPrint() di JSch 0.2.21 butuh parameter.
+                 * Pakai getKey() (raw key hex string) sebagai fingerprint alternatif. */
                 val actualFingerprint = try {
-                    session?.getHostKey()?.getFingerPrint()?.toString() ?: ""
+                    val hk = session?.getHostKey()
+                    /* getFingerPrint() butuh MessageDigest di JSch 0.2.21 — pakai getKey() saja. */
+                    "${hk?.getType() ?: ""}:${hk?.getKey() ?: ""}"
                 } catch (_: Exception) { "" }
 
                 if (actualFingerprint.isNotBlank()) {
