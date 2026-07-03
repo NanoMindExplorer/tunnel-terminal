@@ -26,8 +26,10 @@ class SnippetManager(context: Context) {
 
     companion object {
         private const val MAX_SNIPPETS = 100
-        private var nextIdCounter = 1L
     }
+
+    /* BUG-31 fix: Pindahkan counter ke instance field (bukan companion object). */
+    private var nextIdCounter = 1L
 
     init {
         load()

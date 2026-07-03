@@ -71,9 +71,17 @@ data class AiToolCall(
         fun parseFromResponse(response: String): List<AiToolCall> {
             val calls = mutableListOf<AiToolCall>()
 
+            /* BUG-38 fix: Hanya parse tool calls yang TIDAK berada di dalam
+             * markdown code blocks (```...```). AI yang sedang menjelaskan
+             * sintaks tool-call akan mengutipnya di code block — itu tidak
+             * boleh dieksekusi.
+             * Caranya: hapus semua code blocks dari response sebelum parse. */
+            val codeBlockRegex = Regex("```[\\s\\S]*?```")
+            val responseWithoutCodeBlocks = codeBlockRegex.replace(response, "")
+
             /* Format 1: <tool_call>{json}</tool_call> */
             val toolCallRegex = Regex("<tool_call>([\\s\\S]*?)</tool_call>")
-            toolCallRegex.findAll(response).forEach { match ->
+            toolCallRegex.findAll(responseWithoutCodeBlocks).forEach { match ->
                 try {
                     val json = JSONObject(match.groupValues[1].trim())
                     val tool = json.optString("tool", "")
@@ -91,24 +99,8 @@ data class AiToolCall(
                 }
             }
 
-            /* Format 2: ```tool\n{json}\n``` */
-            val codeBlockRegex = Regex("```tool\\s*\\n([\\s\\S]*?)\\n```")
-            codeBlockRegex.findAll(response).forEach { match ->
-                try {
-                    val json = JSONObject(match.groupValues[1].trim())
-                    val tool = json.optString("tool", "")
-                    val argsJson = json.optJSONObject("args") ?: JSONObject()
-                    val args = mutableMapOf<String, String>()
-                    argsJson.keys().forEach { key ->
-                        args[key] = argsJson.optString(key)
-                    }
-                    if (tool.isNotBlank() && calls.none { it.tool == tool && it.args == args }) {
-                        calls.add(AiToolCall(tool, args, json.optString("reasoning", "")))
-                    }
-                } catch (_: Exception) {
-                    /* Invalid JSON — skip. */
-                }
-            }
+            /* BUG-38 fix: Format 2 (```tool blocks) dihapus — code blocks sudah
+             * di-strip di atas untuk mencegah eksekusi kutipan AI. */
 
             return calls
         }
@@ -207,8 +199,9 @@ class ToolExecutor(private val context: Context) {
                     val path = call.args["path"] ?: return "Error: path required"
                     val file = File(path)
                     if (!file.exists()) return "Error: file not found: $path"
-                    file.delete()
-                    "OK: deleted $path"
+                    /* BUG-37 fix: Cek return value dari delete(). */
+                    if (file.delete()) "OK: deleted $path"
+                    else "Error: failed to delete $path (mungkin direktori tidak kosong atau read-only)"
                 }
                 "run_command" -> {
                     /* Command akan di-execute oleh caller via ShellExecutor. */

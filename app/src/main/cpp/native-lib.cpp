@@ -38,21 +38,32 @@ Java_com_tunnel_terminal_TerminalJni_createSession(JNIEnv *env, jobject thiz,
     }
 
     if (pid == 0) {
-        /* Proses Anak - jalankan shell Android.
-         * Child process - exec Android shell. */
+        /* BUG-30 fix: Hanya panggil async-signal-safe functions antara fork-exec.
+         * Old code: setenv() + LOGE() (yang lakukan I/O + malloc) sebelum execl.
+         * Risk: deadlock jika thread lain pegang malloc lock saat fork.
+         * Fix: Lewatkan environment via execve() parameter, bukan setenv().
+         * LOGE() dihapus — jika execl gagal, _exit() langsung. */
 
-        /* Phase 20: Set TERM env agar TUI apps (vim, htop, less) tahu
-         * terminal type. Tanpa ini, beberapa TUI apps tidak render color.
-         * Set TERM env so TUI apps know terminal type. */
-        setenv("TERM", "xterm-256color", 1);
-        setenv("TERM_PROGRAM", "tunnel-terminal", 1);
-        /* Set HOME ke app home agar shell config (.profile, .bashrc) bisa load. */
-        setenv("HOME", "/data/data/com.tunnel.terminal/files/home", 1);
+        /* Build environment array untuk execve (async-signal-safe). */
+        extern char **environ;
+        char *envp[16];
+        int env_idx = 0;
 
-        execl("/system/bin/sh", "sh", NULL);
-        /* Jika execl gagal */
-        LOGE("execl() gagal: %s", strerror(errno));
-        exit(1);
+        /* Copy existing environ. */
+        for (int i = 0; environ[i] != NULL && env_idx < 12; i++) {
+            envp[env_idx++] = environ[i];
+        }
+
+        /* Tambahkan TERM, TERM_PROGRAM, HOME. */
+        envp[env_idx++] = (char *)"TERM=xterm-256color";
+        envp[env_idx++] = (char *)"TERM_PROGRAM=tunnel-terminal";
+        envp[env_idx++] = (char *)"HOME=/data/data/com.tunnel.terminal/files/home";
+        envp[env_idx] = NULL;
+
+        /* execve adalah async-signal-safe. */
+        execve("/system/bin/sh", (char *const[]){(char *)"sh", NULL}, envp);
+        /* Jika execve gagal — _exit adalah async-signal-safe (exit() tidak). */
+        _exit(1);
     }
 
     /* Proses Induk - atur ukuran terminal awal.

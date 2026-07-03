@@ -951,7 +951,7 @@ fun AIChatPanel(
                     /* About tab. */
                     Column(modifier = Modifier.weight(1f).padding(16.dp).verticalScroll(scrollState)) {
                         Text(
-                            "Tunnel Terminal v3.2.0",
+                            "Tunnel Terminal v4.8.0",
                             color = theme.uiText,
                             fontSize = 16.sp,
                             fontFamily = FontFamily.Monospace

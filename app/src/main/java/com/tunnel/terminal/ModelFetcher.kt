@@ -71,7 +71,7 @@ object ModelFetcher {
                 }
                 setRequestProperty("HTTP-Referer", "https://github.com/NanoMindExplorer/tunnel-terminal")
                 setRequestProperty("X-Title", "Tunnel Terminal")
-                setRequestProperty("User-Agent", "TunnelTerminal/3.2 (Android)")
+                setRequestProperty("User-Agent", "TunnelTerminal/4.8.0 (Android)")
                 connectTimeout = 15000
                 readTimeout = 15000
             }
@@ -138,22 +138,25 @@ object ModelFetcher {
      */
     private fun detectVisionCapability(modelId: String): Boolean {
         val id = modelId.lowercase()
-        /* OpenAI vision models. */
+        /* BUG-32 fix: Updated vision detection untuk model naming 2026. */
+        /* OpenAI: gpt-4o, gpt-4-turbo, gpt-4-vision. */
         if (id.contains("gpt-4o") || id.contains("gpt-4-vision") || id.contains("gpt-4-turbo")) return true
-        /* Gemini (all 1.5+ support vision). */
-        if (id.contains("gemini-1.5") || id.contains("gemini-pro-vision") || id.contains("gemini-2")) return true
-        /* Claude 3+ (all support vision). */
-        if (id.contains("claude-3") || id.contains("claude-3.5") || id.contains("claude-4")) return true
+        /* Gemini: 1.5+, 2.0+, pro-vision. */
+        if (id.contains("gemini-1.5") || id.contains("gemini-2") || id.contains("gemini-pro-vision")) return true
+        /* Claude: 3+, 4+, sonnet, opus, haiku (all support vision). */
+        if (id.contains("claude-3") || id.contains("claude-4") || id.contains("claude-opus") ||
+            id.contains("claude-sonnet") || id.contains("claude-haiku")) return true
         /* Llama 3.2 vision variants. */
         if (id.contains("llama-3.2-11b") || id.contains("llama-3.2-90b") || id.contains("llama-3.2-vision")) return true
         /* Mistral pixtral. */
         if (id.contains("pixtral")) return true
         /* Qwen-VL variants. */
-        if (id.contains("qwen-vl") || id.contains("qwen2-vl")) return true
-        /* Phi-3 vision. */
-        if (id.contains("phi-3-vision") || id.contains("phi-3.5-vision")) return true
-        /* Generic "vision" keyword. */
-        if (id.contains("vision") || id.contains("vl-") || id.contains("-vl")) return true
+        if (id.contains("qwen-vl") || id.contains("qwen2-vl") || id.contains("qwen2.5-vl")) return true
+        /* Phi-3/4 vision. */
+        if (id.contains("phi-3-vision") || id.contains("phi-3.5-vision") || id.contains("phi-4-vision")) return true
+        /* Generic "vision"/"vl" keyword. */
+        if (id.contains("vision") || id.contains("vl-") || id.contains("-vl") ||
+            id.contains("multimodal") || id.contains("mm-")) return true
         return false
     }
 

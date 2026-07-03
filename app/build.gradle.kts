@@ -11,14 +11,17 @@ android {
         applicationId = "com.tunnel.terminal"
         minSdk = 24
         targetSdk = 34
-        // Phase 29: MEDIUM fixes (BUG-14,15,16,17,19,20,21,22,23,24,25,26 from audit)
-        versionCode = 17
-        versionName = "4.8.0-phase29-medium-fixes"
+        // Phase 30: LOW fixes — complete audit (BUG-27,29,30,31,32,34,35,36,37,38)
+        versionCode = 18
+        versionName = "5.0.0-phase30-audit-complete"
     }
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            /* BUG-29 fix: Enable R8/ProGuard untuk release build.
+             * Old code: isMinifyEnabled=false — APK lebih besar dari perlu. */
+            isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
     }

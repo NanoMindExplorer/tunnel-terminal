@@ -167,14 +167,16 @@ class AIAgent {
             setRequestProperty("Authorization", "Bearer ${settings.apiKey}")
             setRequestProperty("HTTP-Referer", "https://github.com/NanoMindExplorer/tunnel-terminal")
             setRequestProperty("X-Title", "Tunnel Terminal")
-            setRequestProperty("User-Agent", "TunnelTerminal/3.1 (Android)")
+            setRequestProperty("User-Agent", "TunnelTerminal/4.8.0 (Android)")
             /* Accept: text/event-stream penting untuk SSE. */
             if (streaming) {
                 setRequestProperty("Accept", "text/event-stream")
             }
             connectTimeout = settings.requestTimeoutMs
             /* Streaming: read timeout 0 = unlimited (chunked). */
-            readTimeout = if (streaming) 0 else settings.requestTimeoutMs
+            /* BUG-35 fix: Beri readTimeout terbatas (120s) untuk streaming, bukan 0 (unlimited).
+             * Jika provider macet di tengah stream, koneksi akan timeout, bukan hang selamanya. */
+            readTimeout = if (streaming) 120000 else settings.requestTimeoutMs
             doOutput = true
         }
     }
@@ -186,7 +188,7 @@ class AIAgent {
         streaming: Boolean
     ): String {
         val systemPrompt = """
-            Anda adalah 'Tunnel Auto-Pilot', agen AI otonom untuk terminal Android (Tunnel Terminal v4.1).
+            Anda adalah 'Tunnel Auto-Pilot', agen AI otonom untuk terminal Android (Anda adalah .Tunnel Auto-Pilot., agen AI otonom untuk terminal Android (Tunnel Terminal v4.8)).
             Tugas Anda adalah menyelesaikan tujuan pengguna dengan rangkaian perintah shell ATAU tool calls.
 
             Anda berjalan di /system/bin/sh Android (bukan bash), jadi hindari bash-ism.
