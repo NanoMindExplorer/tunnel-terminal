@@ -54,14 +54,22 @@ Java_com_tunnel_terminal_TerminalJni_createSession(JNIEnv *env, jobject thiz,
             envp[env_idx++] = environ[i];
         }
 
-        /* Tambahkan TERM, TERM_PROGRAM, HOME. */
-        envp[env_idx++] = (char *)"TERM=xterm-256color";
-        envp[env_idx++] = (char *)"TERM_PROGRAM=tunnel-terminal";
-        envp[env_idx++] = (char *)"HOME=/data/data/com.tunnel.terminal/files/home";
+        /* Tambahkan TERM, TERM_PROGRAM, HOME.
+         * M1 fix: Gunakan static char arrays (writable) bukan string literal cast.
+         * Cast (char*)"..." dari const char* adalah UB — bisa segfault di read-only memory. */
+        static char term_env[] = "TERM=xterm-256color";
+        static char term_prog_env[] = "TERM_PROGRAM=tunnel-terminal";
+        static char home_env[] = "HOME=/data/data/com.tunnel.terminal/files/home";
+        envp[env_idx++] = term_env;
+        envp[env_idx++] = term_prog_env;
+        envp[env_idx++] = home_env;
         envp[env_idx] = NULL;
 
-        /* execve adalah async-signal-safe. */
-        execve("/system/bin/sh", (char *const[]){(char *)"sh", NULL}, envp);
+        /* execve adalah async-signal-safe.
+         * M1 fix: Gunai static char array untuk argv juga. */
+        static char sh_arg[] = "sh";
+        char *const argv[] = {sh_arg, NULL};
+        execve("/system/bin/sh", argv, envp);
         /* Jika execve gagal — _exit adalah async-signal-safe (exit() tidak). */
         _exit(1);
     }

@@ -144,10 +144,10 @@ class MainActivity : ComponentActivity() {
     /** Phase 23: MCP tools discovered. */
     private val mcpTools = mutableStateListOf<McpTool>()
     /** Phase 24: Global font size untuk terminal (persist pinch-to-zoom across tabs/modes).
-     *  Phase 26: Persist ke SharedPreferences supaya tidak reset setelah app restart. */
-    private var terminalFontSize by mutableStateOf(
-        getSharedPreferences("TunnelUI", Context.MODE_PRIVATE).getFloat("fontSize", 12f)
-    )
+     *  Phase 26: Persist ke SharedPreferences supaya tidak reset setelah app restart.
+     *  C1 fix: Jangan panggil getSharedPreferences di property initializer (sebelum onCreate).
+     *  Default 12f, load di onCreate(). */
+    private var terminalFontSize by mutableStateOf(12f)
     /** Phase 19: Available models dari fetch /models. */
     private val availableModels = mutableStateListOf<ModelInfo>()
     private var isLoadingModels by mutableStateOf(false)
@@ -219,17 +219,15 @@ class MainActivity : ComponentActivity() {
         agentWorkflows.addAll(agentWorkflowManager.workflows)
         loadAISettings()
         loadTheme()
+        /* C1 fix: Load fontSize di onCreate (bukan di property initializer). */
+        try {
+            terminalFontSize = getSharedPreferences("TunnelUI", Context.MODE_PRIVATE).getFloat("fontSize", 12f)
+        } catch (_: Exception) {
+            terminalFontSize = 12f
+        }
 
-        /* Request POST_NOTIFICATIONS permission untuk Android 13+. */
-        requestNotificationPermission()
-
-        /* Start foreground service untuk keep-alive. */
-        val serviceIntent = Intent(this, TerminalForegroundService::class.java)
-        startForegroundService(serviceIntent)
-
-        /* Buat tab pertama. */
-        lifecycleScope.launch { createNewTab() }
-
+        /* C2+H2 fix: Pindahkan startForegroundService SETELAH setContent.
+         * Juga delay sedikit agar permission dialog (jika ada) tidak conflict. */
         setContent {
             MaterialTheme {
                 Surface(modifier = Modifier.fillMaxSize(), color = currentTheme.background) {
@@ -237,6 +235,27 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+
+        /* H1 fix: Request notification permission SETELAH setContent.
+         * Old code: requestNotificationPermission() di onCreate sebelum setContent
+         * → permission dialog muncul sebelum window siap → crash di beberapa device. */
+        requestNotificationPermission()
+
+        /* C2+H2 fix: Start foreground service setelah UI siap + notification permission.
+         * Di Android 13+, startForeground tanpa POST_NOTIFICATIONS permission granted
+         * bisa crash di beberapa OEM. Delay 500ms agar permission dialog selesai. */
+        lifecycleScope.launch {
+            delay(500)
+            try {
+                val serviceIntent = Intent(this@MainActivity, TerminalForegroundService::class.java)
+                startForegroundService(serviceIntent)
+            } catch (_: Exception) {
+                /* Jika gagal, tidak fatal — app tetap jalan tanpa foreground service. */
+            }
+        }
+
+        /* Buat tab pertama. */
+        lifecycleScope.launch { createNewTab() }
     }
 
     /** Load saved theme from prefs and apply to themeHolder. */
@@ -549,12 +568,15 @@ class MainActivity : ComponentActivity() {
 
     private fun loadAISettings() {
         val prefs = getSharedPreferences("TunnelAIPrefs", Context.MODE_PRIVATE)
+        /* C3 fix: Wrap getDouble dalam try-catch — ClassCastException jika preference corrupt
+         * atau disimpan sebagai tipe lain oleh versi lama. */
+        val temperature = try { prefs.getDouble("temperature", 0.2) } catch (_: Exception) { 0.2 }
         aiSettings = AISettings(
-            providerName = prefs.getString("providerName", "OpenAI")!!,
-            baseUrl = prefs.getString("baseUrl", "https://api.openai.com/v1")!!,
-            apiKey = prefs.getString("apiKey", "")!!,
-            modelName = prefs.getString("modelName", "gpt-4o-mini")!!,
-            temperature = prefs.getDouble("temperature", 0.2),
+            providerName = prefs.getString("providerName", "OpenAI") ?: "OpenAI",
+            baseUrl = prefs.getString("baseUrl", "https://api.openai.com/v1") ?: "https://api.openai.com/v1",
+            apiKey = prefs.getString("apiKey", "") ?: "",
+            modelName = prefs.getString("modelName", "gpt-4o-mini") ?: "gpt-4o-mini",
+            temperature = temperature,
             maxTokens = prefs.getInt("maxTokens", 2000),
             requestTimeoutMs = prefs.getInt("requestTimeoutMs", 30000),
             supportsVision = prefs.getBoolean("supportsVision", false)

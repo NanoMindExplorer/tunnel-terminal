@@ -31,7 +31,14 @@ class TerminalForegroundService : Service() {
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
-        startForeground(NOTIFICATION_ID, buildNotification())
+        /* C2 fix: Gunakan startForeground dengan FOREGROUND_SERVICE_TYPE_DATA_SYNC
+         * untuk Android 14+ (targetSdk=34). Tanpa type → crash di beberapa OEM. */
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            startForeground(NOTIFICATION_ID, buildNotification(),
+                android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+        } else {
+            startForeground(NOTIFICATION_ID, buildNotification())
+        }
     }
 
     private fun buildNotification(): android.app.Notification {

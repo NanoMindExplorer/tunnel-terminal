@@ -13,13 +13,20 @@ import android.util.Log
 object TerminalJni {
     private const val TAG = "TerminalJni"
 
+    /* M2 fix: Flag untuk track apakah native library berhasil di-load.
+     * Jika gagal, app tidak crash — tampilkan error message di terminal. */
+    val isLoaded: Boolean
+
     init {
+        var loaded = false
         try {
             System.loadLibrary("tunnel_terminal")
+            loaded = true
         } catch (e: UnsatisfiedLinkError) {
             Log.e(TAG, "Gagal load libtunnel_terminal.so: ${e.message}")
-            throw e
+            /* M2 fix: Jangan re-throw — biarkan app jalan dengan fallback. */
         }
+        isLoaded = loaded
     }
 
     /**

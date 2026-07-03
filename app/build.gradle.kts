@@ -11,9 +11,9 @@ android {
         applicationId = "com.tunnel.terminal"
         minSdk = 24
         targetSdk = 34
-        // Phase 30: LOW fixes — complete audit (BUG-27,29,30,31,32,34,35,36,37,38)
-        versionCode = 18
-        versionName = "5.0.0-phase30-audit-complete"
+        // Phase 31: Fix crash-on-launch (7 bugs: C1,C2,C3,H1,H2,M1,M2)
+        versionCode = 19
+        versionName = "5.1.0-phase31-crash-on-launch-fix"
     }
 
     buildTypes {

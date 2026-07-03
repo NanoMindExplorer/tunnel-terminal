@@ -95,6 +95,15 @@ class ShellExecutor(private val themeHolder: ThemeHolder = ThemeHolder()) : Term
             _lastCommandOutput.value = ""
 
             val outFd = IntArray(1)
+            /* M2 fix: Check apakah native library berhasil di-load. */
+            if (!TerminalJni.isLoaded) {
+                isAlive = false
+                Log.e(tag, "Native library tidak ter-load — tidak bisa buat PTY session")
+                emulator.process("\u001B[31m[ERROR] Native library (libtunnel_terminal.so) tidak dapat dimuat.\u001B[0m\n")
+                emulator.process("\u001B[33mCoba reinstall APK atau cek ABI compatibility.\u001B[0m\n")
+                triggerScreenUpdate()
+                return@withContext
+            }
             childPid = TerminalJni.createSession(24, 80, outFd)
             masterFd = outFd.getOrElse(0) { -1 }
 
