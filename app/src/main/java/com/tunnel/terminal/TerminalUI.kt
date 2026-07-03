@@ -3,6 +3,7 @@ package com.tunnel.terminal
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.*
@@ -225,6 +226,16 @@ fun TerminalScreenView(
         }
     }
 
+    /* Phase 35 (A3): Text selection state — declared BEFORE Box modifier chain. */
+    var selectionStart by remember { mutableStateOf<Pair<Int, Int>?>(null) }
+    var selectionEnd by remember { mutableStateOf<Pair<Int, Int>?>(null) }
+    var isSelecting by remember { mutableStateOf(false) }
+    val clipboardManager = androidx.compose.ui.platform.LocalClipboardManager.current
+    /* Snapshot + dims juga before Box (used in pointerInput modifiers). */
+    val screenSnapshot = remember(screenDirty) { emulator.getScreenSnapshot() }
+    val renderRows = emulator.snapshotRows()
+    val renderCols = emulator.snapshotCols()
+
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -262,7 +273,7 @@ fun TerminalScreenView(
             /* Phase 35 (A3): Drag untuk extend selection. */
             .pointerInput(isSelecting) {
                 if (isSelecting) {
-                    androidx.compose.foundation.gestures.detectDragGestures(
+                    detectDragGestures(
                         onDragStart = { offset ->
                             /* Selection already started by long-press. */
                         },
@@ -300,21 +311,7 @@ fun TerminalScreenView(
                 }
             }
     ) {
-        /* Phase 35 (A3): Text selection state. */
-    var selectionStart by remember { mutableStateOf<Pair<Int, Int>?>(null) }
-    var selectionEnd by remember { mutableStateOf<Pair<Int, Int>?>(null) }
-    var isSelecting by remember { mutableStateOf(false) }
-    val clipboardManager = androidx.compose.ui.platform.LocalClipboardManager.current
-
-    /* Phase 26: Throttle snapshot — hanya re-snapshot saat screenDirty berubah.
-         * Compose's remember(screenDirty) sudah efisien: hanya re-compute saat key berubah.
-         * Untuk output sangat cepat (yes, find /), screenDirty berubah cepat tapi Compose
-         * batch updates per frame (~16ms), jasi tidak per frame-by-frame snapshot. */
-        val screenSnapshot = remember(screenDirty) { emulator.getScreenSnapshot() }
-        /* cursorState sudah dideklarasikan di atas (Phase 32 auto-scroll). */
-        /* Phase 26: Thread-safe rows/cols reads (avoid ArrayIndexOutOfBounds during resize). */
-        val renderRows = emulator.snapshotRows()
-        val renderCols = emulator.snapshotCols()
+        /* Phase 35: Selection state + snapshot + dims already declared before Box. */
 
         Column(
             modifier = Modifier

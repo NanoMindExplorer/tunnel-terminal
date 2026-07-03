@@ -153,9 +153,11 @@ class SshShellExecutor(
                 session?.setConfig("PreferredAuthentications", "publickey,password,keyboard-interactive")
                 session?.connect(30000)
 
-                /* BUG-02 REAL FIX: Verifikasi host key SETELAH connect. */
-                val hostKey = session?.hostKey
-                val actualFingerprint = hostKey?.getFingerPrint()?.toString() ?: ""
+                /* BUG-02 REAL FIX: Verifikasi host key SETELAH connect.
+                 * Phase 35 hotfix: getHostKey() call — JSch 0.2.21 needs explicit method call. */
+                val actualFingerprint = try {
+                    session?.getHostKey()?.getFingerPrint()?.toString() ?: ""
+                } catch (_: Exception) { "" }
 
                 if (actualFingerprint.isNotBlank()) {
                     val knownFingerprint = hostKeyPrefs?.getString(hostKeyId, null)
