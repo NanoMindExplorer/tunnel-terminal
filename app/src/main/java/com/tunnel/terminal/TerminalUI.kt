@@ -193,8 +193,16 @@ fun TerminalScreenView(
     var lastSize by remember { mutableStateOf(androidx.compose.ui.unit.IntSize.Zero) }
     val density = androidx.compose.ui.platform.LocalDensity.current
 
-    /* Auto-scroll ke bawah saat output baru. */
+    /* Auto-scroll ke bawah saat output baru.
+     * Phase 32: Juga scroll saat cursor berubah (user mengetik) agar tetap terlihat. */
     LaunchedEffect(screenDirty) {
+        if (scrollState.maxValue > 0) {
+            scrollState.scrollTo(scrollState.maxValue)
+        }
+    }
+    /* Phase 32: Auto-scroll saat cursor bergerak (user mengetik dengan keyboard fisik). */
+    val cursorState = remember(screenDirty) { emulator.getCursorState() }
+    LaunchedEffect(cursorState.row) {
         if (scrollState.maxValue > 0) {
             scrollState.scrollTo(scrollState.maxValue)
         }
@@ -259,7 +267,7 @@ fun TerminalScreenView(
          * Untuk output sangat cepat (yes, find /), screenDirty berubah cepat tapi Compose
          * batch updates per frame (~16ms), jasi tidak per frame-by-frame snapshot. */
         val screenSnapshot = remember(screenDirty) { emulator.getScreenSnapshot() }
-        val cursorState = remember(screenDirty) { emulator.getCursorState() }
+        /* cursorState sudah dideklarasikan di atas (Phase 32 auto-scroll). */
         /* Phase 26: Thread-safe rows/cols reads (avoid ArrayIndexOutOfBounds during resize). */
         val renderRows = emulator.snapshotRows()
         val renderCols = emulator.snapshotCols()
@@ -725,12 +733,13 @@ fun AIChatPanel(
                          * Old code: OutlinedTextField readOnly + Modifier.clickable — internal
                          * click handler intercept event, .clickable tidak trigger.
                          * Fix: Box wrapper dengan clickable + DropdownMenu. */
+                        /* Phase 32 fix: readOnly=true (bukan enabled=false) agar mouse click tetap works. */
                         Box(modifier = Modifier.fillMaxWidth().clickable { expandedProvider = true }) {
                             OutlinedTextField(
                                 value = settingsDraft.providerName,
                                 onValueChange = {},
                                 readOnly = true,
-                                enabled = false,
+                                enabled = true,
                                 modifier = Modifier.fillMaxWidth(),
                                 textStyle = TextStyle(color = theme.uiText, fontFamily = FontFamily.Monospace),
                                 trailingIcon = { Text("▼", color = theme.uiText) }

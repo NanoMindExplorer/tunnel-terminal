@@ -1101,11 +1101,37 @@ class MainActivity : ComponentActivity() {
              * Phase 21 hotfix: Dipindahkan SEBELUM handleKeyEvent (forward reference
              * tidak allowed untuk local functions di Kotlin). */
             fun keyToChar(key: Key, shift: Boolean): Char {
+                /* Phase 32: Support a-z, 0-9, dan simbol umum. */
                 val name = key.toString().lowercase()
                 if (name.length == 1 && name[0] in 'a'..'z') {
                     return if (shift) name[0].uppercaseChar() else name[0]
                 }
-                return '\u0000'
+                /* Angka dan simbol di atas angka. */
+                return when (key) {
+                    Key.Zero -> if (shift) ')' else '0'
+                    Key.One -> if (shift) '!' else '1'
+                    Key.Two -> if (shift) '@' else '2'
+                    Key.Three -> if (shift) '#' else '3'
+                    Key.Four -> if (shift) '$' else '4'
+                    Key.Five -> if (shift) '%' else '5'
+                    Key.Six -> if (shift) '^' else '6'
+                    Key.Seven -> if (shift) '&' else '7'
+                    Key.Eight -> if (shift) '*' else '8'
+                    Key.Nine -> if (shift) '(' else '9'
+                    Key.Spacebar -> ' '
+                    Key.Minus -> if (shift) '_' else '-'
+                    Key.Equals -> if (shift) '+' else '='
+                    Key.LeftBracket -> if (shift) '{' else '['
+                    Key.RightBracket -> if (shift) '}' else ']'
+                    Key.Backslash -> if (shift) '|' else '\\'
+                    Key.Semicolon -> if (shift) ':' else ';'
+                    Key.Apostrophe -> if (shift) '"' else '\''
+                    Key.Comma -> if (shift) '<' else ','
+                    Key.Period -> if (shift) '>' else '.'
+                    Key.Slash -> if (shift) '?' else '/'
+                    Key.Grave -> if (shift) '~' else '`'
+                    else -> '\u0000'
+                }
             }
 
             /**
@@ -1119,7 +1145,10 @@ class MainActivity : ComponentActivity() {
              * Handle special keys at KeyDown to prevent double-firing.
              */
             fun handleKeyEvent(event: androidx.compose.ui.input.key.KeyEvent): Boolean {
-                /* Hanya handle KeyDown untuk special keys. KeyUp diabaikan. */
+                /* Phase 32: Handle SEMUA key events di KeyDown untuk mencegah double input.
+                 * Old code: return false untuk karakter biasa → BasicTextField juga process
+                 * → karakter dikirim 2x (onValueChange + hardware key event).
+                 * Fix: return true untuk SEMUA keys, handle karakter langsung di sini. */
                 if (event.type != KeyEventType.KeyDown) return false
                 val key = event.key
                 val ctrl = event.isCtrlPressed
@@ -1129,23 +1158,25 @@ class MainActivity : ComponentActivity() {
                 /* Ctrl+key combos (priority). */
                 if (ctrl) {
                     val ch = when (key) {
-                        Key.C -> 3.toChar()    /* SIGINT */
-                        Key.D -> 4.toChar()    /* EOF */
-                        Key.Z -> 26.toChar()   /* SIGTSTP */
-                        Key.L -> 12.toChar()   /* clear */
-                        Key.A -> 1.toChar()    /* line start */
-                        Key.E -> 5.toChar()    /* line end */
-                        Key.K -> 11.toChar()   /* kill to EOL */
-                        Key.U -> 21.toChar()   /* kill line */
-                        Key.W -> 23.toChar()   /* kill word */
-                        Key.R -> 18.toChar()   /* reverse search */
-                        Key.X -> 24.toChar()   /* cancel */
+                        Key.C -> 3.toChar()
+                        Key.D -> 4.toChar()
+                        Key.Z -> 26.toChar()
+                        Key.L -> 12.toChar()
+                        Key.A -> 1.toChar()
+                        Key.E -> 5.toChar()
+                        Key.K -> 11.toChar()
+                        Key.U -> 21.toChar()
+                        Key.W -> 23.toChar()
+                        Key.R -> 18.toChar()
+                        Key.X -> 24.toChar()
                         else -> '\u0000'
                     }
                     if (ch != '\u0000') {
                         activeExecutor.writeRaw(ch.toString())
                         return true
                     }
+                    /* Ctrl+other = consume tapi tidak lakukan apa-apa. */
+                    return true
                 }
 
                 /* Alt+key → ESC + key. */
@@ -1155,15 +1186,14 @@ class MainActivity : ComponentActivity() {
                         activeExecutor.writeRaw("\u001B$ch")
                         return true
                     }
+                    return true
                 }
 
-                /* Special keys — handle di KeyDown, return true untuk consume. */
+                /* Special keys. */
                 when (key) {
                     Key.Enter -> {
-                        /* Enter: process buffer + newline. Consume agar tidak double-fire. */
                         processInput(activeExecutor.currentCommandBuffer + "\n")
                         activeExecutor.currentCommandBuffer = ""
-                        /* Phase 25: Clear hiddenInput agar text tidak menumpuk. */
                         hiddenInput = ""
                         return true
                     }
@@ -1191,9 +1221,19 @@ class MainActivity : ComponentActivity() {
                     Key.F4 -> { activeExecutor.writeRaw("\u001BOS"); return true }
                 }
 
-                /* Regular character keys (a-z, 0-9, symbols) — fallback to BasicTextField.
-                 * BasicTextField.onValueChange akan handle via commitText dari IME. */
-                return false
+                /* Phase 32: Handle karakter biasa (a-z, 0-9, symbols) LANGSUNG di sini.
+                 * Konsumsi event (return true) agar BasicTextField tidak juga mengirim.
+                 * Ini mencegah double input "lsls" — karakter dikirim hanya sekali. */
+                val ch = keyToChar(key, shift)
+                if (ch != '\u0000') {
+                    val translated = handleChar(ch)
+                    activeExecutor.currentCommandBuffer += translated
+                    activeExecutor.writeRaw(translated)
+                    return true  /* Konsumsi — jangan biarkan BasicTextField juga process */
+                }
+
+                /* Unknown key — consume agar tidak trigger BasicTextField. */
+                return true
             }
 
             Box(modifier = Modifier.fillMaxSize()) {

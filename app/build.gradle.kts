@@ -11,9 +11,9 @@ android {
         applicationId = "com.tunnel.terminal"
         minSdk = 24
         targetSdk = 34
-        // Phase 31: Fix crash-on-launch (7 bugs: C1,C2,C3,H1,H2,M1,M2)
-        versionCode = 19
-        versionName = "5.1.0-phase31-crash-on-launch-fix"
+        // Phase 32: Fix double input + scroll + provider dropdown mouse + keyToChar expansion
+        versionCode = 20
+        versionName = "5.2.0-phase32-input-scroll-fix"
     }
 
     buildTypes {
