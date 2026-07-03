@@ -101,12 +101,12 @@ class VoiceInputManager(private val context: Context) {
         return SpeechRecognizer.isRecognitionAvailable(context)
     }
 
-    /** Create speech recognition intent. */
+    /** Create speech recognition intent.
+     * BUG-18 fix: Hapus duplicate putExtra yang menimpa id-ID dengan en-US. */
     fun createIntent(): Intent {
         return Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
             putExtra(RecognizerIntent.EXTRA_LANGUAGE, "id-ID")  // Bahasa Indonesia
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE, "en-US")  // Fallback English
             putExtra(RecognizerIntent.EXTRA_PROMPT, "Speak your AI prompt...")
             putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
         }

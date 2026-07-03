@@ -11,9 +11,9 @@ android {
         applicationId = "com.tunnel.terminal"
         minSdk = 24
         targetSdk = 34
-        // Phase 26: Fix all 13 remaining bugs (input, block mode, SSH, performance, security)
-        versionCode = 14
-        versionName = "4.5.0-phase26-all-bugs-fixed"
+        // Phase 27: Security CRITICAL fixes (BUG-01,02,03,04,18 from audit)
+        versionCode = 15
+        versionName = "4.6.0-phase27-security-critical"
     }
 
     buildTypes {

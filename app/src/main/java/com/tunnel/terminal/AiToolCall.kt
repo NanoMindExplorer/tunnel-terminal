@@ -4,7 +4,9 @@ import android.content.Context
 import android.util.Log
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -36,10 +38,25 @@ data class AiToolCall(
     /** True jika tool destructive (butuh explicit permission). */
     val isDestructive: Boolean get() = tool in DESTRUCTIVE_TOOLS
 
+    /** BUG-04 fix: Tampilkan argumen penuh, tidak dipotong di 50 karakter.
+     * Jika terlalu panjang, displayTextFull dipakai di dialog dengan scroll. */
     val displayText: String get() = buildString {
         append(tool)
         append("(")
-        append(args.entries.joinToString(", ") { "${it.key}=${it.value.take(50)}" })
+        append(args.entries.joinToString(", ") { "${it.key}=${it.value.take(200)}" })
+        append(")")
+    }
+    /** Full text tanpa truncation — untuk dialog izin. */
+    val displayTextFull: String get() = buildString {
+        append(tool)
+        append("(")
+        args.entries.forEachIndexed { idx, (key, value) ->
+            if (idx > 0) append(", ")
+            append(key)
+            append("=\"")
+            append(value)
+            append("\"")
+        }
         append(")")
     }
 
@@ -218,28 +235,45 @@ class PermissionManager(context: Context) {
     /** Permission state per tool. */
     enum class PermissionState { ASK, ALWAYS_ALLOW, ALWAYS_DENY }
 
+    /** BUG-01 fix: Tools yang TIDAK boleh "Always Allow" — terlalu berbahaya
+     * jika AI di-inject via indirect prompt injection. */
+    private val alwaysDenyAlwaysAllow = setOf("run_command", "delete_file")
+
     /** Get permission state for tool. */
     fun getPermission(tool: String): PermissionState {
         val state = prefs.getString("tool_$tool", PermissionState.ASK.name)
         return runCatching { PermissionState.valueOf(state!!) }.getOrDefault(PermissionState.ASK)
     }
 
-    /** Set permission state for tool. */
+    /** Set permission state for tool.
+     * BUG-01 fix: Tolak ALWAYS_ALLOW untuk run_command/delete_file. */
     fun setPermission(tool: String, state: PermissionState) {
-        prefs.edit().putString("tool_$tool", state.name).apply()
+        val effectiveState = if (tool in alwaysDenyAlwaysAllow && state == PermissionState.ALWAYS_ALLOW) {
+            PermissionState.ASK // Degrade ke ASK — terlalu berbahaya untuk blanket allow
+        } else {
+            state
+        }
+        prefs.edit().putString("tool_$tool", effectiveState.name).apply()
     }
 
     /** Check if tool call needs permission prompt. */
     fun needsPrompt(call: AiToolCall): Boolean {
         if (call.isReadOnly) return false
+        // BUG-01 fix: run_command dan delete_file SELALU butuh prompt
+        if (call.tool in alwaysDenyAlwaysAllow) return true
         return getPermission(call.tool) == PermissionState.ASK
     }
 
     /** Check if tool call is pre-approved. */
     fun isApproved(call: AiToolCall): Boolean {
         if (call.isReadOnly) return true
+        // BUG-01 fix: run_command dan delete_file tidak pernah pre-approved
+        if (call.tool in alwaysDenyAlwaysAllow) return false
         return getPermission(call.tool) == PermissionState.ALWAYS_ALLOW
     }
+
+    /** BUG-01 fix: Check apakah tool boleh di-"Always Allow". */
+    fun canAlwaysAllow(tool: String): Boolean = tool !in alwaysDenyAlwaysAllow
 
     /** Reset all permissions to ASK. */
     fun resetAll() {
@@ -260,6 +294,10 @@ fun PermissionDialog(
     onAlwaysAllow: () -> Unit,
     onDeny: () -> Unit
 ) {
+    /* BUG-01 fix: Sembunyikan "Always Allow" untuk run_command/delete_file. */
+    val canAlwaysAllow = call.tool !in setOf("run_command", "delete_file")
+    val scrollState = androidx.compose.foundation.rememberScrollState()
+
     AlertDialog(
         onDismissRequest = onDeny,
         modifier = Modifier.background(theme.uiBg, RoundedCornerShape(8.dp)),
@@ -280,17 +318,19 @@ fun PermissionDialog(
                     fontFamily = FontFamily.Monospace
                 )
                 Spacer(modifier = Modifier.height(8.dp))
-                /* Tool call display. */
+                /* BUG-04 fix: Tampilkan argumen penuh dengan scroll, bukan dipotong 50 char. */
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
+                        .heightIn(max = 200.dp)
                         .background(theme.uiSurface, RoundedCornerShape(4.dp))
                         .padding(8.dp)
+                        .verticalScroll(scrollState)
                 ) {
                     Text(
-                        call.displayText,
+                        call.displayTextFull,
                         color = theme.ansi.getOrElse(6) { Color(0xFF00BCD4) },
-                        fontSize = 12.sp,
+                        fontSize = 11.sp,
                         fontFamily = FontFamily.Monospace
                     )
                 }
@@ -320,10 +360,13 @@ fun PermissionDialog(
                         onClick = onAllow,
                         colors = ButtonDefaults.buttonColors(containerColor = theme.ansi.getOrElse(2) { Color(0xFF4CAF50) })
                     ) { Text("Allow once", color = Color.White, fontSize = 11.sp) }
-                    Button(
-                        onClick = onAlwaysAllow,
-                        colors = ButtonDefaults.buttonColors(containerColor = theme.uiAccent)
-                    ) { Text("Always allow", color = Color.White, fontSize = 11.sp) }
+                    /* BUG-01 fix: Hanya tampilkan "Always allow" untuk tool yang aman. */
+                    if (canAlwaysAllow) {
+                        Button(
+                            onClick = onAlwaysAllow,
+                            colors = ButtonDefaults.buttonColors(containerColor = theme.uiAccent)
+                        ) { Text("Always allow", color = Color.White, fontSize = 11.sp) }
+                    }
                 }
                 Spacer(modifier = Modifier.height(4.dp))
                 TextButton(onClick = onDeny) {

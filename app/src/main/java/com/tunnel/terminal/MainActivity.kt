@@ -607,7 +607,7 @@ class MainActivity : ComponentActivity() {
      * Create new SSH tab with given connection config.
      */
     private suspend fun createSshTab(config: SshConnectionConfig) {
-        val sshExecutor = SshShellExecutor(themeHolder, config)
+        val sshExecutor = SshShellExecutor(themeHolder, config, this)
         shellExecutors.add(sshExecutor)
         activeExecutorId = sshExecutor.id
         sshExecutor.start()
