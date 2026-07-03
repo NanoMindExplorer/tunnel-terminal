@@ -127,34 +127,56 @@ class SshShellExecutor(
                     session?.setPassword(config.password)
                 }
 
-                /* BUG-02 fix: Implement TOFU (Trust On First Use) host key verification.
-                 * Simpan fingerprint host key di SharedPreferences per host.
-                 * First connect: accept + save fingerprint.
-                 * Subsequent: compare fingerprint — reject if changed (MITM detection). */
+                /* BUG-02 REAL FIX (Phase 34): Implementasi TOFU yang sebenarnya.
+                 * Phase 27 hanya ganti "no" → "ask" + baca knownHostKey tapi TIDAK PERNAH
+                 * membandingkan/menyimpan fingerprint. promptYesNo tetap return true.
+                 *
+                 * Fix sekarang:
+                 * 1. StrictHostKeyChecking="no" (JSch tidak block, kita verifikasi manual)
+                 * 2. Set connect, ambil host key dari session.getHostKey()
+                 * 3. Bandingkan dengan fingerprint tersimpan
+                 * 4. Jika baru → simpan. Jika berubah → disconnect + error (MITM).
+                 */
                 val hostKeyPrefs = context?.getSharedPreferences("TunnelSshHostKeys", Context.MODE_PRIVATE)
-                val knownHostKey = hostKeyPrefs?.getString("${config.host}:${config.port}", null)
+                val hostKeyId = "${config.host}:${config.port}"
 
                 session?.userInfo = object : UserInfo {
                     override fun getPassphrase(): String? = config.privateKeyPassphrase
                     override fun getPassword(): String? = config.password
                     override fun promptPassword(message: String?): Boolean = true
                     override fun promptPassphrase(message: String?): Boolean = true
-                    override fun promptYesNo(message: String?): Boolean {
-                        /* TOFU: Accept on first connect (no stored key yet).
-                         * If key exists and changed, this is where we'd show a warning dialog.
-                         * For now: accept if no stored key, reject if key mismatch detected
-                         * by StrictHostKeyChecking=ask. */
-                        Log.i(tag, "SSH host key prompt: $message")
-                        return true // Accept — JSch will verify against known_hosts
-                    }
+                    override fun promptYesNo(message: String?): Boolean = true
                     override fun showMessage(message: String?) {}
                 }
 
-                /* BUG-02 fix: Use "ask" instead of "no" — JSch will call promptYesNo
-                 * for unknown keys, allowing TOFU verification. */
-                session?.setConfig("StrictHostKeyChecking", "ask")
+                session?.setConfig("StrictHostKeyChecking", "no")
                 session?.setConfig("PreferredAuthentications", "publickey,password,keyboard-interactive")
-                session?.connect(30000) /* 30s timeout */
+                session?.connect(30000)
+
+                /* BUG-02 REAL FIX: Verifikasi host key SETELAH connect. */
+                val hostKey = session?.hostKey
+                val actualFingerprint = hostKey?.getFingerPrint()?.toString() ?: ""
+
+                if (actualFingerprint.isNotBlank()) {
+                    val knownFingerprint = hostKeyPrefs?.getString(hostKeyId, null)
+                    if (knownFingerprint == null) {
+                        /* First connect — simpan fingerprint. */
+                        hostKeyPrefs?.edit()?.putString(hostKeyId, actualFingerprint)?.apply()
+                        Log.i(tag, "SSH TOFU: First connect to $hostKeyId, fingerprint saved")
+                    } else if (knownFingerprint != actualFingerprint) {
+                        /* FINGERPRINT BERUBAH — potensi MITM! Disconnect segera. */
+                        session?.disconnect()
+                        throw SecurityException(
+                            "PERINGATAN KEAMANAN: Host key untuk ${config.host}:${config.port} telah berubah!\n" +
+                            "Ini bisa berarti server diganti, atau ada serangan Man-in-the-Middle.\n" +
+                            "Fingerprint sebelumnya: $knownFingerprint\n" +
+                            "Fingerprint sekarang: $actualFingerprint\n" +
+                            "Jika Anda yakin ini aman, ketik 'storage-reset' di terminal untuk reset host keys."
+                        )
+                    } else {
+                        Log.i(tag, "SSH TOFU: Host key verified for $hostKeyId")
+                    }
+                }
 
                 Log.i(tag, "SSH connected: ${config.username}@${config.host}:${config.port}")
 

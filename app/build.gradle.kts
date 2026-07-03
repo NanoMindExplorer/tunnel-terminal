@@ -11,9 +11,9 @@ android {
         applicationId = "com.tunnel.terminal"
         minSdk = 24
         targetSdk = 34
-        // Phase 33: Fix input dobel + soft keyboard + provider dropdown + cd quote (audit v2)
-        versionCode = 21
-        versionName = "5.3.0-phase33-audit-v2-sprint1"
+        // Phase 34: SSH TOFU real + paste button (audit v2 sprint 2)
+        versionCode = 22
+        versionName = "5.4.0-phase34-audit-v2-sprint2"
     }
 
     buildTypes {

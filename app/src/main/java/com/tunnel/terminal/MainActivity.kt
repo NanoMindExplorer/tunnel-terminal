@@ -1016,6 +1016,19 @@ class MainActivity : ComponentActivity() {
             }
 
             fun handleExtraKey(key: String) {
+                /* Phase 34 (A4): PASTE — ambil dari clipboard, kirim ke PTY. */
+                if (key == "PASTE") {
+                    val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                    val clipText = clipboard.primaryClip?.getItemAt(0)?.coerceToText(this@MainActivity)?.toString() ?: ""
+                    if (clipText.isNotEmpty()) {
+                        activeExecutor.writeRaw(clipText)
+                        activeExecutor.currentCommandBuffer += clipText.replace("\n", "")
+                        Toast.makeText(this@MainActivity, "Pasted ${clipText.length} chars", Toast.LENGTH_SHORT).show()
+                    } else {
+                        Toast.makeText(this@MainActivity, "Clipboard kosong", Toast.LENGTH_SHORT).show()
+                    }
+                    return
+                }
                 val ansiCode: String = when (key) {
                     "ESC" -> "\u001B"
                     "TAB" -> "\t"
@@ -1077,6 +1090,12 @@ class MainActivity : ComponentActivity() {
                     cmd == "storage-reset" -> {
                         storageManager.clearSetup()
                         activeExecutor.emulator.process("\n\u001B[33m[Storage] Setup direset. Ketik 'setup-storage' untuk konfigurasi ulang.\u001B[0m\n")
+                        activeExecutor.triggerScreenUpdate()
+                    }
+                    cmd == "ssh-reset-hostkeys" -> {
+                        /* BUG-02: Reset SSH host key fingerprints (TOFU). */
+                        getSharedPreferences("TunnelSshHostKeys", Context.MODE_PRIVATE).edit().clear().apply()
+                        activeExecutor.emulator.process("\n\u001B[33m[SSH] Semua host key fingerprints direset. Koneksi berikutnya akan menerima host key baru.\u001B[0m\n")
                         activeExecutor.triggerScreenUpdate()
                     }
                     cmd == "system-info" -> {

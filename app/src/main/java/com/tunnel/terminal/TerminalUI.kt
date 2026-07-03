@@ -133,7 +133,8 @@ fun ExtraKeysBar(
     onKeyPressed: (String) -> Unit
 ) {
     /* Dua baris: simbol + kontrol. Tambah HOME, END, PGUP, PGDN. */
-    val controlKeys = listOf("ESC", "TAB", "CTRL", "ALT", "↑", "↓", "←", "→", "HOME", "END", "PGUP", "PGDN", "BKSP", "DEL")
+    /* Phase 34 (A4): Tambah "PASTE" key untuk paste dari clipboard. */
+    val controlKeys = listOf("ESC", "TAB", "CTRL", "ALT", "↑", "↓", "←", "→", "HOME", "END", "PGUP", "PGDN", "BKSP", "DEL", "PASTE")
     val symbolKeys = listOf("~", "*", "$", "\"", "'", ";", "&", "|", "-", "/", "(", ")", "<", ">", "=", "{", "}", "[", "]", "#", "!", "?", "\\", "@", "`")
 
     Column(modifier = Modifier.fillMaxWidth().background(Color(0xFF2B2B2B))) {
