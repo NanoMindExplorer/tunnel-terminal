@@ -11,9 +11,9 @@ android {
         applicationId = "com.tunnel.terminal"
         minSdk = 24
         targetSdk = 34
-        // Phase 34: SSH TOFU real + paste button (audit v2 sprint 2)
-        versionCode = 22
-        versionName = "5.4.0-phase34-audit-v2-sprint2"
+        // Phase 35: Text selection + credit NanoMind + crypto addresses (audit v2 sprint 3)
+        versionCode = 23
+        versionName = "5.5.0-phase35-text-selection-credit"
     }
 
     buildTypes {

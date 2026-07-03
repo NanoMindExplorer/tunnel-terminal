@@ -244,12 +244,48 @@ fun TerminalScreenView(
                     onResize(newRows, newCols, fontSize)
                 }
             }
-            /* Phase 19.5/21 hotfix: Tap-to-focus (untuk show soft keyboard).
-             * Mouse scroll wheel handled otomatis oleh verticalScroll di Column bawah. */
+            /* Phase 35 (A3): Tap-to-focus + long-press untuk text selection.
+             * detectTapGestures handle onTap (focus) dan onLongPress (start selection). */
             .pointerInput(Unit) {
                 detectTapGestures(
-                    onTap = { _ -> onTap() }
+                    onTap = { _ -> onTap() },
+                    onLongPress = { offset ->
+                        /* Start selection dari posisi long-press. */
+                        val col = (offset.x / (fontSize * 0.6f * density.density)).toInt().coerceIn(0, renderCols - 1)
+                        val row = (offset.y / (fontSize * 1.2f * density.density)).toInt().coerceIn(0, renderRows - 1)
+                        selectionStart = Pair(row, col)
+                        selectionEnd = Pair(row, col)
+                        isSelecting = true
+                    }
                 )
+            }
+            /* Phase 35 (A3): Drag untuk extend selection. */
+            .pointerInput(isSelecting) {
+                if (isSelecting) {
+                    androidx.compose.foundation.gestures.detectDragGestures(
+                        onDragStart = { offset ->
+                            /* Selection already started by long-press. */
+                        },
+                        onDragEnd = {
+                            /* Selection complete — copy to clipboard. */
+                            val text = getSelectedText(screenSnapshot, selectionStart, selectionEnd, renderCols)
+                            if (text.isNotEmpty()) {
+                                clipboardManager.setText(AnnotatedString(text))
+                            }
+                            isSelecting = false
+                        },
+                        onDragCancel = {
+                            isSelecting = false
+                        },
+                        onDrag = { change, _ ->
+                            change.consume()
+                            val pos = change.position
+                            val col = (pos.x / (fontSize * 0.6f * density.density)).toInt().coerceIn(0, renderCols - 1)
+                            val row = (pos.y / (fontSize * 1.2f * density.density)).toInt().coerceIn(0, renderRows - 1)
+                            selectionEnd = Pair(row, col)
+                        }
+                    )
+                }
             }
             /* Phase 24: Pinch-to-zoom — pakai external state via onFontSizeChange.
              * Old code: fontSize local, tidak persist, tidak trigger resize.
@@ -264,7 +300,13 @@ fun TerminalScreenView(
                 }
             }
     ) {
-        /* Phase 26: Throttle snapshot — hanya re-snapshot saat screenDirty berubah.
+        /* Phase 35 (A3): Text selection state. */
+    var selectionStart by remember { mutableStateOf<Pair<Int, Int>?>(null) }
+    var selectionEnd by remember { mutableStateOf<Pair<Int, Int>?>(null) }
+    var isSelecting by remember { mutableStateOf(false) }
+    val clipboardManager = androidx.compose.ui.platform.LocalClipboardManager.current
+
+    /* Phase 26: Throttle snapshot — hanya re-snapshot saat screenDirty berubah.
          * Compose's remember(screenDirty) sudah efisien: hanya re-compute saat key berubah.
          * Untuk output sangat cepat (yes, find /), screenDirty berubah cepat tapi Compose
          * batch updates per frame (~16ms), jasi tidak per frame-by-frame snapshot. */
@@ -286,8 +328,19 @@ fun TerminalScreenView(
                         val cell = screenSnapshot.getOrElse(row) { arrayOf() }.getOrElse(col) { TerminalCell() }
                         val isCursor = cursorState.visible && row == cursorState.row && col == cursorState.col
 
+                        /* Phase 35 (A3): Selection highlight. */
+                        val isInSelection = isSelecting && selectionStart != null && selectionEnd != null &&
+                            isCellInSelection(row, col, selectionStart!!, selectionEnd!!)
+
                         /* Phase 20: Fix cursor double-render. */
-                        if (isCursor) {
+                        if (isInSelection) {
+                            /* Selected cell: highlight background. */
+                            withStyle(SpanStyle(
+                                background = theme.uiAccent.copy(alpha = 0.4f),
+                                color = theme.uiText,
+                                fontFamily = FontFamily.Monospace
+                            )) { append(cell.char) }
+                        } else if (isCursor) {
                             withStyle(SpanStyle(
                                 background = theme.cursor,
                                 color = theme.background,
@@ -335,6 +388,47 @@ fun TerminalScreenView(
             }
         }
     }
+}
+
+/* Phase 35 (A3): Helper functions untuk text selection. */
+
+/** Check apakah cell (row, col) berada dalam selection range. */
+private fun isCellInSelection(row: Int, col: Int, start: Pair<Int, Int>, end: Pair<Int, Int>): Boolean {
+    /* Normalize: start harus selalu <= end. */
+    val (startRow, startCol) = if (start.first < end.first || (start.first == end.first && start.second <= end.second)) start else end
+    val (endRow, endCol) = if (start.first < end.first || (start.first == end.first && start.second <= end.second)) end else start
+    return when {
+        row < startRow || row > endRow -> false
+        row == startRow && row == endRow -> col in startCol..endCol
+        row == startRow -> col >= startCol
+        row == endRow -> col <= endCol
+        else -> true
+    }
+}
+
+/** Extract text dari selection range di screen snapshot. */
+private fun getSelectedText(
+    screen: Array<Array<TerminalCell>>,
+    start: Pair<Int, Int>?,
+    end: Pair<Int, Int>?,
+    cols: Int
+): String {
+    if (start == null || end == null) return ""
+    val sb = StringBuilder()
+    val (startRow, startCol) = if (start.first < end.first || (start.first == end.first && start.second <= end.second)) start else end
+    val (endRow, endCol) = if (start.first < end.first || (start.first == end.first && start.second <= end.second)) end else start
+    for (row in startRow..endRow) {
+        if (row >= screen.size) break
+        val rowStart = if (row == startRow) startCol else 0
+        val rowEnd = if (row == endRow) endCol else cols - 1
+        for (col in rowStart..rowEnd) {
+            if (col < screen[row].size) {
+                sb.append(screen[row][col].char)
+            }
+        }
+        if (row < endRow) sb.append('\n')
+    }
+    return sb.toString()
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -964,49 +1058,70 @@ fun AIChatPanel(
                 }
                 2 -> {
                     /* About tab. */
+                    val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
+                    val context = androidx.compose.ui.platform.LocalContext.current
                     Column(modifier = Modifier.weight(1f).padding(16.dp).verticalScroll(scrollState)) {
                         Text(
-                            "Tunnel Terminal v4.8.0",
+                            "Tunnel Terminal v5.4.0",
                             color = theme.uiText,
                             fontSize = 16.sp,
                             fontFamily = FontFamily.Monospace
                         )
                         Text(
-                            "Phase 19: Free AI Provider + Image Vision + File Explorer + Workspace Sessions",
+                            "AI-Native Terminal for Android",
                             color = theme.uiTextMuted,
                             fontSize = 11.sp,
                             fontFamily = FontFamily.Monospace
                         )
                         Spacer(modifier = Modifier.height(16.dp))
+
+                        /* Creator Credit. */
                         Text(
-                            "Fitur Phase 19:",
+                            "─ Creator ────────────────────────────────────",
                             color = theme.ansi.getOrElse(6) { Color(0xFF00BCD4) },
                             fontSize = 12.sp,
                             fontFamily = FontFamily.Monospace
                         )
                         Text(
-                            "• 13 AI Provider presets + Custom (bebas masukin provider apapun)\n" +
-                            "• Fetch Models dari /models endpoint (semua model tersedia)\n" +
-                            "• AI Image Vision (gpt-4o, gemini-1.5, claude-3, llama-3.2-vision)\n" +
-                            "• File Explorer Drawer (browse tanpa cd)\n" +
-                            "• Workspace Sessions (save/restore tab sets)\n" +
-                            "• Launcher icon redesign (terminal + AI nodes)\n" +
-                            "• Vision capability detection per model\n" +
-                            "• Image auto-compress (max 1024px, JPEG 85)\n\n" +
-                            "Fitur Phase 18 (masih aktif):\n" +
-                            "• AI Streaming SSE - response token-by-token\n" +
-                            "• Multi-turn conversation memory (max 20 pesan)\n" +
-                            "• 6 theme presets: Matrix, Dracula, Solarized, Monokai, Nord, Tokyo Night\n" +
-                            "• Theme-aware UI (drawer, buttons, text)\n" +
-                            "• Streaming cursor indicator (▋ blink)\n" +
-                            "• Auto-scroll selama streaming",
-                            color = theme.uiText,
+                            "NanoMind",
+                            color = theme.ansi.getOrElse(2) { Color(0xFF4CAF50) },
+                            fontSize = 14.sp,
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            "github.com/NanoMindExplorer",
+                            color = theme.uiAccent,
                             fontSize = 11.sp,
                             fontFamily = FontFamily.Monospace
                         )
+
+                        Spacer(modifier = Modifier.height(16.dp))
+
+                        /* Crypto addresses — tap to copy. */
+                        Text(
+                            "─ Support Creator (Crypto) ───────────────────",
+                            color = theme.ansi.getOrElse(3) { Color(0xFFFFC107) },
+                            fontSize = 12.sp,
+                            fontFamily = FontFamily.Monospace
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        /* Bitcoin. */
+                        CryptoAddressRow("Bitcoin", "TDzaGUA7YgQEaB1RfnBgWWn9QzJ8QFCVmt", theme, clipboard, context)
+                        Spacer(modifier = Modifier.height(6.dp))
+                        /* EVM. */
+                        CryptoAddressRow("EVM", "0x96e49c673252bb0a2253418417cf1db000fec6ef", theme, clipboard, context)
+                        Spacer(modifier = Modifier.height(6.dp))
+                        /* Solana. */
+                        CryptoAddressRow("Solana", "4B4wprDDz3pnd6EUumwAKf4LNzRHK5pH4qbustsLcLuR", theme, clipboard, context)
+                        Spacer(modifier = Modifier.height(6.dp))
+                        /* Tron. */
+                        CryptoAddressRow("Tron", "TDzaGUA7YgQEaB1RfnBgWWn9QzJ8QFCVmt", theme, clipboard, context)
+
                         Spacer(modifier = Modifier.height(16.dp))
                         Text(
-                            "Open source:",
+                            "─ Open Source ────────────────────────────────",
                             color = theme.ansi.getOrElse(6) { Color(0xFF00BCD4) },
                             fontSize = 12.sp,
                             fontFamily = FontFamily.Monospace
@@ -1021,5 +1136,51 @@ fun AIChatPanel(
                 }
             }
         }
+    }
+}
+
+/**
+ * Phase 35: CryptoAddressRow — baris alamat crypto dengan label + address + tap to copy.
+ */
+@Composable
+fun CryptoAddressRow(
+    label: String,
+    address: String,
+    theme: TerminalTheme,
+    clipboard: androidx.compose.ui.platform.ClipboardManager,
+    context: android.content.Context
+) {
+    var copied by remember { mutableStateOf(false) }
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(theme.uiSurface, RoundedCornerShape(4.dp))
+            .clickable {
+                clipboard.setText(AnnotatedString(address))
+                copied = true
+                android.widget.Toast.makeText(context, "$label address copied!", android.widget.Toast.LENGTH_SHORT).show()
+            }
+            .padding(horizontal = 8.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            "$label: ",
+            color = theme.ansi.getOrElse(3) { Color(0xFFFFC107) },
+            fontSize = 10.sp,
+            fontFamily = FontFamily.Monospace,
+            fontWeight = FontWeight.Bold
+        )
+        Text(
+            address,
+            color = theme.uiText,
+            fontSize = 10.sp,
+            fontFamily = FontFamily.Monospace,
+            modifier = Modifier.weight(1f)
+        )
+        Text(
+            if (copied) "✓" else "📋",
+            color = if (copied) Color(0xFF4CAF50) else theme.uiTextMuted,
+            fontSize = 12.sp
+        )
     }
 }
