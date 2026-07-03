@@ -41,7 +41,10 @@ class ShellExecutor(private val themeHolder: ThemeHolder = ThemeHolder()) : Term
     private var readThread: Thread? = null
     override val id: Int = System.currentTimeMillis().toInt() and 0x7FFFFFFF
 
-    override var emulator = TerminalEmulator(themeHolder)
+    override var emulator = TerminalEmulator(themeHolder).also {
+        /* BUG-09 fix: Wire writeCallback untuk DA/DSR responses. */
+        it.writeCallback = { data -> writeRaw(data) }
+    }
 
     override var isAlive by mutableStateOf(true)
         private set

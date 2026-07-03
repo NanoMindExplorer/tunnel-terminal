@@ -18,6 +18,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /**
  * DiffView - Render diff antara original dan modified text.
@@ -102,8 +104,26 @@ fun DiffViewDialog(
     onApply: () -> Unit,
     onReject: () -> Unit
 ) {
-    val diff = remember(originalContent, modifiedContent) {
-        DiffCalculator.computeDiff(originalContent, modifiedContent)
+    /* BUG-11 fix: Move diff computation off main thread + size limit.
+     * Old code: remember{} blocks main thread with O(m×n) LCS.
+     * Fix: LaunchedEffect + Dispatchers.Default + size limit (skip diff if >10000 lines). */
+    var diff by remember { mutableStateOf<List<DiffCalculator.DiffLine>>(emptyList()) }
+    var diffLoading by remember { mutableStateOf(true) }
+    var diffSkipped by remember { mutableStateOf(false) }
+
+    LaunchedEffect(originalContent, modifiedContent) {
+        val origLines = originalContent.lines().size
+        val modLines = modifiedContent.lines().size
+        if (origLines * modLines > 10_000_000) {
+            /* Terlalu besar — skip diff, langsung apply. */
+            diffSkipped = true
+            diffLoading = false
+        } else {
+            diff = withContext(Dispatchers.Default) {
+                DiffCalculator.computeDiff(originalContent, modifiedContent)
+            }
+            diffLoading = false
+        }
     }
 
     AlertDialog(

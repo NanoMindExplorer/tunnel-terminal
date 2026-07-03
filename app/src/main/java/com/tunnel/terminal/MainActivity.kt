@@ -35,6 +35,7 @@ import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -182,8 +183,11 @@ class MainActivity : ComponentActivity() {
     ) { uris: List<Uri> ->
         if (uris.isNotEmpty()) {
             lifecycleScope.launch {
-                val base64List = uris.mapNotNull { uri ->
-                    ImageHelper.uriToBase64(this@MainActivity, uri)
+                /* BUG-12 fix: Image decode di IO thread, bukan main thread. */
+                val base64List = withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    uris.mapNotNull { uri ->
+                        ImageHelper.uriToBase64(this@MainActivity, uri)
+                    }
                 }
                 if (base64List.isNotEmpty()) {
                     pendingImages.addAll(base64List)
@@ -1592,7 +1596,9 @@ class MainActivity : ComponentActivity() {
      */
     private suspend fun waitForPrompt(executor: TerminalSession, outputBeforeLen: Int, timeoutMs: Long): Boolean {
         val startTime = System.currentTimeMillis()
-        val promptRegex = Regex("""\$\s*$|#\s*$|tunnel@android:[^\$]*\$\s*$""")
+        /* BUG-10 fix: Perketat regex — hanya match prompt spesifik Tunnel Terminal,
+         * bukan baris apa pun yang berakhir dengan $ atau #. */
+        val promptRegex = Regex("""tunnel@android:[^\$]*\$\s*$|[a-zA-Z_][a-zA-Z0-9_]*@[a-zA-Z0-9.-]+:[^\$#]*[\$#]\s*$""")
         while (System.currentTimeMillis() - startTime < timeoutMs) {
             val current = executor.getCleanOutput()
             if (current.length > outputBeforeLen + 2) {

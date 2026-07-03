@@ -182,31 +182,36 @@ fun TerminalScreenView(
     fontSizeState: Float = 12f,
     onFontSizeChange: (Float) -> Unit = {}
 ) {
-    /* Phase 24: fontSize dari external state (persist antar recompose + tab switch).
-     * Old code: var fontSize by remember — reset saat recompose/tab switch.
-     * Fix: pakai fontSizeState dari parent, onFontSizeChange untuk update. */
+    /* Phase 24: fontSize dari external state (persist antar recompose + tab switch). */
     val fontSize = fontSizeState
     var lastResizeTime by remember { mutableStateOf(0L) }
     val scrollState = rememberScrollState()
 
-    /* Auto-scroll ke bawah saat output baru. Auto-scroll to bottom on new output. */
+    /* BUG-05 fix: Simpan ukuran Box terakhir untuk dipakai saat pinch-zoom.
+     * BUG-06 fix: onResize dipanggil langsung di LaunchedEffect(fontSize), bukan
+     * mengandalkan onSizeChanged yang tidak terpicu saat hanya fontSize berubah. */
+    var lastSize by remember { mutableStateOf(androidx.compose.ui.unit.IntSize.Zero) }
+    val density = androidx.compose.ui.platform.LocalDensity.current
+
+    /* Auto-scroll ke bawah saat output baru. */
     LaunchedEffect(screenDirty) {
         if (scrollState.maxValue > 0) {
             scrollState.scrollTo(scrollState.maxValue)
         }
     }
 
-    /* Phase 24: Re-trigger resize saat fontSize berubah (dari pinch-to-zoom).
-     * Old code: lastResizeTime set tapi onResize tidak dipanggil setelah zoom.
-     * Fix: LaunchedEffect(fontSize) panggil onResize dengan ukuran baru. */
+    /* BUG-05+06 fix: Panggil onResize LANGSUNG saat fontSize berubah.
+     * Konversi sp→px dengan density yang benar. */
     LaunchedEffect(fontSize) {
-        /* Recalculate cols/rows based on new fontSize + trigger resize. */
-        val charWidthPx = (fontSize * 0.6).roundToInt()
-        val charHeightPx = (fontSize * 1.2).roundToInt()
-        if (charWidthPx > 0 && charHeightPx > 0) {
-            /* size tidak tersedia di sini, tapi onResize akan recalculate di onSizeChanged.
-             * Force trigger dengan set lastResizeTime = 0 agar onSizeChanged tidak skip. */
-            lastResizeTime = 0L
+        if (lastSize.width > 0 && lastSize.height > 0) {
+            /* BUG-05 fix: Gunakan density untuk konversi sp→px. */
+            val charWidthPx = with(density) { (fontSize.sp.toPx() * 0.6f) }
+            val charHeightPx = with(density) { (fontSize.sp.toPx() * 1.2f) }
+            if (charWidthPx > 0 && charHeightPx > 0) {
+                val newCols = (lastSize.width / charWidthPx).toInt().coerceAtLeast(20)
+                val newRows = (lastSize.height / charHeightPx).toInt().coerceAtLeast(10)
+                onResize(newRows, newCols, fontSize)
+            }
         }
     }
 
@@ -215,17 +220,17 @@ fun TerminalScreenView(
             .fillMaxSize()
             .background(theme.background)
             .onSizeChanged { size ->
-                /* Debounce resize: skip jika < 100ms sejak resize terakhir.
-                 * Debounce: skip if < 100ms since last resize. */
+                lastSize = size
                 val now = System.currentTimeMillis()
                 if (now - lastResizeTime < 100) return@onSizeChanged
                 lastResizeTime = now
 
-                val charWidthPx = (fontSize * 0.6).roundToInt()
-                val charHeightPx = (fontSize * 1.2).roundToInt()
+                /* BUG-05 fix: Gunakan density untuk konversi sp→px. */
+                val charWidthPx = with(density) { (fontSize.sp.toPx() * 0.6f) }
+                val charHeightPx = with(density) { (fontSize.sp.toPx() * 1.2f) }
                 if (charWidthPx > 0 && charHeightPx > 0 && size.width > 0 && size.height > 0) {
-                    val newCols = (size.width / charWidthPx).coerceAtLeast(20)
-                    val newRows = (size.height / charHeightPx).coerceAtLeast(10)
+                    val newCols = (size.width / charWidthPx).toInt().coerceAtLeast(20)
+                    val newRows = (size.height / charHeightPx).toInt().coerceAtLeast(10)
                     onResize(newRows, newCols, fontSize)
                 }
             }
@@ -298,6 +303,9 @@ fun TerminalScreenView(
                     text = annotatedString,
                     fontFamily = FontFamily.Monospace,
                     fontSize = fontSize.sp,
+                    softWrap = false,
+                    maxLines = 1,
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Clip,
                     modifier = Modifier.fillMaxWidth()
                 )
             }

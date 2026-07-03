@@ -40,7 +40,10 @@ class ContextManager(private val context: Context) {
      */
     fun parseMentions(text: String): List<String> {
         val mentions = mutableListOf<String>()
-        val regex = Regex("@(file|block|command|terminal|snippet)(?::([^\\s]+))?|@terminal")
+        /* BUG-13 fix: Support quoted values ("...") dan paths dengan spasi.
+         * Old code: [^\s]+ berhenti di spasi pertama — path dengan spasi terpotong.
+         * Fix: Tangkap quoted "..." atau non-space sequence. */
+        val regex = Regex("@(file|block|command|terminal|snippet)(?::(?:\"([^\"]+)\"|(\\S+)))?|@terminal")
         regex.findAll(text).forEach { match ->
             mentions.add(match.value)
         }
@@ -130,7 +133,9 @@ class ContextManager(private val context: Context) {
         return ResolvedMention(
             mention = mention,
             type = MentionType.COMMAND,
-            content = "Command: $cmd\n(Output will appear in terminal)",
+            /* BUG-13b fix: Command tidak dieksekusi secara real-time (butuh async).
+             * Beri pesan jujur, jangan klaim "Output will appear in terminal". */
+            content = "Command: $cmd\n(Note: Command output not captured in this version. Run manually in terminal.)",
             displayName = "command: $cmd"
         )
     }

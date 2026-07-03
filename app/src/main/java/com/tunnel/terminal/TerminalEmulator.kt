@@ -54,7 +54,7 @@ class TerminalEmulator(private val themeHolder: ThemeHolder = ThemeHolder()) {
         private set
 
     /** Screen buffer utama. Main screen buffer. */
-    private var screen = Array(rows) { Array(cols) { TerminalCell() } }
+    private var screen = Array(rows) { Array(cols) { blankCell() } }
     /** Alternate screen buffer (untuk TUI apps). Alt screen buffer for TUI. */
     private var altScreen: Array<Array<TerminalCell>>? = null
 
@@ -83,9 +83,14 @@ class TerminalEmulator(private val themeHolder: ThemeHolder = ThemeHolder()) {
     private val defaultFg: Color get() = themeHolder.theme.foreground
     private val defaultBg: Color get() = themeHolder.theme.background
 
+    /** BUG-08 fix: Helper untuk membuat cell kosong dengan warna tema aktif. */
+    private fun blankCell() = TerminalCell(fgColor = defaultFg, bgColor = defaultBg)
+
     /** Scrolling region (top, bottom inclusive, 0-indexed). */
     private var scrollTop = 0
     private var scrollBottom = rows - 1
+    /** BUG-09 fix: Callback untuk menulis respons balik ke PTY (DA/DSR). */
+    var writeCallback: ((String) -> Unit)? = null
 
     /** True jika sedang di alt screen. */
     private var inAltScreen = false
@@ -109,7 +114,7 @@ class TerminalEmulator(private val themeHolder: ThemeHolder = ThemeHolder()) {
             if (newRows <= 0 || newCols <= 0) return
             if (newRows == rows && newCols == cols && newFontSize == fontSize) return
 
-            val newScreen = Array(newRows) { Array(newCols) { TerminalCell() } }
+            val newScreen = Array(newRows) { Array(newCols) { blankCell() } }
             for (r in 0 until minOf(rows, newRows)) {
                 for (c in 0 until minOf(cols, newCols)) {
                     newScreen[r][c] = screen[r][c]
@@ -119,6 +124,8 @@ class TerminalEmulator(private val themeHolder: ThemeHolder = ThemeHolder()) {
             rows = newRows
             cols = newCols
             fontSize = newFontSize
+            /* BUG-07 fix: Reset scroll region ke layar penuh saat resize. */
+            scrollTop = 0
             scrollBottom = rows - 1
 
             if (cursorRow >= rows) cursorRow = rows - 1
@@ -311,7 +318,7 @@ class TerminalEmulator(private val themeHolder: ThemeHolder = ThemeHolder()) {
             for (r in scrollTop until scrollBottom) {
                 screen[r] = screen[r + 1]
             }
-            screen[scrollBottom] = Array(cols) { TerminalCell() }
+            screen[scrollBottom] = Array(cols) { blankCell() }
         }
         cursorRow = scrollBottom
     }
@@ -324,7 +331,7 @@ class TerminalEmulator(private val themeHolder: ThemeHolder = ThemeHolder()) {
             for (r in scrollBottom downTo scrollTop + 1) {
                 screen[r] = screen[r - 1]
             }
-            screen[scrollTop] = Array(cols) { TerminalCell() }
+            screen[scrollTop] = Array(cols) { blankCell() }
         }
         cursorRow = scrollTop
     }
@@ -424,20 +431,20 @@ class TerminalEmulator(private val themeHolder: ThemeHolder = ThemeHolder()) {
                 val mode = paramList.getOrElse(0) { 0 }
                 when (mode) {
                     0 -> { /* cursor to end of screen */
-                        for (c in cursorCol until cols) screen[cursorRow][c] = TerminalCell()
+                        for (c in cursorCol until cols) screen[cursorRow][c] = blankCell()
                         for (r in cursorRow + 1 until rows) {
-                            for (c in 0 until cols) screen[r][c] = TerminalCell()
+                            for (c in 0 until cols) screen[r][c] = blankCell()
                         }
                     }
                     1 -> { /* start of screen to cursor */
                         for (r in 0 until cursorRow) {
-                            for (c in 0 until cols) screen[r][c] = TerminalCell()
+                            for (c in 0 until cols) screen[r][c] = blankCell()
                         }
-                        for (c in 0..cursorCol) screen[cursorRow][c] = TerminalCell()
+                        for (c in 0..cursorCol) screen[cursorRow][c] = blankCell()
                     }
                     2, 3 -> { /* entire screen + scrollback (3) */
                         for (r in 0 until rows) {
-                            for (c in 0 until cols) screen[r][c] = TerminalCell()
+                            for (c in 0 until cols) screen[r][c] = blankCell()
                         }
                         cursorRow = 0; cursorCol = 0
                     }
@@ -449,9 +456,9 @@ class TerminalEmulator(private val themeHolder: ThemeHolder = ThemeHolder()) {
                 val mode = paramList.getOrElse(0) { 0 }
                 if (cursorRow < rows) {
                     when (mode) {
-                        0 -> for (c in cursorCol until cols) screen[cursorRow][c] = TerminalCell()
-                        1 -> for (c in 0..cursorCol) screen[cursorRow][c] = TerminalCell()
-                        2 -> for (c in 0 until cols) screen[cursorRow][c] = TerminalCell()
+                        0 -> for (c in cursorCol until cols) screen[cursorRow][c] = blankCell()
+                        1 -> for (c in 0..cursorCol) screen[cursorRow][c] = blankCell()
+                        2 -> for (c in 0 until cols) screen[cursorRow][c] = blankCell()
                     }
                 }
             }
@@ -487,6 +494,21 @@ class TerminalEmulator(private val themeHolder: ThemeHolder = ThemeHolder()) {
              * ditangani di handleEscape(). Jangan duplikat di sini.
              * IND/RI are ESC D/M without [; handled in handleEscape(). */
 
+            /* BUG-09 fix: Respond to DA (Device Attributes) dan DSR (Device Status Report). */
+            'c' -> {
+                /* CSI c atau CSI 0 c — Device Attributes. Respond as VT102. */
+                writeCallback?.invoke("\u001B[?1;2c")
+            }
+            'n' -> {
+                /* CSI 6 n — Device Status Report (cursor position). */
+                if (paramList.isNotEmpty() && paramList[0] == 6) {
+                    writeCallback?.invoke("\u001B[${cursorRow + 1};${cursorCol + 1}R")
+                }
+                /* CSI 5 n — Device Status. Respond "OK". */
+                else if (paramList.isNotEmpty() && paramList[0] == 5) {
+                    writeCallback?.invoke("\u001B[0n")
+                }
+            }
             else -> { /* unhandled CSI - ignore */ }
         }
     }
@@ -659,10 +681,10 @@ class TerminalEmulator(private val themeHolder: ThemeHolder = ThemeHolder()) {
                         if (!inAltScreen) {
                             mainScreen = screen
                         }
-                        if (altScreen == null) altScreen = Array(rows) { Array(cols) { TerminalCell() } }
+                        if (altScreen == null) altScreen = Array(rows) { Array(cols) { blankCell() } }
                         /* Clear alt screen. */
                         for (r in 0 until rows) {
-                            for (c in 0 until cols) altScreen!![r][c] = TerminalCell()
+                            for (c in 0 until cols) altScreen!![r][c] = blankCell()
                         }
                         inAltScreen = true
                         screen = altScreen!!
@@ -670,7 +692,7 @@ class TerminalEmulator(private val themeHolder: ThemeHolder = ThemeHolder()) {
                     } else {
                         /* Phase 20: Restore main screen (was creating blank screen). */
                         inAltScreen = false
-                        screen = mainScreen ?: Array(rows) { Array(cols) { TerminalCell() } }
+                        screen = mainScreen ?: Array(rows) { Array(cols) { blankCell() } }
                         mainScreen = null
                         /* Note: cursor position not restored (1048 handles that separately).
                          * 1049 = save cursor + switch; 1047 = switch only; 1048 = save cursor only.
@@ -698,7 +720,7 @@ class TerminalEmulator(private val themeHolder: ThemeHolder = ThemeHolder()) {
             for (r in scrollBottom downTo cursorRow + 1) {
                 screen[r] = screen[r - 1]
             }
-            screen[cursorRow] = Array(cols) { TerminalCell() }
+            screen[cursorRow] = Array(cols) { blankCell() }
         }
     }
 
@@ -709,7 +731,7 @@ class TerminalEmulator(private val themeHolder: ThemeHolder = ThemeHolder()) {
             for (r in cursorRow until scrollBottom) {
                 screen[r] = screen[r + 1]
             }
-            screen[scrollBottom] = Array(cols) { TerminalCell() }
+            screen[scrollBottom] = Array(cols) { blankCell() }
         }
     }
 
@@ -720,14 +742,14 @@ class TerminalEmulator(private val themeHolder: ThemeHolder = ThemeHolder()) {
             for (c in cursorCol until cols - 1) {
                 screen[cursorRow][c] = screen[cursorRow][c + 1]
             }
-            screen[cursorRow][cols - 1] = TerminalCell()
+            screen[cursorRow][cols - 1] = blankCell()
         }
     }
 
     private fun eraseChars(n: Int) {
         if (cursorRow >= rows) return
         val end = minOf(cursorCol + n, cols)
-        for (c in cursorCol until end) screen[cursorRow][c] = TerminalCell()
+        for (c in cursorCol until end) screen[cursorRow][c] = blankCell()
     }
 
     private fun insertChars(n: Int) {
@@ -737,7 +759,7 @@ class TerminalEmulator(private val themeHolder: ThemeHolder = ThemeHolder()) {
             for (c in cols - 1 downTo cursorCol + 1) {
                 screen[cursorRow][c] = screen[cursorRow][c - 1]
             }
-            screen[cursorRow][cursorCol] = TerminalCell()
+            screen[cursorRow][cursorCol] = blankCell()
         }
     }
 
@@ -746,10 +768,10 @@ class TerminalEmulator(private val themeHolder: ThemeHolder = ThemeHolder()) {
         if (inAltScreen) {
             inAltScreen = false
             altScreen = null
-            screen = Array(rows) { Array(cols) { TerminalCell() } }
+            screen = Array(rows) { Array(cols) { blankCell() } }
         }
         for (r in 0 until rows) {
-            for (c in 0 until cols) screen[r][c] = TerminalCell()
+            for (c in 0 until cols) screen[r][c] = blankCell()
         }
         cursorRow = 0; cursorCol = 0
         scrollTop = 0; scrollBottom = rows - 1

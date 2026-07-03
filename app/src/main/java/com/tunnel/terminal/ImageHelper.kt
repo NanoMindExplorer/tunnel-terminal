@@ -33,8 +33,19 @@ object ImageHelper {
     fun uriToBase64(context: Context, uri: Uri): String? {
         return try {
             val inputStream = context.contentResolver.openInputStream(uri) ?: return null
-            val bitmap: Bitmap = BitmapFactory.decodeStream(inputStream)
+            /* BUG-12 fix: Two-stage decode — read bounds first (no pixel allocation),
+             * calculate inSampleSize, then decode at reduced size.
+             * Old code: decodeStream full resolution → OOM for large photos. */
+            val boundsOptions = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeStream(inputStream, null, boundsOptions)
             inputStream.close()
+
+            val sampleSize = calculateSampleSize(boundsOptions.outWidth, boundsOptions.outHeight, MAX_DIMENSION)
+            val decodeOptions = BitmapFactory.Options().apply { inSampleSize = sampleSize }
+            val inputStream2 = context.contentResolver.openInputStream(uri) ?: return null
+            val bitmap = BitmapFactory.decodeStream(inputStream2, null, decodeOptions)
+            inputStream2.close()
+
             if (bitmap == null) {
                 Log.e(TAG, "Failed to decode bitmap from URI: $uri")
                 return null
@@ -44,6 +55,16 @@ object ImageHelper {
             Log.e(TAG, "uriToBase64 error: ${e.message}")
             null
         }
+    }
+
+    /** BUG-12 fix: Calculate inSampleSize untuk downscale saat decode. */
+    private fun calculateSampleSize(width: Int, height: Int, maxDim: Int): Int {
+        if (width <= maxDim && height <= maxDim) return 1
+        var sample = 1
+        while (width / sample > maxDim || height / sample > maxDim) {
+            sample *= 2
+        }
+        return sample
     }
 
     /**
