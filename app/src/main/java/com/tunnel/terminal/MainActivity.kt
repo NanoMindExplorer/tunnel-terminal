@@ -39,6 +39,7 @@ import kotlinx.coroutines.withContext
 import java.io.File
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 
 /**
@@ -546,7 +547,9 @@ class MainActivity : ComponentActivity() {
 
     /** Cd ke folder dari explorer di terminal aktif. */
     private fun cdFromExplorer(dir: File) {
-        shellExecutors.find { it.id == activeExecutorId }?.executeCommand("cd ${dir.absolutePath}")
+        /* B-19 fix: Quote path agar path dengan spasi tidak gagal (sama dengan BUG-17 fix). */
+        val safePath = dir.absolutePath.replace("\"", "\\\"")
+        shellExecutors.find { it.id == activeExecutorId }?.executeCommand("cd \"$safePath\"")
     }
 
     /* BUG-22 fix: Move registerForActivityResult ke property kelas (bukan di method body).
@@ -967,6 +970,14 @@ class MainActivity : ComponentActivity() {
             val tabsData = shellExecutors.mapIndexed { index, executor -> Pair(executor.id, index + 1) }
             var hiddenInput by remember { mutableStateOf("") }
 
+            /* Phase 33 (A2 fix): Deteksi keyboard fisik — jangan paksa soft keyboard muncul.
+             * Old code: if (!hasPhysicalKeyboard) keyboardController?.show() selalu dipanggil → soft keyboard muncul
+             * bahkan saat physical keyboard aktif → adjustResize mengecilkan terminal →
+             * layar "naik ke atas", text tidak kelihatan. */
+            val configuration = LocalConfiguration.current
+            val hasPhysicalKeyboard = configuration.keyboard == android.content.res.Configuration.KEYBOARD_QWERTY &&
+                configuration.hardKeyboardHidden == android.content.res.Configuration.HARDKEYBOARDHIDDEN_NO
+
             /* Phase 26: Fix auto-error-detection terlalu agresif.
              * Old code: trigger pada setiap output chunk yang mengandung "error"
              * → false positive untuk `grep error`, `cat error.log`, dll.
@@ -1221,19 +1232,19 @@ class MainActivity : ComponentActivity() {
                     Key.F4 -> { activeExecutor.writeRaw("\u001BOS"); return true }
                 }
 
-                /* Phase 32: Handle karakter biasa (a-z, 0-9, symbols) LANGSUNG di sini.
-                 * Konsumsi event (return true) agar BasicTextField tidak juga mengirim.
-                 * Ini mencegah double input "lsls" — karakter dikirim hanya sekali. */
-                val ch = keyToChar(key, shift)
-                if (ch != '\u0000') {
-                    val translated = handleChar(ch)
-                    activeExecutor.currentCommandBuffer += translated
-                    activeExecutor.writeRaw(translated)
-                    return true  /* Konsumsi — jangan biarkan BasicTextField juga process */
-                }
-
-                /* Unknown key — consume agar tidak trigger BasicTextField. */
-                return true
+                /* Phase 33 (A1 fix): JANGAN handle karakter cetak biasa di sini.
+                 * Return false agar BasicTextField (IME/InputConnection path) menjadi
+                 * SATU-SATUYA jalur yang mengirim karakter ke PTY via onValueChange.
+                 * Phase 32 salah: return true di sini → karakter dikirim 2x
+                 * (sekali di sini, sekali di onValueChange) → "lsls" bukan "ls".
+                 *
+                 * onPreviewKeyEvent dan onValueChange adalah 2 jalur INDEPENDEN di Android:
+                 * - onPreviewKeyEvent: raw KeyEvent dispatch (hardware keyboard)
+                 * - onValueChange: IME InputConnection commitText (soft + hard keyboard)
+                 * Konsumsi event di jalur 1 TIDAK menghentikan jalur 2.
+                 * Solusi: hanya handle special keys di sini (Enter, Backspace, arrows, dll),
+                 * biarkan karakter cetak via onValueChange. */
+                return false
             }
 
             Box(modifier = Modifier.fillMaxSize()) {
@@ -1297,7 +1308,7 @@ class MainActivity : ComponentActivity() {
                                 val focusRequester = remember { FocusRequester() }
                                 val keyboardController = LocalSoftwareKeyboardController.current
                                 LaunchedEffect(activeExecutorId) {
-                                    try { focusRequester.requestFocus(); keyboardController?.show() } catch (_: Exception) {}
+                                    try { focusRequester.requestFocus(); if (!hasPhysicalKeyboard) keyboardController?.show() } catch (_: Exception) {}
                                 }
                                 var lastInputValue by remember { mutableStateOf("") }
                                 BasicTextField(
@@ -1331,7 +1342,7 @@ class MainActivity : ComponentActivity() {
                                     onRestartSession = { scope.launch { activeExecutor.restart() } },
                                     onResize = { r, c, f -> activeExecutor.resizeTerminal(r, c, f) },
                                     theme = currentTheme,
-                                    onTap = { try { focusRequester.requestFocus(); keyboardController?.show() } catch (_: Exception) {} },
+                                    onTap = { try { focusRequester.requestFocus(); if (!hasPhysicalKeyboard) keyboardController?.show() } catch (_: Exception) {} },
                                     fontSizeState = terminalFontSize,
                                     onFontSizeChange = {
                                         terminalFontSize = it
@@ -1373,7 +1384,7 @@ class MainActivity : ComponentActivity() {
                             val focusRequester = remember { FocusRequester() }
                             val keyboardController = LocalSoftwareKeyboardController.current
                             LaunchedEffect(activeExecutorId, blockMode) {
-                                try { focusRequester.requestFocus(); keyboardController?.show() } catch (_: Exception) {}
+                                try { focusRequester.requestFocus(); if (!hasPhysicalKeyboard) keyboardController?.show() } catch (_: Exception) {}
                             }
                             var lastInputValue by remember { mutableStateOf("") }
                             BasicTextField(
@@ -1429,41 +1440,34 @@ class MainActivity : ComponentActivity() {
                         LaunchedEffect(activeExecutorId) {
                             try {
                                 focusRequester.requestFocus()
-                                keyboardController?.show()
+                                if (!hasPhysicalKeyboard) keyboardController?.show()
                             } catch (_: Exception) {
                                 /* FocusRequester belum siap, coba lagi nanti. */
                             }
                         }
 
-                        /* Phase 25: Fix input — JANGAN reset hiddenInput di onValueChange!
-                         * Old code: hiddenInput = "" setiap kali user type → IME confused → stop sending text.
-                         * Fix: biarkan text menumpuk (invisible). Clear hanya saat Enter (di handleKeyEvent). */
+                        /* Phase 33 (A1 fix): onValueChange hanya tangani karakter CETAK biasa.
+                         * Enter, Backspace, Tab, dll sudah ditangani handleKeyEvent di onPreviewKeyEvent.
+                         * Hapus penanganan \n, \u007F, \b dari sini untuk mencegah double-fire. */
                         var lastInputValue by remember { mutableStateOf("") }
 
                         BasicTextField(
                             value = hiddenInput,
                             onValueChange = { newValue ->
-                                /* Delta tracking: bandingkan dengan lastValue. */
                                 val oldText = lastInputValue
                                 lastInputValue = newValue
 
                                 if (newValue.length > oldText.length) {
-                                    /* Karakter baru ditambahkan di akhir. */
                                     val added = newValue.substring(oldText.length)
                                     for (ch in added) {
+                                        /* Phase 33: Hanya handle karakter cetak biasa.
+                                         * Enter/Backspace/Tab sudah ditangani handleKeyEvent. */
                                         when (ch) {
                                             '\n', '\r' -> {
-                                                processInput(activeExecutor.currentCommandBuffer + "\n")
-                                                activeExecutor.currentCommandBuffer = ""
-                                                /* Clear input setelah Enter. */
-                                                hiddenInput = ""
-                                                lastInputValue = ""
+                                                /* Enter sudah ditangani handleKeyEvent — skip di sini. */
                                             }
                                             '\u007F', '\b' -> {
-                                                if (activeExecutor.currentCommandBuffer.isNotEmpty()) {
-                                                    activeExecutor.currentCommandBuffer = activeExecutor.currentCommandBuffer.dropLast(1)
-                                                }
-                                                activeExecutor.writeRaw("\u007F")
+                                                /* Backspace sudah ditangani handleKeyEvent — skip di sini. */
                                             }
                                             else -> {
                                                 val translated = handleChar(ch)
@@ -1473,8 +1477,7 @@ class MainActivity : ComponentActivity() {
                                         }
                                     }
                                 }
-                                /* JANGAN reset hiddenInput di sini — IME akan confused.
-                                 * Text menumpuk tapi invisible (transparent). Clear saat Enter. */
+                                /* JANGAN reset hiddenInput di sini — IME confused. */
                             },
                             textStyle = TextStyle(color = Color.Transparent),
                             cursorBrush = SolidColor(Color.Transparent),
@@ -1500,7 +1503,7 @@ class MainActivity : ComponentActivity() {
                             onTap = {
                                 try {
                                     focusRequester.requestFocus()
-                                    keyboardController?.show()
+                                    if (!hasPhysicalKeyboard) keyboardController?.show()
                                 } catch (_: Exception) {}
                             },
                             /* Phase 19.5: Mouse scroll wheel untuk scroll terminal history. */

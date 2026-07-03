@@ -11,9 +11,9 @@ android {
         applicationId = "com.tunnel.terminal"
         minSdk = 24
         targetSdk = 34
-        // Phase 32: Fix double input + scroll + provider dropdown mouse + keyToChar expansion
-        versionCode = 20
-        versionName = "5.2.0-phase32-input-scroll-fix"
+        // Phase 33: Fix input dobel + soft keyboard + provider dropdown + cd quote (audit v2)
+        versionCode = 21
+        versionName = "5.3.0-phase33-audit-v2-sprint1"
     }
 
     buildTypes {

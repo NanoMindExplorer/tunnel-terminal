@@ -1,6 +1,7 @@
 package com.tunnel.terminal
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
@@ -729,21 +730,25 @@ fun AIChatPanel(
                     /* AI Provider settings. */
                     Column(modifier = Modifier.weight(1f).padding(16.dp).verticalScroll(scrollState)) {
                         Text("Provider:", color = theme.uiTextMuted, fontSize = 12.sp)
-                        /* Phase 25: Fix provider dropdown tidak membuka.
-                         * Old code: OutlinedTextField readOnly + Modifier.clickable — internal
-                         * click handler intercept event, .clickable tidak trigger.
-                         * Fix: Box wrapper dengan clickable + DropdownMenu. */
-                        /* Phase 32 fix: readOnly=true (bukan enabled=false) agar mouse click tetap works. */
-                        Box(modifier = Modifier.fillMaxWidth().clickable { expandedProvider = true }) {
-                            OutlinedTextField(
-                                value = settingsDraft.providerName,
-                                onValueChange = {},
-                                readOnly = true,
-                                enabled = true,
+                        /* Phase 33 (A5 fix): Ganti OutlinedTextField dengan Row+Text non-interactive.
+                         * Old code: OutlinedTextField enabled=true/readOnly=true → field interaktif
+                         * berebut event dengan Box.clickable → mouse click tidak sampai.
+                         * Fix: Hanya satu lapis penerima klik (Box), tidak ada TextField. */
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .border(1.dp, theme.uiTextMuted, RoundedCornerShape(4.dp))
+                                .clickable { expandedProvider = true }
+                                .padding(horizontal = 12.dp, vertical = 14.dp)
+                        ) {
+                            Row(
                                 modifier = Modifier.fillMaxWidth(),
-                                textStyle = TextStyle(color = theme.uiText, fontFamily = FontFamily.Monospace),
-                                trailingIcon = { Text("▼", color = theme.uiText) }
-                            )
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(settingsDraft.providerName, color = theme.uiText, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
+                                Text("▼", color = theme.uiText)
+                            }
                             DropdownMenu(expanded = expandedProvider, onDismissRequest = { expandedProvider = false }) {
                                 AIProviders.presets.forEach { preset ->
                                     DropdownMenuItem(
