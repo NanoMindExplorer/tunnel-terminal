@@ -68,7 +68,7 @@ class SshShellExecutor(
     private var readThread: Thread? = null
     private var channelOutputStream: OutputStream? = null
 
-    override val id: Int = System.currentTimeMillis().toInt() and 0x7FFFFFFF
+    override val id: Int = globalIdCounter.incrementAndGet()
 
     override var emulator = TerminalEmulator(themeHolder)
 
@@ -237,7 +237,10 @@ class SshShellExecutor(
         } catch (e: Exception) {
             Log.w(tag, "readLoop ended: ${e.message}")
         } finally {
+            /* BUG-14 fix: Clean up channel + session saat disconnect alami.
+             * Old code: hanya close inputStream — channel/session JSch leak. */
             try { inputStream.close() } catch (_: Exception) {}
+            try { channel?.disconnect() } catch (_: Exception) {}
             try { emulator.flush() } catch (_: Exception) {}
             isAlive = false
             emulator.process("\n\u001B[33m[SSH Disconnected. Tap screen to reconnect.]\u001B[0m\n")
@@ -252,7 +255,10 @@ class SshShellExecutor(
     }
 
     override fun resizeTerminal(newRows: Int, newCols: Int, fontSize: Float) {
-        channel?.setPtySize(newCols, newRows, newCols * 8, newRows * 12)
+        /* BUG-15 fix: Wrap setPtySize dalam try-catch (channel mungkin sudah disconnect). */
+        try {
+            channel?.setPtySize(newCols, newRows, newCols * 8, newRows * 12)
+        } catch (_: Exception) {}
         emulator.resize(newRows, newCols, fontSize.sp)
         triggerScreenUpdate()
     }
@@ -309,5 +315,8 @@ class SshShellExecutor(
         try { session?.disconnect() } catch (_: Exception) {}
         session = null
         channelOutputStream = null
+    }
+    companion object {
+        private val globalIdCounter = java.util.concurrent.atomic.AtomicInteger(0)
     }
 }

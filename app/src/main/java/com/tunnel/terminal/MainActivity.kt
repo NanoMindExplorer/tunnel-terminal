@@ -497,7 +497,8 @@ class MainActivity : ComponentActivity() {
             val dir = session.workingDirs.getOrNull(i)
             if (!dir.isNullOrBlank()) {
                 delay(150) /* Tunggu shell siap. */
-                shellExecutors.lastOrNull()?.executeCommand("cd $dir")
+                /* BUG-17 fix: Quote path agar path dengan spasi tidak gagal. */
+                shellExecutors.lastOrNull()?.executeCommand("cd \"${dir.replace("\"", "\\\"")}\"")
             }
         }
         Toast.makeText(this, "Session '${session.name}' restored (${session.tabCount} tab)", Toast.LENGTH_SHORT).show()
@@ -529,14 +530,19 @@ class MainActivity : ComponentActivity() {
         shellExecutors.find { it.id == activeExecutorId }?.executeCommand("cd ${dir.absolutePath}")
     }
 
+    /* BUG-22 fix: Move registerForActivityResult ke property kelas (bukan di method body).
+     * Old code: registerForActivityResult di dalam if di method — IllegalStateException risk. */
+    private val notifPermLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { _ -> }
+
     private fun requestNotificationPermission() {
         if (Build.VERSION.SDK_INT >= 33) {
             val granted = ContextCompat.checkSelfPermission(
                 this, Manifest.permission.POST_NOTIFICATIONS
             ) == PackageManager.PERMISSION_GRANTED
             if (!granted) {
-                registerForActivityResult(ActivityResultContracts.RequestPermission()) { _ -> }
-                    .launch(Manifest.permission.POST_NOTIFICATIONS)
+                notifPermLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
             }
         }
     }

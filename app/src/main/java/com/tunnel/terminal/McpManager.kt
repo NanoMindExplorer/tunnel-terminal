@@ -109,6 +109,12 @@ class McpManager(private val context: Context) {
     /** Add new MCP server. */
     fun addServer(config: McpServerConfig): Boolean {
         if (_servers.any { it.name == config.name }) return false
+        /* BUG-20 fix: Tolak http:// kecuali localhost/127.0.0.1 (API key bocor tanpa HTTPS). */
+        val url = config.url.lowercase()
+        if (url.startsWith("http://") && !url.contains("localhost") && !url.contains("127.0.0.1")) {
+            Log.w("McpManager", "BUG-20: Menolak MCP server http:// non-localhost: ${config.url}")
+            return false
+        }
         _servers.add(config)
         saveServers()
         return true

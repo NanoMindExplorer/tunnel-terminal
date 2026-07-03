@@ -11,9 +11,9 @@ android {
         applicationId = "com.tunnel.terminal"
         minSdk = 24
         targetSdk = 34
-        // Phase 28: Functional HIGH fixes (BUG-05,06,07,08,09,10,11,12,13 from audit)
-        versionCode = 16
-        versionName = "4.7.0-phase28-functional-high"
+        // Phase 29: MEDIUM fixes (BUG-14,15,16,17,19,20,21,22,23,24,25,26 from audit)
+        versionCode = 17
+        versionName = "4.8.0-phase29-medium-fixes"
     }
 
     buildTypes {
@@ -70,6 +70,6 @@ dependencies {
     // Phase 17: DocumentFile untuk Storage Access Framework (StorageManager)
     implementation("androidx.documentfile:documentfile:1.0.1")
 
-    // Phase 21: JSch untuk SSH Client
-    implementation("com.github.mwiede:jsch:0.2.17")
+    // BUG-21 fix: Update JSch dari 0.2.17 ke 0.2.21 (versi terbaru mwiede fork)
+    implementation("com.github.mwiede:jsch:0.2.21")
 }

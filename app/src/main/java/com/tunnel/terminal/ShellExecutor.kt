@@ -3,6 +3,7 @@ package com.tunnel.terminal
 import android.os.ParcelFileDescriptor
 import android.util.Log
 import androidx.compose.runtime.getValue
+import java.util.concurrent.atomic.AtomicInteger
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.unit.sp
@@ -39,7 +40,11 @@ class ShellExecutor(private val themeHolder: ThemeHolder = ThemeHolder()) : Term
     /** Track readLoop thread untuk interrupt saat destroy. */
     @Volatile
     private var readThread: Thread? = null
-    override val id: Int = System.currentTimeMillis().toInt() and 0x7FFFFFFF
+    /* BUG-25 fix: AtomicInteger companion untuk ID unik global (bukan timestamp). */
+    override val id: Int = globalIdCounter.incrementAndGet()
+
+    /* BUG-26 fix: Guard untuk mencegah double-close fd antara readLoop exit vs destroy(). */
+    private val fdClosed = java.util.concurrent.atomic.AtomicBoolean(false)
 
     override var emulator = TerminalEmulator(themeHolder).also {
         /* BUG-09 fix: Wire writeCallback untuk DA/DSR responses. */
@@ -258,8 +263,11 @@ class ShellExecutor(private val themeHolder: ThemeHolder = ThemeHolder()) : Term
          * When pfd is closed, read() returns -1, readLoop exits naturally.
          * This is more reliable than Thread.interrupt() which doesn't unblock
          * FileInputStream.read() on all platforms. */
+        /* BUG-26 fix: Gunakan AtomicBoolean compareAndSet untuk mencegah double-close. */
         try {
-            pfd?.close()
+            if (fdClosed.compareAndSet(false, true)) {
+                pfd?.close()
+            }
         } catch (_: Exception) {}
         pfd = null
 
@@ -285,5 +293,10 @@ class ShellExecutor(private val themeHolder: ThemeHolder = ThemeHolder()) : Term
         /* Phase 20: fd already closed via pfd.close() above. Just reset state.
          * Don't call TerminalJni.close(masterFd) — pfd owns it, double-close bug. */
         masterFd = -1
+    }
+
+    companion object {
+        /* BUG-25 fix: Global counter untuk ID unik (bukan timestamp yang bisa collision). */
+        private val globalIdCounter = AtomicInteger(0)
     }
 }

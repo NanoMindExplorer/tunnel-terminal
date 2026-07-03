@@ -99,11 +99,14 @@ class WorkspaceManager(context: Context) {
         if (name.isBlank()) return false
         if (_sessions.size >= MAX_SESSIONS) return false
         if (_sessions.any { it.name == name }) return false
+        /* BUG-16b fix: Jangan filter workingDirs — biarkan string kosong menempati slotnya
+         * untuk menjaga korespondensi index-ke-tab. Old code: filter { it.isNotBlank() }
+         * menyebabkan index geser jika ada tab yang working dir-nya blank. */
         val session = WorkspaceSession(
             name = name.trim(),
             createdAt = System.currentTimeMillis(),
             tabCount = tabCount,
-            workingDirs = workingDirs.filter { it.isNotBlank() }
+            workingDirs = workingDirs
         )
         _sessions.add(session)
         _sessions.sortByDescending { it.createdAt }
@@ -127,7 +130,7 @@ class WorkspaceManager(context: Context) {
         if (idx < 0) return false
         _sessions[idx] = _sessions[idx].copy(
             tabCount = tabCount,
-            workingDirs = workingDirs.filter { it.isNotBlank() },
+            workingDirs = workingDirs,
             createdAt = System.currentTimeMillis()
         )
         _sessions.sortByDescending { it.createdAt }

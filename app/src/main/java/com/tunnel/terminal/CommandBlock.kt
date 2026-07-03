@@ -39,7 +39,7 @@ import java.util.Locale
  * Block-based terminal: each command+output is a discrete block.
  */
 data class CommandBlock(
-    val id: Long = System.currentTimeMillis(),
+    val id: Long = globalIdCounter.incrementAndGet(),
     val command: String,
     val output: String = "",
     val timestamp: Long = System.currentTimeMillis(),
@@ -67,6 +67,9 @@ data class CommandBlock(
 
     fun formattedTime(): String {
         return SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date(timestamp))
+    }
+    companion object {
+        private val globalIdCounter = java.util.concurrent.atomic.AtomicLong(0)
     }
 }
 
@@ -121,11 +124,13 @@ class BlockManager {
             val output = if (newlineIdx >= 0) afterPrompt.substring(newlineIdx + 1).trim() else ""
 
             if (command.isNotEmpty()) {
+                /* BUG-19 fix: Histori command sudah selesai — default SUCCESS, bukan RUNNING.
+                 * RUNNING hanya untuk command live via addBlock(). */
                 val status = when {
                     output.lowercase().contains("error") ||
                     output.lowercase().contains("not found") ||
-                    output.lowercase().contains("no such file") -> CommandBlock.BlockStatus.ERROR
-                    output.isBlank() && command != "clear" -> CommandBlock.BlockStatus.RUNNING
+                    output.lowercase().contains("no such file") ||
+                    output.lowercase().contains("permission denied") -> CommandBlock.BlockStatus.ERROR
                     else -> CommandBlock.BlockStatus.SUCCESS
                 }
                 _blocks.add(CommandBlock(
@@ -166,6 +171,9 @@ class BlockManager {
         if (idx >= 0) {
             _blocks[idx] = _blocks[idx].copy(isCollapsed = !_blocks[idx].isCollapsed)
         }
+    }
+    companion object {
+        private val globalIdCounter = java.util.concurrent.atomic.AtomicLong(0)
     }
 }
 
@@ -219,6 +227,9 @@ fun BlockTerminalView(
             )
             Spacer(modifier = Modifier.height(8.dp))
         }
+    }
+    companion object {
+        private val globalIdCounter = java.util.concurrent.atomic.AtomicLong(0)
     }
 }
 
@@ -326,5 +337,8 @@ private fun CommandBlockCard(
                 }
             }
         }
+    }
+    companion object {
+        private val globalIdCounter = java.util.concurrent.atomic.AtomicLong(0)
     }
 }

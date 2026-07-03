@@ -59,10 +59,14 @@ fun TunnelEditorDialog(
         isLoading = true
         loadError = null
         try {
+            /* BUG-24 fix: Cek ukuran file SEBELUM readText — jangan tunggu OOM. */
+            if (file.exists() && file.length() > 5_000_000) {
+                loadError = "File terlalu besar untuk diedit (${file.length() / 1024 / 1024} MB). Maksimal 5 MB."
+                isLoading = false
+                return@LaunchedEffect
+            }
             val text = withContext(Dispatchers.IO) {
                 if (!file.exists()) {
-                    /* Auto-create jika tidak ada - user bisa langsung save.
-                     * Auto-create if missing. */
                     file.parentFile?.mkdirs()
                     ""
                 } else {
@@ -169,6 +173,8 @@ fun TunnelEditorDialog(
                             /* Editor area. Phase 21: Syntax highlighting via VisualTransformation. */
                             val language = SyntaxHighlighter.detectLanguage(file.name)
                             val syntaxColors = SyntaxHighlighter.colorsFromTheme(theme)
+                            /* BUG-23 fix: softWrap=false + horizontalScroll agar line numbers sync. */
+                            val horizontalScrollState = androidx.compose.foundation.rememberScrollState()
                             BasicTextField(
                                 value = content,
                                 onValueChange = {
@@ -183,7 +189,9 @@ fun TunnelEditorDialog(
                                 ),
                                 cursorBrush = SolidColor(Color(0xFF00FF00)),
                                 visualTransformation = SyntaxHighlightTransformation(language, syntaxColors),
-                                modifier = Modifier.weight(1f).padding(4.dp)
+                                modifier = Modifier.weight(1f)
+                                    .padding(4.dp)
+                                    .androidx.compose.foundation.horizontalScroll(horizontalScrollState)
                             )
                         }
                     }
