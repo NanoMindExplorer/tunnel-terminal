@@ -228,9 +228,6 @@ fun BlockTerminalView(
             Spacer(modifier = Modifier.height(8.dp))
         }
     }
-    companion object {
-        private val globalIdCounter = java.util.concurrent.atomic.AtomicLong(0)
-    }
 }
 
 @Composable
@@ -337,8 +334,5 @@ private fun CommandBlockCard(
                 }
             }
         }
-    }
-    companion object {
-        private val globalIdCounter = java.util.concurrent.atomic.AtomicLong(0)
     }
 }

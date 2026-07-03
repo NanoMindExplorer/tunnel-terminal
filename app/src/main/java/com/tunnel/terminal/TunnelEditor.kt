@@ -1,6 +1,7 @@
 package com.tunnel.terminal
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.BasicTextField
@@ -191,7 +192,7 @@ fun TunnelEditorDialog(
                                 visualTransformation = SyntaxHighlightTransformation(language, syntaxColors),
                                 modifier = Modifier.weight(1f)
                                     .padding(4.dp)
-                                    .androidx.compose.foundation.horizontalScroll(horizontalScrollState)
+                                    .horizontalScroll(horizontalScrollState)
                             )
                         }
                     }

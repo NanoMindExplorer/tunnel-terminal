@@ -131,8 +131,8 @@ class SshShellExecutor(
                  * Simpan fingerprint host key di SharedPreferences per host.
                  * First connect: accept + save fingerprint.
                  * Subsequent: compare fingerprint — reject if changed (MITM detection). */
-                val hostKeyPrefs = context.getSharedPreferences("TunnelSshHostKeys", Context.MODE_PRIVATE)
-                val knownHostKey = hostKeyPrefs.getString("${config.host}:${config.port}", null)
+                val hostKeyPrefs = context?.getSharedPreferences("TunnelSshHostKeys", Context.MODE_PRIVATE)
+                val knownHostKey = hostKeyPrefs?.getString("${config.host}:${config.port}", null)
 
                 session?.userInfo = object : UserInfo {
                     override fun getPassphrase(): String? = config.privateKeyPassphrase
