@@ -11,9 +11,9 @@ android {
         applicationId = "com.tunnel.terminal"
         minSdk = 24
         targetSdk = 34
-        // Phase 37: Marker-based command execution + Auto-Pilot rewrite + @command: real
-        versionCode = 25
-        versionName = "6.0.0-phase37-marker-execution"
+        // Phase 38-39: proot + Ubuntu Linux environment (createSessionExec + ProotBootstrap + ProotShellExecutor)
+        versionCode = 26
+        versionName = "6.1.0-phase38-proot-ubuntu"
     }
 
     buildTypes {

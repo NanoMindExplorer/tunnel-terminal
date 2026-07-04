@@ -40,6 +40,27 @@ object TerminalJni {
      */
     external fun createSession(rows: Int, cols: Int, outFd: IntArray): Int
 
+    /**
+     * Phase 36 (proot/Ubuntu): Sama seperti createSession(), tapi exec ke program
+     * custom (misalnya proot) alih-alih /system/bin/sh. Dipakai untuk sesi Linux
+     * environment (proot+rootfs).
+     *
+     * Same as createSession() but exec's a custom binary instead of /system/bin/sh.
+     * Used for Linux environment sessions (proot + rootfs).
+     *
+     * @param rows jumlah baris awal
+     * @param cols jumlah kolom awal
+     * @param outFd array int[1] untuk menerima master file descriptor
+     * @param execPath path absolut ke binary yang akan di-exec (mis. proot)
+     * @param argv full argv termasuk argv[0]
+     * @param envp full environment, format "KEY=VALUE" per elemen
+     * @return child pid (>0) jika sukses, -1 jika gagal
+     */
+    external fun createSessionExec(
+        rows: Int, cols: Int, outFd: IntArray,
+        execPath: String, argv: Array<String>, envp: Array<String>
+    ): Int
+
     /** Menulis data byte ke PTY. Writes bytes to PTY. */
     external fun write(fd: Int, data: ByteArray)
 

@@ -102,6 +102,15 @@ class MainActivity : ComponentActivity() {
     private var showWorkspaceDrawer by mutableStateOf(false)
     /** Phase 21: SSH connect dialog visibility. */
     private var showSshDialog by mutableStateOf(false)
+    /** Phase 38 (proot/Ubuntu): Ubuntu install dialog visibility. */
+    private var showUbuntuInstallDialog by mutableStateOf(false)
+    /** Phase 38 (proot/Ubuntu): ProotBootstrap instance (lazy — butuh Context). */
+    private lateinit var prootBootstrap: ProotBootstrap
+    /** Phase 39 (proot/Ubuntu): Install progress state untuk dialog. */
+    private var ubuntuInstallStage by mutableStateOf("")
+    private var ubuntuInstallPercent by mutableStateOf(0)
+    private var ubuntuInstallError by mutableStateOf<String?>(null)
+    private var ubuntuInstalling by mutableStateOf(false)
     /** Phase 21: Split pane mode — 2 terminals side by side. */
     private var splitMode by mutableStateOf(false)
     /** Phase 21: Second pane session ID (for split mode). */
@@ -217,6 +226,8 @@ class MainActivity : ComponentActivity() {
         mcpManager = McpManager(this)
         agentWorkflowManager = AgentWorkflowManager(this)
         voiceInputManager = VoiceInputManager(this)
+        /* Phase 38 (proot/Ubuntu): Bootstrap instance untuk download/extract rootfs. */
+        prootBootstrap = ProotBootstrap(this)
         agentWorkflows.addAll(agentWorkflowManager.workflows)
         loadAISettings()
         loadTheme()
@@ -660,6 +671,134 @@ class MainActivity : ComponentActivity() {
         sshExecutor.start()
     }
 
+    /**
+     * Phase 38 (proot/Ubuntu): Buat tab Ubuntu baru. Kalau belum terinstal,
+     * tampilkan dialog instalasi (akan auto-createUbuntuTab() setelah sukses).
+     *
+     * Retry logic: kalau sesi mati dalam <2 detik (indikasi SECCOMP issue),
+     * destroy + retry sekali dengan disableSeccomp=true. Preferensi disimpan
+     * supaya percobaan berikutnya pakai flag yang sama.
+     */
+    private suspend fun createUbuntuTab() {
+        if (!prootBootstrap.isInstalled) {
+            showUbuntuInstallDialog = true
+            return
+        }
+
+        // Cek preferensi SECCOMP dari session sebelumnya.
+        val prefs = getSharedPreferences("TunnelLinux", Context.MODE_PRIVATE)
+        val useNoSeccomp = prefs.getBoolean("proot_no_seccomp", false)
+
+        val executor = ProotShellExecutor(
+            themeHolder = themeHolder,
+            bootstrap = prootBootstrap,
+            disableSeccomp = useNoSeccomp
+        )
+        shellExecutors.add(executor)
+        activeExecutorId = executor.id
+        executor.start()
+
+        // Beri MOTD khusus Ubuntu.
+        executor.emulator.process(
+            "\u001B[32m┌─ Ubuntu 24.04 (proot) ─────────────────────────────┐\u001B[0m\n" +
+            "\u001B[32m│ Linux environment via proot — no root required     │\u001B[0m\n" +
+            "\u001B[32m│ apt update && apt install <pkg> untuk install tool │\u001B[0m\n" +
+            "\u001B[32m└────────────────────────────────────────────────────┘\u001B[0m\n\n"
+        )
+        executor.triggerScreenUpdate()
+
+        // Phase 39: Deteksi early death (SECCOMP issue) → retry sekali dengan flag.
+        Thread {
+            try {
+                Thread.sleep(2500)
+                if (!executor.isAlive) {
+                    Log.w("MainActivity", "Sesi Ubuntu mati prematur — retry dengan PROOT_NO_SECCOMP=1")
+                    // Hapus executor yang mati.
+                    shellExecutors.removeAll { it.id == executor.id }
+                    if (activeExecutorId == executor.id) {
+                        activeExecutorId = shellExecutors.firstOrNull()?.id ?: 0
+                    }
+                    // Simpan preferensi supaya percobaan berikutnya pakai flag ini.
+                    prefs.edit().putBoolean("proot_no_seccomp", true).apply()
+                    // Retry.
+                    lifecycleScope.launch {
+                        val retryExecutor = ProotShellExecutor(
+                            themeHolder = themeHolder,
+                            bootstrap = prootBootstrap,
+                            disableSeccomp = true
+                        )
+                        shellExecutors.add(retryExecutor)
+                        activeExecutorId = retryExecutor.id
+                        retryExecutor.start()
+                        retryExecutor.emulator.process(
+                            "\u001B[33m[RETRY] Sesi sebelumnya mati prematur — menggunakan PROOT_NO_SECCOMP=1.\u001B[0m\n\n"
+                        )
+                        retryExecutor.triggerScreenUpdate()
+                    }
+                }
+            } catch (_: InterruptedException) {}
+        }.apply { isDaemon = true; start() }
+    }
+
+    /**
+     * Phase 39 (proot/Ubuntu): Install Ubuntu rootfs. Panggil dari UI dialog.
+     * Reset state, jalankan install di IO dispatcher, update progress.
+     */
+    private fun startUbuntuInstall() {
+        if (ubuntuInstalling) return
+        ubuntuInstalling = true
+        ubuntuInstallError = null
+        ubuntuInstallStage = "Memulai instalasi"
+        ubuntuInstallPercent = 0
+
+        lifecycleScope.launch {
+            try {
+                prootBootstrap.install(ProotBootstrap.ProgressListener { stage, percent ->
+                    ubuntuInstallStage = stage
+                    ubuntuInstallPercent = percent
+                })
+                // Sukses — tutup dialog, buka tab Ubuntu.
+                ubuntuInstalling = false
+                showUbuntuInstallDialog = false
+                Toast.makeText(this@MainActivity, "Ubuntu siap digunakan", Toast.LENGTH_SHORT).show()
+                createUbuntuTab()
+            } catch (e: Exception) {
+                Log.e("MainActivity", "Ubuntu install gagal: ${e.message}", e)
+                ubuntuInstalling = false
+                ubuntuInstallError = e.message ?: "Unknown error"
+            }
+        }
+    }
+
+    /**
+     * Phase 39 (proot/Ubuntu): Uninstall Linux environment (bebaskan storage).
+     * Tutup semua tab Ubuntu dulu sebelum uninstall supaya fd tidak leak.
+     */
+    private fun uninstallUbuntu() {
+        lifecycleScope.launch {
+            // Tutup semua tab Ubuntu.
+            val ubuntuTabs = shellExecutors.filter { it.sessionType == "ubuntu" }
+            ubuntuTabs.forEach { tab ->
+                Thread { tab.destroy() }.start()
+            }
+            shellExecutors.removeAll { it.sessionType == "ubuntu" }
+            if (activeExecutorId == 0 || shellExecutors.none { it.id == activeExecutorId }) {
+                activeExecutorId = shellExecutors.firstOrNull()?.id ?: 0
+            }
+            if (shellExecutors.isEmpty()) {
+                createNewTab()
+            }
+
+            // Hapus rootfs.
+            withContext(kotlinx.coroutines.Dispatchers.IO) {
+                prootBootstrap.uninstall()
+            }
+            // Reset preferensi SECCOMP.
+            getSharedPreferences("TunnelLinux", Context.MODE_PRIVATE).edit().clear().apply()
+            Toast.makeText(this@MainActivity, "Linux environment dihapus", Toast.LENGTH_SHORT).show()
+        }
+    }
+
     private fun closeTab(id: Int) {
         /* Phase 25: Fix ANR — destroy() di background thread (was main thread = 350ms block).
          * Old code: destroy() blocking (Thread.sleep + join) di main thread → ANR. */
@@ -807,6 +946,10 @@ class MainActivity : ComponentActivity() {
                 add(PaletteItem("open_file_explorer", "Open File Explorer", "Setting", Icons.Default.Folder, PaletteCategory.SETTING) { showFileExplorer = true })
                 add(PaletteItem("open_workspace", "Workspace Sessions", "Setting", Icons.Default.Save, PaletteCategory.SETTING) { showWorkspaceDrawer = true })
                 add(PaletteItem("open_ssh", "SSH Connect", "Setting", Icons.Default.Cloud, PaletteCategory.SETTING) { showSshDialog = true })
+                /* Phase 38 (proot/Ubuntu): Open Ubuntu / Install Linux environment. */
+                add(PaletteItem("open_ubuntu", "Ubuntu (Linux Environment)", "Setting", Icons.Default.Terminal, PaletteCategory.SETTING) { lifecycleScope.launch { createUbuntuTab() } })
+                /* Phase 39 (proot/Ubuntu): Manage install (uninstall if installed). */
+                add(PaletteItem("manage_ubuntu", "Manage Linux Environment", "Setting", Icons.Default.Build, PaletteCategory.SETTING) { showUbuntuInstallDialog = true })
                 /* Commands. */
                 add(PaletteItem("cmd_ls", "Run: ls -la", "Command", Icons.Default.Terminal, PaletteCategory.COMMAND) { shellExecutors.find { it.id == activeExecutorId }?.executeCommand("ls -la") })
                 add(PaletteItem("cmd_pwd", "Run: pwd", "Command", Icons.Default.Terminal, PaletteCategory.COMMAND) { shellExecutors.find { it.id == activeExecutorId }?.executeCommand("pwd") })
@@ -882,6 +1025,24 @@ class MainActivity : ComponentActivity() {
                     lifecycleScope.launch { createSshTab(config) }
                 },
                 onDismiss = { showSshDialog = false }
+            )
+        }
+
+        /* Phase 39 (proot/Ubuntu): Install / manage Linux environment dialog. */
+        if (showUbuntuInstallDialog) {
+            UbuntuInstallDialog(
+                theme = currentTheme,
+                bootstrap = prootBootstrap,
+                installing = ubuntuInstalling,
+                stage = ubuntuInstallStage,
+                percent = ubuntuInstallPercent,
+                error = ubuntuInstallError,
+                onInstall = { startUbuntuInstall() },
+                onUninstall = {
+                    uninstallUbuntu()
+                    showUbuntuInstallDialog = false
+                },
+                onDismiss = { showUbuntuInstallDialog = false }
             )
         }
 
@@ -1299,6 +1460,8 @@ class MainActivity : ComponentActivity() {
                         onOpenFileExplorer = { showFileExplorer = true },
                         onOpenWorkspace = { showWorkspaceDrawer = true },
                         onOpenSsh = { showSshDialog = true },
+                        onOpenUbuntu = { lifecycleScope.launch { createUbuntuTab() } },
+                        ubuntuInstalled = prootBootstrap.isInstalled,
                         onToggleSplit = {
                             splitMode = !splitMode
                             if (splitMode) {

@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
@@ -58,6 +59,8 @@ fun TabBar(
     onOpenPalette: () -> Unit = {},
     onToggleBlockMode: () -> Unit = {},
     isBlockMode: Boolean = false,
+    onOpenUbuntu: () -> Unit = {},
+    ubuntuInstalled: Boolean = true,
     theme: TerminalTheme = ThemeManager.defaultTheme
 ) {
     LazyRow(
@@ -99,6 +102,31 @@ fun TabBar(
         item {
             Box(modifier = Modifier.background(theme.uiSurface, RoundedCornerShape(4.dp)).clickable { onOpenSsh() }.padding(horizontal = 10.dp, vertical = 10.dp)) {
                 Text("🔌", color = theme.uiText, fontSize = 12.sp)
+            }
+        }
+        /* Phase 38 (proot/Ubuntu): Ubuntu (Linux Environment) button.
+         * Icon pakai penguin 🐧 + dot indikator install state. */
+        item {
+            Box(
+                modifier = Modifier
+                    .background(
+                        if (ubuntuInstalled) theme.uiSurface else theme.uiBg,
+                        RoundedCornerShape(4.dp)
+                    )
+                    .clickable { onOpenUbuntu() }
+                    .padding(horizontal = 10.dp, vertical = 10.dp)
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("🐧", color = theme.uiText, fontSize = 12.sp)
+                    if (!ubuntuInstalled) {
+                        Spacer(modifier = Modifier.width(3.dp))
+                        Box(
+                            modifier = Modifier
+                                .size(6.dp)
+                                .background(theme.uiAccent, CircleShape)
+                        )
+                    }
+                }
             }
         }
         /* Phase 21: Split Pane toggle button. */
@@ -1180,4 +1208,179 @@ fun CryptoAddressRow(
             fontSize = 12.sp
         )
     }
+}
+
+/**
+ * Phase 39 (proot/Ubuntu): Dialog untuk install / uninstall Linux environment.
+ *
+ * State yang ditampilkan:
+ *  - Idle (belum install): tampilkan info ukuran + tombol Install + tombol Uninstall (disabled).
+ *  - Installing: tampilkan progress bar + stage label.
+ *  - Error: tampilkan pesan error + tombol Retry.
+ *  - Installed: tampilkan info size + tombol Open + tombol Uninstall.
+ *
+ * Catatan UI:
+ *  - Pakai AlertDialog Material3 supaya konsisten dengan dialog lain di app.
+ *  - Tombol Uninstall disabled saat installing supaya user tidak merusak state.
+ *  - Tombol dismiss (Cancel) disabled saat installing (harus tunggu selesai atau kill app).
+ */
+@Composable
+fun UbuntuInstallDialog(
+    theme: TerminalTheme,
+    bootstrap: ProotBootstrap,
+    installing: Boolean,
+    stage: String,
+    percent: Int,
+    error: String?,
+    onInstall: () -> Unit,
+    onUninstall: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    val installed = bootstrap.isInstalled
+    val freeMb = remember(installing, installed, error) { bootstrap.getFreeSpaceMb() }
+    val rootfsMb = remember(installed) {
+        if (installed) bootstrap.getRootfsSizeMb() else 0
+    }
+
+    AlertDialog(
+        onDismissRequest = { if (!installing) onDismiss() },
+        modifier = Modifier.background(theme.uiBg),
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("🐧 ", color = theme.uiAccent, fontSize = 20.sp)
+                Text(
+                    "Ubuntu (Linux Environment)",
+                    color = theme.uiText,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 16.sp
+                )
+            }
+        },
+        text = {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                Text(
+                    "Jalankan Ubuntu asli di dalam Tunnel Terminal lewat proot — tanpa root. " +
+                    "Memungkinkan apt, git, python, nodejs, dan tool Linux lainnya.",
+                    color = theme.uiTextMuted,
+                    fontSize = 12.sp,
+                    fontFamily = FontFamily.Monospace
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+
+                /* Info storage. */
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text("Free storage:", color = theme.uiTextMuted, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
+                    Text("$freeMb MB", color = if (freeMb < 1500) Color(0xFFFF5252) else theme.uiText, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
+                }
+                if (installed) {
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text("Rootfs size:", color = theme.uiTextMuted, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
+                        Text("$rootfsMb MB", color = theme.uiText, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
+                    }
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text("Status:", color = theme.uiTextMuted, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
+                        Text("✓ Installed", color = Color(0xFF4CAF50), fontSize = 11.sp, fontFamily = FontFamily.Monospace)
+                    }
+                } else {
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text("Required:", color = theme.uiTextMuted, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
+                        Text("≥ 1500 MB", color = theme.uiText, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
+                    }
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text("Status:", color = theme.uiTextMuted, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
+                        Text("Not installed", color = Color(0xFFFFAB00), fontSize = 11.sp, fontFamily = FontFamily.Monospace)
+                    }
+                }
+
+                /* Progress UI saat installing. */
+                if (installing) {
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Text(
+                        stage.ifEmpty { "Memulai..." },
+                        color = theme.uiAccent,
+                        fontSize = 12.sp,
+                        fontFamily = FontFamily.Monospace
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    LinearProgressIndicator(
+                        progress = (percent / 100f).coerceIn(0f, 1f),
+                        modifier = Modifier.fillMaxWidth(),
+                        color = theme.uiAccent,
+                        trackColor = theme.uiSurface
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        "$percent%",
+                        color = theme.uiTextMuted,
+                        fontSize = 11.sp,
+                        fontFamily = FontFamily.Monospace
+                    )
+                }
+
+                /* Error display. */
+                if (error != null) {
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Surface(
+                        modifier = Modifier.fillMaxWidth(),
+                        color = Color(0x33FF5252),
+                        shape = RoundedCornerShape(4.dp)
+                    ) {
+                        Column(modifier = Modifier.padding(8.dp)) {
+                            Text(
+                                "❌ Install gagal:",
+                                color = Color(0xFFFF5252),
+                                fontSize = 11.sp,
+                                fontFamily = FontFamily.Monospace
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                error,
+                                color = Color(0xFFFFAB00),
+                                fontSize = 10.sp,
+                                fontFamily = FontFamily.Monospace
+                            )
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+                Text(
+                    "Catatan: Fitur ini download+mengeksekusi binary native saat runtime → tidak kompatibel dengan kebijakan Play Store. Distribusikan via GitHub Releases.",
+                    color = theme.uiTextMuted,
+                    fontSize = 9.sp,
+                    fontFamily = FontFamily.Monospace,
+                    fontStyle = androidx.compose.ui.text.font.FontStyle.Italic
+                )
+            }
+        },
+        confirmButton = {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (installed && !installing) {
+                    TextButton(onClick = onDismiss) {
+                        Text("Open", color = theme.uiAccent, fontFamily = FontFamily.Monospace)
+                    }
+                } else if (!installing && error == null) {
+                    TextButton(onClick = onInstall, enabled = !installed) {
+                        Text(if (installed) "Installed" else "Install", color = if (installed) theme.uiTextMuted else theme.uiAccent, fontFamily = FontFamily.Monospace)
+                    }
+                } else if (!installing && error != null) {
+                    TextButton(onClick = onInstall) {
+                        Text("Retry", color = theme.uiAccent, fontFamily = FontFamily.Monospace)
+                    }
+                }
+                if (installed && !installing) {
+                    TextButton(onClick = onUninstall) {
+                        Text("Uninstall", color = Color(0xFFFF5252), fontFamily = FontFamily.Monospace)
+                    }
+                }
+            }
+        },
+        dismissButton = {
+            if (!installing) {
+                TextButton(onClick = onDismiss) {
+                    Text("Cancel", color = theme.uiTextMuted, fontFamily = FontFamily.Monospace)
+                }
+            }
+        }
+    )
 }

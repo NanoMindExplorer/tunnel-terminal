@@ -1,0 +1,817 @@
+diff --git a/README.md b/README.md
+index cfdc01b..352e097 100644
+--- a/README.md
++++ b/README.md
+@@ -1,23 +1,26 @@
+ # Tunnel Terminal
+ 
+-**Tunnel Terminal** adalah terminal Android AI-native yang merevolusi cara developer bekerja di perangkat mobile. Menggabungkan mesin C/C++ NDK (Pseudo-Terminal asli) dengan AI Copilot multi-provider, terminal berbasis blok, command palette, tool calling, dan banyak lagi.
++**Tunnel Terminal** adalah terminal Android AI-native yang merevolusi cara developer bekerja di perangkat mobile. Menggabungkan mesin C/C++ NDK (Pseudo-Terminal asli) dengan AI Copilot multi-provider, terminal berbasis blok, command palette, tool calling, **lingkungan Linux Ubuntu asli via proot (tanpa root)**, dan banyak lagi.
+ 
+ ![Architecture](https://img.shields.io/badge/Architecture-NDK%20%2B%20Jetpack%20Compose-purple)
+ ![AI](https://img.shields.io/badge/AI-Multi%20Provider%20%2B%20Vision%20%2B%20MCP-cyan)
+-![Version](https://img.shields.io/badge/version-5.1.0-blue)
++![Linux](https://img.shields.io/badge/Linux-Ubuntu%2024.04%20via%20proot-orange)
++![Version](https://img.shields.io/badge/version-6.1.0-blue)
+ ![Stability](https://img.shields.io/badge/stability-production-green)
+ 
+ ## Quick Links
+ 
+ - 📖 [Wiki Lengkap](docs/WIKI.md) — arsitektur, thread safety, phase history
+ - 📚 [Panduan Penggunaan](docs/USER_GUIDE.md) — cara pakai semua fitur step-by-step
++- 🐧 [Cara Obtain Binary proot](app/src/main/assets/proot/README.md) — wajib dibaca sebelum build fitur Ubuntu
+ 
+ ## Mengapa Tunnel Terminal?
+ 
+-Terminal Android konvensional (Termux, dll) hanya menampilkan teks dan mengeksekusi command. Tunnel Terminal membawa pengalaman **Warp + Claude Code + Cursor** ke Android:
++Terminal Android konvensional (Termux, dll) hanya menampilkan teks dan mengeksekusi command. Tunnel Terminal membawa pengalaman **Warp + Claude Code + Cursor + Termux proot-distro** ke Android dalam satu app:
+ 
+ - **Block-based UI** — setiap command + output = card diskret (seperti Warp)
+ - **AI Agent** — AI bisa baca/tulis file, jalankan command, dengan permission prompts
++- **Linux Environment (Ubuntu)** — jalankan `apt`, `git`, `python`, `nodejs` di Ubuntu 24.04 asli via proot, **tanpa root** — lengkap dengan marker-based exit code capture supaya AI bisa autonously install package
+ - **Command Palette** — Ctrl+K untuk akses cepat semua fitur (seperti VS Code)
+ - **Markdown Rendering** — AI responses dirender sebagai rich markdown
+ - **@context Mentions** — mention file, block, terminal output sebagai AI context
+@@ -34,7 +37,7 @@ Terminal Android konvensional (Termux, dll) hanya menampilkan teks dan mengeksek
+ |---|-------|--------|
+ | 1 | True Linux Terminal | C++ NDK PTY via `forkpty()`, mendukung vim/htop/less |
+ | 2 | Block-Based Terminal | Warp-style command+output cards, collapsible, rerun, AI explain |
+-| 3 | AI Auto-Pilot | Multi-step command execution, error detection, wait-for-prompt |
++| 3 | AI Auto-Pilot | Multi-step command execution, error detection, marker-based exit code |
+ | 4 | AI Tool Calling | read_file, write_file, delete_file, run_command, list_files, search_files |
+ | 5 | Permission Prompts | Claude Code-style: Allow once / Always allow / Deny (kecuali run_command/delete_file) |
+ | 6 | Inline Diff View | LCS-based diff sebelum apply AI file edits |
+@@ -57,6 +60,8 @@ Terminal Android konvensional (Termux, dll) hanya menampilkan teks dan mengeksek
+ | 23 | Physical Keyboard | Full support: Enter, Backspace, Tab, Arrows, F1-F4, Ctrl+key, Alt+key |
+ | 24 | Mouse Support | Click to focus, scroll wheel |
+ | 25 | Pinch-to-Zoom | Font size persist across sessions |
++| 26 | **Linux Environment** | **Ubuntu 24.04 via proot — `apt`, `git`, `python`, `nodejs` tanpa root** |
++| 27 | **Marker-Based Execution** | **AI run_command dibungkus unique marker → capture exit code → kirim balik ke AI sebagai context** |
+ 
+ ## Built-in Commands
+ 
+@@ -70,6 +75,50 @@ Terminal Android konvensional (Termux, dll) hanya menampilkan teks dan mengeksek
+ | `system-info` | Info sistem (MOTD) |
+ | `open <file>` | Edit file di Tunnel Editor |
+ 
++## 🐧 Linux Environment (Ubuntu via proot)
++
++Fitur unggulan Phase 36–39: jalankan **Ubuntu 24.04 asli** di dalam Tunnel Terminal tanpa root. Berbeda dari shell Android biasa yang terbatas pada `toybox`, di sini kamu dapat `apt`, `dpkg`, `systemd-userspace` tools, dan ribuan package Ubuntu asli.
++
++### Cara kerja
++
++```
++Tunnel Terminal
++  ├── Tab "Local"     → /system/bin/sh (shell Android bawaan)
++  ├── Tab "SSH"       → remote shell via JSch
++  └── Tab "Ubuntu" 🐧 → proot + Ubuntu 24.04 rootfs
++                         (apt, git, python, nodejs, build-essential, ...)
++```
++
++PTY layer yang sudah teruji (`native-lib.cpp` → `forkpty()`) **tidak diubah**. Fitur ini hanya menambah satu jalur baru: alih-alih `execve("/system/bin/sh")`, sesi Ubuntu memanggil `execve("<proot>", ["--link2symlink", "-0", "-r", "<rootfs>", ...])`. Mekanisme fork/pty/read-loop-nya sama persis.
++
++### Cara pakai
++
++1. Tap tombol 🐧 di TabBar, atau buka Command Palette (Ctrl+K) → "Ubuntu (Linux Environment)"
++2. Pertama kali: dialog instalasi muncul → tap **Install**
++3. App menyalin binary `proot` dari assets, download Ubuntu Base rootfs (~30–60MB) dari `cdimage.ubuntu.com`, ekstrak ke `filesDir/linux/ubuntu/`, setup DNS
++4. Setelah selesai, tab Ubuntu terbuka — langsung bisa `apt update && apt install git`
++5. Untuk uninstall (bebaskan storage): Command Palette → "Manage Linux Environment" → Uninstall
++
++### Skenario penggunaan
++
++- Install tool dev di Android: `apt install git python3 nodejs npm build-essential`
++- Jalankan script Python/Node di Ubuntu environment yang konsisten dengan server
++- Test build config sebelum push ke CI (replikasi environment)
++- Pakai package yang tidak ada di Termux repository
++
++### Known limitations
++
++| Limitasi | Penyebab | Workaround |
++|---|---|---|
++| `systemctl`/`service` tidak jalan | Android tidak punya systemd/cgroup v2 | Jalankan servis manual: `nginx -g "daemon off;" &` |
++| Performa kompilasi C++ berat lambat | Overhead ptrace proot | Cocok untuk pakai tool, kurang cocok untuk compile project besar dari nol |
++| Beberapa device OEM crash di startup | SECCOMP filter tidak kompatibel dengan proot | App auto-retry dengan `PROOT_NO_SECCOMP=1` (tersimpan per-device) |
++| Rootfs makan 300–500MB (basic) atau 1–2GB (dengan dev tools) | Ukuran asli Ubuntu | Cek free storage sebelum install; uninstall kapan saja |
++
++### Catatan distribusi
++
++⚠️ **Fitur ini tidak kompatibel dengan Google Play Store.** Kebijakan Play melarang app mendownload+mengeksekusi binary native saat runtime (alasan Termux sendiri tidak ada di Play Store). Distribusikan APK lewat **GitHub Releases** atau **F-Droid** saja.
++
+ ## Build
+ 
+ Membutuhkan: Android Studio Hedgehog+, Android SDK 34, NDK 25.1.8937393+, CMake 3.22.1
+@@ -79,6 +128,12 @@ Membutuhkan: Android Studio Hedgehog+, Android SDK 34, NDK 25.1.8937393+, CMake
+ # Output: app/build/outputs/apk/debug/app-debug.apk
+ ```
+ 
++### ⚠️ Wajib sebelum build: obtain binary `proot`
++
++Fitur Ubuntu Linux Environment butuh binary `proot` di `app/src/main/assets/proot/proot`. File ini **tidak di-bundle di repo** (ukuran + licensing). Cara mendapatkannya: ekstrak dari package Termux `.deb` — lihat instruksi lengkap di [`app/src/main/assets/proot/README.md`](app/src/main/assets/proot/README.md).
++
++Tanpa binary ini, app tetap jalan normal untuk semua fitur lain (local shell, SSH, AI, dll), tapi tombol 🐧 → Install akan gagal dengan error "Binary proot tidak ditemukan di assets APK".
++
+ ## Security
+ 
+ - `allowBackup=false` — kredensial tidak ikut backup
+@@ -87,14 +142,53 @@ Membutuhkan: Android Studio Hedgehog+, Android SDK 34, NDK 25.1.8937393+, CMake
+ - MCP server `http://` ditolak kecuali localhost
+ - AI tool calls di code blocks tidak dieksekusi (anti prompt injection)
+ - `isMinifyEnabled=true` untuk release (ProGuard + R8)
++- proot dijalankan dengan `-0` (fake root) — terbatas di rootfs app, tidak mengakses system Android
++- Rootfs Ubuntu disimpan di `filesDir/linux/` (private ke app, tidak butuh storage permission)
+ 
+ ## Thread Safety
+ 
+ - `TerminalEmulator`: `synchronized(lock)` on all mutations + snapshot rendering
+-- `ShellExecutor`: `outputLock` + `writeLock` + `AtomicBoolean` fd guard
+-- `SshShellExecutor`: same pattern
++- `ShellExecutor` / `SshShellExecutor` / `ProotShellExecutor`: same pattern (`outputLock` + `writeLock` + `AtomicBoolean` fd guard)
+ - `killSession`: `waitpid(WNOHANG)` before kill (PID recycling safe)
+ - ID generator: `AtomicInteger`/`AtomicLong` (no timestamp collision)
++- `MarkerExecutor`: AtomicLong counter untuk unique marker ID per-command
++
++## Architecture (Ringkas)
++
++```
++┌──────────────────────────────────────────────────────────┐
++│                    Jetpack Compose UI                     │
++│  TabBar │ TerminalScreenView │ AIChatPanel │ DiffView    │
++└───────────────────────┬──────────────────────────────────┘
++                        │
++          ┌─────────────┼─────────────┐
++          ▼             ▼             ▼
++   ┌────────────┐ ┌────────────┐ ┌──────────────────┐
++   │ ShellExec  │ │ SshShell   │ │ ProotShellExec   │
++   │ (local PTY)│ │ (JSch)     │ │ (proot+Ubuntu)   │
++   └─────┬──────┘ └─────┬──────┘ └────────┬─────────┘
++         │              │                 │
++         ▼              ▼                 ▼
++   ┌──────────────────────────────────────────────────┐
++   │              TerminalSession interface           │
++   │   start / writeRaw / resize / destroy / ...      │
++   └──────────────────────┬───────────────────────────┘
++                          │
++              ┌───────────┴───────────┐
++              ▼                       ▼
++       ┌─────────────┐         ┌──────────────┐
++       │ TerminalJni │         │  AIAgent     │
++       │ (Kotlin)    │         │  (SSE Flow)  │
++       └──────┬──────┘         └──────┬───────┘
++              │                       │
++              ▼                       ▼
++       ┌─────────────┐         ┌──────────────────┐
++       │ native-lib  │         │ MarkerExecutor   │
++       │ .cpp (NDK)  │         │ (cmd + exit code)│
++       │ forkpty()   │         └──────────────────┘
++       │ execve()    │
++       └─────────────┘
++```
+ 
+ ## Phase History
+ 
+@@ -112,6 +206,22 @@ Membutuhkan: Android Studio Hedgehog+, Android SDK 34, NDK 25.1.8937393+, CMake
+ | 24-26 | Stability fixes — pinch-zoom, block input, fontSize persist |
+ | 27-30 | Comprehensive audit — 38 bugs fixed (security, functional, medium, low) |
+ | 31 | Crash-on-launch fix — 7 root causes (SharedPreferences, foreground service, JNI) |
++| 32-34 | Input double-fire fix, soft keyboard Enter, text selection, paste, SSH TOFU real fingerprint check |
++| 35-36 | Credit + crypto address, marker-based command execution foundation |
++| 37 | Marker-based AI tool calling — `run_command` dibungkus marker, exit code di-capture, hasil dikirim balik ke AI sebagai context; @command: real implementation |
++| **38-39** | **Linux Environment (Ubuntu via proot) — `createSessionExec()` JNI, `ProotBootstrap` download+extract rootfs, `ProotShellExecutor`, install dialog, SECCOMP auto-retry, uninstall** |
++
++## Credits
++
++**Developer:** NanoMind (https://github.com/NanoMindExplorer)
++
++### Support
++
++Jika fitur ini bermanfaat, dukung pengembangan lanjutan:
++
++- 💰 Crypto: lihat di Settings → About
++- ⭐ Star repo: https://github.com/NanoMindExplorer/tunnel-terminal
++- 🐛 Bug report: buka issue dengan label sesuai phase terkait
+ 
+ ## License
+ 
+diff --git a/app/build.gradle.kts b/app/build.gradle.kts
+index 8af81b5..ee0fef2 100644
+--- a/app/build.gradle.kts
++++ b/app/build.gradle.kts
+@@ -11,9 +11,9 @@ android {
+         applicationId = "com.tunnel.terminal"
+         minSdk = 24
+         targetSdk = 34
+-        // Phase 37: Marker-based command execution + Auto-Pilot rewrite + @command: real
+-        versionCode = 25
+-        versionName = "6.0.0-phase37-marker-execution"
++        // Phase 38-39: proot + Ubuntu Linux environment (createSessionExec + ProotBootstrap + ProotShellExecutor)
++        versionCode = 26
++        versionName = "6.1.0-phase38-proot-ubuntu"
+     }
+ 
+     buildTypes {
+diff --git a/app/src/main/cpp/native-lib.cpp b/app/src/main/cpp/native-lib.cpp
+index d97dbea..0ac25a9 100644
+--- a/app/src/main/cpp/native-lib.cpp
++++ b/app/src/main/cpp/native-lib.cpp
+@@ -97,6 +97,127 @@ Java_com_tunnel_terminal_TerminalJni_createSession(JNIEnv *env, jobject thiz,
+     return (jint)pid;
+ }
+ 
++/*
++ * Phase 36 (proot/Ubuntu): Sama seperti createSession(), tapi exec ke program
++ * custom (misalnya proot) alih-alih hardcode /system/bin/sh. Dipakai untuk
++ * sesi Linux environment (proot + rootfs Ubuntu/dsb).
++ *
++ * PENTING: Semua GetStringUTFChars/GetObjectArrayElement HARUS selesai
++ * SEBELUM forkpty(), karena child process (hasil fork di proses Android
++ * multi-thread) tidak boleh memanggil JNIEnv sama sekali — sama seperti
++ * alasan BUG-30 fix di createSession(). Buffer C lokal (bukan static)
++ * supaya ikut ter-copy oleh fork() ke address space child.
++ *
++ * Same as createSession() but exec's a custom binary (e.g. proot) instead
++ * of /system/bin/sh. Used for Linux environment sessions (proot + rootfs).
++ *
++ * All JNI string/array access MUST finish before forkpty() — child process
++ * (forked inside a multithreaded Android process) must not touch JNIEnv.
++ */
++JNIEXPORT jint JNICALL
++Java_com_tunnel_terminal_TerminalJni_createSessionExec(JNIEnv *env, jobject thiz,
++                                                        jint rows, jint cols,
++                                                        jintArray outFd,
++                                                        jstring execPath,
++                                                        jobjectArray argvArray,
++                                                        jobjectArray envArray) {
++    /* 1. Salin execPath ke buffer C biasa. */
++    char execPathBuf[512];
++    const char *cExecPath = env->GetStringUTFChars(execPath, NULL);
++    if (cExecPath == NULL) {
++        LOGE("createSessionExec: GetStringUTFChars(execPath) gagal");
++        return -1;
++    }
++    strncpy(execPathBuf, cExecPath, sizeof(execPathBuf) - 1);
++    execPathBuf[sizeof(execPathBuf) - 1] = '\0';
++    env->ReleaseStringUTFChars(execPath, cExecPath);
++
++    /* 2. Salin argv[] ke buffer C biasa (lokal, bukan static — supaya ikut
++     *    ter-copy dengan benar oleh fork() ke address space child). */
++    const int MAX_ARGS = 64;
++    char argvStorage[MAX_ARGS][512];
++    char *argvBuf[MAX_ARGS + 1];
++    memset(argvStorage, 0, sizeof(argvStorage));
++    memset(argvBuf, 0, sizeof(argvBuf));
++    jsize argc = env->GetArrayLength(argvArray);
++    int n = (argc < MAX_ARGS) ? argc : MAX_ARGS;
++    for (int i = 0; i < n; i++) {
++        jstring s = (jstring)env->GetObjectArrayElement(argvArray, i);
++        if (s == NULL) {
++            argvBuf[i] = argvStorage[i]; /* empty string */
++            continue;
++        }
++        const char *cs = env->GetStringUTFChars(s, NULL);
++        if (cs != NULL) {
++            strncpy(argvStorage[i], cs, sizeof(argvStorage[i]) - 1);
++            argvStorage[i][sizeof(argvStorage[i]) - 1] = '\0';
++            env->ReleaseStringUTFChars(s, cs);
++        }
++        env->DeleteLocalRef(s);
++        argvBuf[i] = argvStorage[i];
++    }
++    argvBuf[n] = NULL;
++
++    /* 3. Salin envp[] dengan cara yang sama. */
++    char envStorage[MAX_ARGS][512];
++    char *envpBuf[MAX_ARGS + 1];
++    memset(envStorage, 0, sizeof(envStorage));
++    memset(envpBuf, 0, sizeof(envpBuf));
++    jsize envc = env->GetArrayLength(envArray);
++    int m = (envc < MAX_ARGS) ? envc : MAX_ARGS;
++    for (int i = 0; i < m; i++) {
++        jstring s = (jstring)env->GetObjectArrayElement(envArray, i);
++        if (s == NULL) {
++            envpBuf[i] = envStorage[i];
++            continue;
++        }
++        const char *cs = env->GetStringUTFChars(s, NULL);
++        if (cs != NULL) {
++            strncpy(envStorage[i], cs, sizeof(envStorage[i]) - 1);
++            envStorage[i][sizeof(envStorage[i]) - 1] = '\0';
++            env->ReleaseStringUTFChars(s, cs);
++        }
++        env->DeleteLocalRef(s);
++        envpBuf[i] = envStorage[i];
++    }
++    envpBuf[m] = NULL;
++
++    /* 4. Dari titik ini sama persis dengan createSession() yang sudah ada. */
++    int masterFd = -1;
++    pid_t pid = forkpty(&masterFd, NULL, NULL, NULL);
++    if (pid < 0) {
++        LOGE("createSessionExec: forkpty() gagal: %s", strerror(errno));
++        return -1;
++    }
++
++    if (pid == 0) {
++        /* Child — hanya async-signal-safe calls. execPathBuf/argvBuf/envpBuf
++         * adalah data biasa di stack yang sudah ikut ter-copy oleh fork(). */
++        execve(execPathBuf, argvBuf, envpBuf);
++        /* Jika execve gagal — _exit adalah async-signal-safe (exit() tidak). */
++        _exit(1);
++    }
++
++    /* Parent — set initial terminal size. */
++    if (rows > 0 && cols > 0) {
++        struct winsize ws;
++        memset(&ws, 0, sizeof(ws));
++        ws.ws_row = (unsigned short)rows;
++        ws.ws_col = (unsigned short)cols;
++        if (ioctl(masterFd, TIOCSWINSZ, &ws) < 0) {
++            LOGE("createSessionExec: ioctl(TIOCSWINSZ) gagal: %s", strerror(errno));
++        }
++    }
++
++    if (outFd != NULL) {
++        jint fd = (jint)masterFd;
++        env->SetIntArrayRegion(outFd, 0, 1, &fd);
++    }
++
++    LOGI("Sesi PTY exec baru: pid=%d, masterFd=%d, exec=%s", pid, masterFd, execPathBuf);
++    return (jint)pid;
++}
++
+ /*
+  * Menulis data ke terminal (seperti mengetik di keyboard).
+  * Writes data to the PTY (keyboard input).
+diff --git a/app/src/main/java/com/tunnel/terminal/MainActivity.kt b/app/src/main/java/com/tunnel/terminal/MainActivity.kt
+index 6cb45ed..6e6d71f 100644
+--- a/app/src/main/java/com/tunnel/terminal/MainActivity.kt
++++ b/app/src/main/java/com/tunnel/terminal/MainActivity.kt
+@@ -102,6 +102,15 @@ class MainActivity : ComponentActivity() {
+     private var showWorkspaceDrawer by mutableStateOf(false)
+     /** Phase 21: SSH connect dialog visibility. */
+     private var showSshDialog by mutableStateOf(false)
++    /** Phase 38 (proot/Ubuntu): Ubuntu install dialog visibility. */
++    private var showUbuntuInstallDialog by mutableStateOf(false)
++    /** Phase 38 (proot/Ubuntu): ProotBootstrap instance (lazy — butuh Context). */
++    private lateinit var prootBootstrap: ProotBootstrap
++    /** Phase 39 (proot/Ubuntu): Install progress state untuk dialog. */
++    private var ubuntuInstallStage by mutableStateOf("")
++    private var ubuntuInstallPercent by mutableStateOf(0)
++    private var ubuntuInstallError by mutableStateOf<String?>(null)
++    private var ubuntuInstalling by mutableStateOf(false)
+     /** Phase 21: Split pane mode — 2 terminals side by side. */
+     private var splitMode by mutableStateOf(false)
+     /** Phase 21: Second pane session ID (for split mode). */
+@@ -217,6 +226,8 @@ class MainActivity : ComponentActivity() {
+         mcpManager = McpManager(this)
+         agentWorkflowManager = AgentWorkflowManager(this)
+         voiceInputManager = VoiceInputManager(this)
++        /* Phase 38 (proot/Ubuntu): Bootstrap instance untuk download/extract rootfs. */
++        prootBootstrap = ProotBootstrap(this)
+         agentWorkflows.addAll(agentWorkflowManager.workflows)
+         loadAISettings()
+         loadTheme()
+@@ -660,6 +671,134 @@ class MainActivity : ComponentActivity() {
+         sshExecutor.start()
+     }
+ 
++    /**
++     * Phase 38 (proot/Ubuntu): Buat tab Ubuntu baru. Kalau belum terinstal,
++     * tampilkan dialog instalasi (akan auto-createUbuntuTab() setelah sukses).
++     *
++     * Retry logic: kalau sesi mati dalam <2 detik (indikasi SECCOMP issue),
++     * destroy + retry sekali dengan disableSeccomp=true. Preferensi disimpan
++     * supaya percobaan berikutnya pakai flag yang sama.
++     */
++    private suspend fun createUbuntuTab() {
++        if (!prootBootstrap.isInstalled) {
++            showUbuntuInstallDialog = true
++            return
++        }
++
++        // Cek preferensi SECCOMP dari session sebelumnya.
++        val prefs = getSharedPreferences("TunnelLinux", Context.MODE_PRIVATE)
++        val useNoSeccomp = prefs.getBoolean("proot_no_seccomp", false)
++
++        val executor = ProotShellExecutor(
++            themeHolder = themeHolder,
++            bootstrap = prootBootstrap,
++            disableSeccomp = useNoSeccomp
++        )
++        shellExecutors.add(executor)
++        activeExecutorId = executor.id
++        executor.start()
++
++        // Beri MOTD khusus Ubuntu.
++        executor.emulator.process(
++            "\u001B[32m┌─ Ubuntu 24.04 (proot) ─────────────────────────────┐\u001B[0m\n" +
++            "\u001B[32m│ Linux environment via proot — no root required     │\u001B[0m\n" +
++            "\u001B[32m│ apt update && apt install <pkg> untuk install tool │\u001B[0m\n" +
++            "\u001B[32m└────────────────────────────────────────────────────┘\u001B[0m\n\n"
++        )
++        executor.triggerScreenUpdate()
++
++        // Phase 39: Deteksi early death (SECCOMP issue) → retry sekali dengan flag.
++        Thread {
++            try {
++                Thread.sleep(2500)
++                if (!executor.isAlive) {
++                    Log.w("MainActivity", "Sesi Ubuntu mati prematur — retry dengan PROOT_NO_SECCOMP=1")
++                    // Hapus executor yang mati.
++                    shellExecutors.removeAll { it.id == executor.id }
++                    if (activeExecutorId == executor.id) {
++                        activeExecutorId = shellExecutors.firstOrNull()?.id ?: 0
++                    }
++                    // Simpan preferensi supaya percobaan berikutnya pakai flag ini.
++                    prefs.edit().putBoolean("proot_no_seccomp", true).apply()
++                    // Retry.
++                    lifecycleScope.launch {
++                        val retryExecutor = ProotShellExecutor(
++                            themeHolder = themeHolder,
++                            bootstrap = prootBootstrap,
++                            disableSeccomp = true
++                        )
++                        shellExecutors.add(retryExecutor)
++                        activeExecutorId = retryExecutor.id
++                        retryExecutor.start()
++                        retryExecutor.emulator.process(
++                            "\u001B[33m[RETRY] Sesi sebelumnya mati prematur — menggunakan PROOT_NO_SECCOMP=1.\u001B[0m\n\n"
++                        )
++                        retryExecutor.triggerScreenUpdate()
++                    }
++                }
++            } catch (_: InterruptedException) {}
++        }.apply { isDaemon = true; start() }
++    }
++
++    /**
++     * Phase 39 (proot/Ubuntu): Install Ubuntu rootfs. Panggil dari UI dialog.
++     * Reset state, jalankan install di IO dispatcher, update progress.
++     */
++    private fun startUbuntuInstall() {
++        if (ubuntuInstalling) return
++        ubuntuInstalling = true
++        ubuntuInstallError = null
++        ubuntuInstallStage = "Memulai instalasi"
++        ubuntuInstallPercent = 0
++
++        lifecycleScope.launch {
++            try {
++                prootBootstrap.install(ProotBootstrap.ProgressListener { stage, percent ->
++                    ubuntuInstallStage = stage
++                    ubuntuInstallPercent = percent
++                })
++                // Sukses — tutup dialog, buka tab Ubuntu.
++                ubuntuInstalling = false
++                showUbuntuInstallDialog = false
++                Toast.makeText(this@MainActivity, "Ubuntu siap digunakan", Toast.LENGTH_SHORT).show()
++                createUbuntuTab()
++            } catch (e: Exception) {
++                Log.e("MainActivity", "Ubuntu install gagal: ${e.message}", e)
++                ubuntuInstalling = false
++                ubuntuInstallError = e.message ?: "Unknown error"
++            }
++        }
++    }
++
++    /**
++     * Phase 39 (proot/Ubuntu): Uninstall Linux environment (bebaskan storage).
++     * Tutup semua tab Ubuntu dulu sebelum uninstall supaya fd tidak leak.
++     */
++    private fun uninstallUbuntu() {
++        lifecycleScope.launch {
++            // Tutup semua tab Ubuntu.
++            val ubuntuTabs = shellExecutors.filter { it.sessionType == "ubuntu" }
++            ubuntuTabs.forEach { tab ->
++                Thread { tab.destroy() }.start()
++            }
++            shellExecutors.removeAll { it.sessionType == "ubuntu" }
++            if (activeExecutorId == 0 || shellExecutors.none { it.id == activeExecutorId }) {
++                activeExecutorId = shellExecutors.firstOrNull()?.id ?: 0
++            }
++            if (shellExecutors.isEmpty()) {
++                createNewTab()
++            }
++
++            // Hapus rootfs.
++            withContext(kotlinx.coroutines.Dispatchers.IO) {
++                prootBootstrap.uninstall()
++            }
++            // Reset preferensi SECCOMP.
++            getSharedPreferences("TunnelLinux", Context.MODE_PRIVATE).edit().clear().apply()
++            Toast.makeText(this@MainActivity, "Linux environment dihapus", Toast.LENGTH_SHORT).show()
++        }
++    }
++
+     private fun closeTab(id: Int) {
+         /* Phase 25: Fix ANR — destroy() di background thread (was main thread = 350ms block).
+          * Old code: destroy() blocking (Thread.sleep + join) di main thread → ANR. */
+@@ -807,6 +946,10 @@ class MainActivity : ComponentActivity() {
+                 add(PaletteItem("open_file_explorer", "Open File Explorer", "Setting", Icons.Default.Folder, PaletteCategory.SETTING) { showFileExplorer = true })
+                 add(PaletteItem("open_workspace", "Workspace Sessions", "Setting", Icons.Default.Save, PaletteCategory.SETTING) { showWorkspaceDrawer = true })
+                 add(PaletteItem("open_ssh", "SSH Connect", "Setting", Icons.Default.Cloud, PaletteCategory.SETTING) { showSshDialog = true })
++                /* Phase 38 (proot/Ubuntu): Open Ubuntu / Install Linux environment. */
++                add(PaletteItem("open_ubuntu", "Ubuntu (Linux Environment)", "Setting", Icons.Default.Terminal, PaletteCategory.SETTING) { lifecycleScope.launch { createUbuntuTab() } })
++                /* Phase 39 (proot/Ubuntu): Manage install (uninstall if installed). */
++                add(PaletteItem("manage_ubuntu", "Manage Linux Environment", "Setting", Icons.Default.Build, PaletteCategory.SETTING) { showUbuntuInstallDialog = true })
+                 /* Commands. */
+                 add(PaletteItem("cmd_ls", "Run: ls -la", "Command", Icons.Default.Terminal, PaletteCategory.COMMAND) { shellExecutors.find { it.id == activeExecutorId }?.executeCommand("ls -la") })
+                 add(PaletteItem("cmd_pwd", "Run: pwd", "Command", Icons.Default.Terminal, PaletteCategory.COMMAND) { shellExecutors.find { it.id == activeExecutorId }?.executeCommand("pwd") })
+@@ -885,6 +1028,24 @@ class MainActivity : ComponentActivity() {
+             )
+         }
+ 
++        /* Phase 39 (proot/Ubuntu): Install / manage Linux environment dialog. */
++        if (showUbuntuInstallDialog) {
++            UbuntuInstallDialog(
++                theme = currentTheme,
++                bootstrap = prootBootstrap,
++                installing = ubuntuInstalling,
++                stage = ubuntuInstallStage,
++                percent = ubuntuInstallPercent,
++                error = ubuntuInstallError,
++                onInstall = { startUbuntuInstall() },
++                onUninstall = {
++                    uninstallUbuntu()
++                    showUbuntuInstallDialog = false
++                },
++                onDismiss = { showUbuntuInstallDialog = false }
++            )
++        }
++
+         /* Phase 19: File Explorer Dialog. */
+         if (showFileExplorer) {
+             AlertDialog(
+@@ -1299,6 +1460,8 @@ class MainActivity : ComponentActivity() {
+                         onOpenFileExplorer = { showFileExplorer = true },
+                         onOpenWorkspace = { showWorkspaceDrawer = true },
+                         onOpenSsh = { showSshDialog = true },
++                        onOpenUbuntu = { lifecycleScope.launch { createUbuntuTab() } },
++                        ubuntuInstalled = prootBootstrap.isInstalled,
+                         onToggleSplit = {
+                             splitMode = !splitMode
+                             if (splitMode) {
+diff --git a/app/src/main/java/com/tunnel/terminal/TerminalJni.kt b/app/src/main/java/com/tunnel/terminal/TerminalJni.kt
+index 24d70c3..37626cd 100644
+--- a/app/src/main/java/com/tunnel/terminal/TerminalJni.kt
++++ b/app/src/main/java/com/tunnel/terminal/TerminalJni.kt
+@@ -40,6 +40,27 @@ object TerminalJni {
+      */
+     external fun createSession(rows: Int, cols: Int, outFd: IntArray): Int
+ 
++    /**
++     * Phase 36 (proot/Ubuntu): Sama seperti createSession(), tapi exec ke program
++     * custom (misalnya proot) alih-alih /system/bin/sh. Dipakai untuk sesi Linux
++     * environment (proot+rootfs).
++     *
++     * Same as createSession() but exec's a custom binary instead of /system/bin/sh.
++     * Used for Linux environment sessions (proot + rootfs).
++     *
++     * @param rows jumlah baris awal
++     * @param cols jumlah kolom awal
++     * @param outFd array int[1] untuk menerima master file descriptor
++     * @param execPath path absolut ke binary yang akan di-exec (mis. proot)
++     * @param argv full argv termasuk argv[0]
++     * @param envp full environment, format "KEY=VALUE" per elemen
++     * @return child pid (>0) jika sukses, -1 jika gagal
++     */
++    external fun createSessionExec(
++        rows: Int, cols: Int, outFd: IntArray,
++        execPath: String, argv: Array<String>, envp: Array<String>
++    ): Int
++
+     /** Menulis data byte ke PTY. Writes bytes to PTY. */
+     external fun write(fd: Int, data: ByteArray)
+ 
+diff --git a/app/src/main/java/com/tunnel/terminal/TerminalUI.kt b/app/src/main/java/com/tunnel/terminal/TerminalUI.kt
+index 1880558..60adffc 100644
+--- a/app/src/main/java/com/tunnel/terminal/TerminalUI.kt
++++ b/app/src/main/java/com/tunnel/terminal/TerminalUI.kt
+@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.*
+ import androidx.compose.foundation.lazy.LazyRow
+ import androidx.compose.foundation.lazy.items
+ import androidx.compose.foundation.rememberScrollState
++import androidx.compose.foundation.shape.CircleShape
+ import androidx.compose.foundation.shape.RoundedCornerShape
+ import androidx.compose.foundation.verticalScroll
+ import androidx.compose.material3.*
+@@ -58,6 +59,8 @@ fun TabBar(
+     onOpenPalette: () -> Unit = {},
+     onToggleBlockMode: () -> Unit = {},
+     isBlockMode: Boolean = false,
++    onOpenUbuntu: () -> Unit = {},
++    ubuntuInstalled: Boolean = true,
+     theme: TerminalTheme = ThemeManager.defaultTheme
+ ) {
+     LazyRow(
+@@ -101,6 +104,31 @@ fun TabBar(
+                 Text("🔌", color = theme.uiText, fontSize = 12.sp)
+             }
+         }
++        /* Phase 38 (proot/Ubuntu): Ubuntu (Linux Environment) button.
++         * Icon pakai penguin 🐧 + dot indikator install state. */
++        item {
++            Box(
++                modifier = Modifier
++                    .background(
++                        if (ubuntuInstalled) theme.uiSurface else theme.uiBg,
++                        RoundedCornerShape(4.dp)
++                    )
++                    .clickable { onOpenUbuntu() }
++                    .padding(horizontal = 10.dp, vertical = 10.dp)
++            ) {
++                Row(verticalAlignment = Alignment.CenterVertically) {
++                    Text("🐧", color = theme.uiText, fontSize = 12.sp)
++                    if (!ubuntuInstalled) {
++                        Spacer(modifier = Modifier.width(3.dp))
++                        Box(
++                            modifier = Modifier
++                                .size(6.dp)
++                                .background(theme.uiAccent, CircleShape)
++                        )
++                    }
++                }
++            }
++        }
+         /* Phase 21: Split Pane toggle button. */
+         item {
+             Box(modifier = Modifier.background(if (isSplitMode) theme.uiAccent else theme.uiSurface, RoundedCornerShape(4.dp)).clickable { onToggleSplit() }.padding(horizontal = 10.dp, vertical = 10.dp)) {
+@@ -1181,3 +1209,178 @@ fun CryptoAddressRow(
+         )
+     }
+ }
++
++/**
++ * Phase 39 (proot/Ubuntu): Dialog untuk install / uninstall Linux environment.
++ *
++ * State yang ditampilkan:
++ *  - Idle (belum install): tampilkan info ukuran + tombol Install + tombol Uninstall (disabled).
++ *  - Installing: tampilkan progress bar + stage label.
++ *  - Error: tampilkan pesan error + tombol Retry.
++ *  - Installed: tampilkan info size + tombol Open + tombol Uninstall.
++ *
++ * Catatan UI:
++ *  - Pakai AlertDialog Material3 supaya konsisten dengan dialog lain di app.
++ *  - Tombol Uninstall disabled saat installing supaya user tidak merusak state.
++ *  - Tombol dismiss (Cancel) disabled saat installing (harus tunggu selesai atau kill app).
++ */
++@Composable
++fun UbuntuInstallDialog(
++    theme: TerminalTheme,
++    bootstrap: ProotBootstrap,
++    installing: Boolean,
++    stage: String,
++    percent: Int,
++    error: String?,
++    onInstall: () -> Unit,
++    onUninstall: () -> Unit,
++    onDismiss: () -> Unit
++) {
++    val installed = bootstrap.isInstalled
++    val freeMb = remember(installing, installed, error) { bootstrap.getFreeSpaceMb() }
++    val rootfsMb = remember(installed) {
++        if (installed) bootstrap.getRootfsSizeMb() else 0
++    }
++
++    AlertDialog(
++        onDismissRequest = { if (!installing) onDismiss() },
++        modifier = Modifier.background(theme.uiBg),
++        title = {
++            Row(verticalAlignment = Alignment.CenterVertically) {
++                Text("🐧 ", color = theme.uiAccent, fontSize = 20.sp)
++                Text(
++                    "Ubuntu (Linux Environment)",
++                    color = theme.uiText,
++                    fontFamily = FontFamily.Monospace,
++                    fontSize = 16.sp
++                )
++            }
++        },
++        text = {
++            Column(modifier = Modifier.fillMaxWidth()) {
++                Text(
++                    "Jalankan Ubuntu asli di dalam Tunnel Terminal lewat proot — tanpa root. " +
++                    "Memungkinkan apt, git, python, nodejs, dan tool Linux lainnya.",
++                    color = theme.uiTextMuted,
++                    fontSize = 12.sp,
++                    fontFamily = FontFamily.Monospace
++                )
++                Spacer(modifier = Modifier.height(12.dp))
++
++                /* Info storage. */
++                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
++                    Text("Free storage:", color = theme.uiTextMuted, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
++                    Text("$freeMb MB", color = if (freeMb < 1500) Color(0xFFFF5252) else theme.uiText, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
++                }
++                if (installed) {
++                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
++                        Text("Rootfs size:", color = theme.uiTextMuted, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
++                        Text("$rootfsMb MB", color = theme.uiText, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
++                    }
++                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
++                        Text("Status:", color = theme.uiTextMuted, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
++                        Text("✓ Installed", color = Color(0xFF4CAF50), fontSize = 11.sp, fontFamily = FontFamily.Monospace)
++                    }
++                } else {
++                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
++                        Text("Required:", color = theme.uiTextMuted, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
++                        Text("≥ 1500 MB", color = theme.uiText, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
++                    }
++                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
++                        Text("Status:", color = theme.uiTextMuted, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
++                        Text("Not installed", color = Color(0xFFFFAB00), fontSize = 11.sp, fontFamily = FontFamily.Monospace)
++                    }
++                }
++
++                /* Progress UI saat installing. */
++                if (installing) {
++                    Spacer(modifier = Modifier.height(16.dp))
++                    Text(
++                        stage.ifEmpty { "Memulai..." },
++                        color = theme.uiAccent,
++                        fontSize = 12.sp,
++                        fontFamily = FontFamily.Monospace
++                    )
++                    Spacer(modifier = Modifier.height(6.dp))
++                    LinearProgressIndicator(
++                        progress = (percent / 100f).coerceIn(0f, 1f),
++                        modifier = Modifier.fillMaxWidth(),
++                        color = theme.uiAccent,
++                        trackColor = theme.uiSurface
++                    )
++                    Spacer(modifier = Modifier.height(4.dp))
++                    Text(
++                        "$percent%",
++                        color = theme.uiTextMuted,
++                        fontSize = 11.sp,
++                        fontFamily = FontFamily.Monospace
++                    )
++                }
++
++                /* Error display. */
++                if (error != null) {
++                    Spacer(modifier = Modifier.height(12.dp))
++                    Surface(
++                        modifier = Modifier.fillMaxWidth(),
++                        color = Color(0x33FF5252),
++                        shape = RoundedCornerShape(4.dp)
++                    ) {
++                        Column(modifier = Modifier.padding(8.dp)) {
++                            Text(
++                                "❌ Install gagal:",
++                                color = Color(0xFFFF5252),
++                                fontSize = 11.sp,
++                                fontFamily = FontFamily.Monospace
++                            )
++                            Spacer(modifier = Modifier.height(4.dp))
++                            Text(
++                                error,
++                                color = Color(0xFFFFAB00),
++                                fontSize = 10.sp,
++                                fontFamily = FontFamily.Monospace
++                            )
++                        }
++                    }
++                }
++
++                Spacer(modifier = Modifier.height(12.dp))
++                Text(
++                    "Catatan: Fitur ini download+mengeksekusi binary native saat runtime → tidak kompatibel dengan kebijakan Play Store. Distribusikan via GitHub Releases.",
++                    color = theme.uiTextMuted,
++                    fontSize = 9.sp,
++                    fontFamily = FontFamily.Monospace,
++                    fontStyle = androidx.compose.ui.text.font.FontStyle.Italic
++                )
++            }
++        },
++        confirmButton = {
++            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
++                if (installed && !installing) {
++                    TextButton(onClick = onDismiss) {
++                        Text("Open", color = theme.uiAccent, fontFamily = FontFamily.Monospace)
++                    }
++                } else if (!installing && error == null) {
++                    TextButton(onClick = onInstall, enabled = !installed) {
++                        Text(if (installed) "Installed" else "Install", color = if (installed) theme.uiTextMuted else theme.uiAccent, fontFamily = FontFamily.Monospace)
++                    }
++                } else if (!installing && error != null) {
++                    TextButton(onClick = onInstall) {
++                        Text("Retry", color = theme.uiAccent, fontFamily = FontFamily.Monospace)
++                    }
++                }
++                if (installed && !installing) {
++                    TextButton(onClick = onUninstall) {
++                        Text("Uninstall", color = Color(0xFFFF5252), fontFamily = FontFamily.Monospace)
++                    }
++                }
++            }
++        },
++        dismissButton = {
++            if (!installing) {
++                TextButton(onClick = onDismiss) {
++                    Text("Cancel", color = theme.uiTextMuted, fontFamily = FontFamily.Monospace)
++                }
++            }
++        }
++    )
++}

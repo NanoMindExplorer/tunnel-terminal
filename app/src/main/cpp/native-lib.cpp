@@ -98,6 +98,127 @@ Java_com_tunnel_terminal_TerminalJni_createSession(JNIEnv *env, jobject thiz,
 }
 
 /*
+ * Phase 36 (proot/Ubuntu): Sama seperti createSession(), tapi exec ke program
+ * custom (misalnya proot) alih-alih hardcode /system/bin/sh. Dipakai untuk
+ * sesi Linux environment (proot + rootfs Ubuntu/dsb).
+ *
+ * PENTING: Semua GetStringUTFChars/GetObjectArrayElement HARUS selesai
+ * SEBELUM forkpty(), karena child process (hasil fork di proses Android
+ * multi-thread) tidak boleh memanggil JNIEnv sama sekali — sama seperti
+ * alasan BUG-30 fix di createSession(). Buffer C lokal (bukan static)
+ * supaya ikut ter-copy oleh fork() ke address space child.
+ *
+ * Same as createSession() but exec's a custom binary (e.g. proot) instead
+ * of /system/bin/sh. Used for Linux environment sessions (proot + rootfs).
+ *
+ * All JNI string/array access MUST finish before forkpty() — child process
+ * (forked inside a multithreaded Android process) must not touch JNIEnv.
+ */
+JNIEXPORT jint JNICALL
+Java_com_tunnel_terminal_TerminalJni_createSessionExec(JNIEnv *env, jobject thiz,
+                                                        jint rows, jint cols,
+                                                        jintArray outFd,
+                                                        jstring execPath,
+                                                        jobjectArray argvArray,
+                                                        jobjectArray envArray) {
+    /* 1. Salin execPath ke buffer C biasa. */
+    char execPathBuf[512];
+    const char *cExecPath = env->GetStringUTFChars(execPath, NULL);
+    if (cExecPath == NULL) {
+        LOGE("createSessionExec: GetStringUTFChars(execPath) gagal");
+        return -1;
+    }
+    strncpy(execPathBuf, cExecPath, sizeof(execPathBuf) - 1);
+    execPathBuf[sizeof(execPathBuf) - 1] = '\0';
+    env->ReleaseStringUTFChars(execPath, cExecPath);
+
+    /* 2. Salin argv[] ke buffer C biasa (lokal, bukan static — supaya ikut
+     *    ter-copy dengan benar oleh fork() ke address space child). */
+    const int MAX_ARGS = 64;
+    char argvStorage[MAX_ARGS][512];
+    char *argvBuf[MAX_ARGS + 1];
+    memset(argvStorage, 0, sizeof(argvStorage));
+    memset(argvBuf, 0, sizeof(argvBuf));
+    jsize argc = env->GetArrayLength(argvArray);
+    int n = (argc < MAX_ARGS) ? argc : MAX_ARGS;
+    for (int i = 0; i < n; i++) {
+        jstring s = (jstring)env->GetObjectArrayElement(argvArray, i);
+        if (s == NULL) {
+            argvBuf[i] = argvStorage[i]; /* empty string */
+            continue;
+        }
+        const char *cs = env->GetStringUTFChars(s, NULL);
+        if (cs != NULL) {
+            strncpy(argvStorage[i], cs, sizeof(argvStorage[i]) - 1);
+            argvStorage[i][sizeof(argvStorage[i]) - 1] = '\0';
+            env->ReleaseStringUTFChars(s, cs);
+        }
+        env->DeleteLocalRef(s);
+        argvBuf[i] = argvStorage[i];
+    }
+    argvBuf[n] = NULL;
+
+    /* 3. Salin envp[] dengan cara yang sama. */
+    char envStorage[MAX_ARGS][512];
+    char *envpBuf[MAX_ARGS + 1];
+    memset(envStorage, 0, sizeof(envStorage));
+    memset(envpBuf, 0, sizeof(envpBuf));
+    jsize envc = env->GetArrayLength(envArray);
+    int m = (envc < MAX_ARGS) ? envc : MAX_ARGS;
+    for (int i = 0; i < m; i++) {
+        jstring s = (jstring)env->GetObjectArrayElement(envArray, i);
+        if (s == NULL) {
+            envpBuf[i] = envStorage[i];
+            continue;
+        }
+        const char *cs = env->GetStringUTFChars(s, NULL);
+        if (cs != NULL) {
+            strncpy(envStorage[i], cs, sizeof(envStorage[i]) - 1);
+            envStorage[i][sizeof(envStorage[i]) - 1] = '\0';
+            env->ReleaseStringUTFChars(s, cs);
+        }
+        env->DeleteLocalRef(s);
+        envpBuf[i] = envStorage[i];
+    }
+    envpBuf[m] = NULL;
+
+    /* 4. Dari titik ini sama persis dengan createSession() yang sudah ada. */
+    int masterFd = -1;
+    pid_t pid = forkpty(&masterFd, NULL, NULL, NULL);
+    if (pid < 0) {
+        LOGE("createSessionExec: forkpty() gagal: %s", strerror(errno));
+        return -1;
+    }
+
+    if (pid == 0) {
+        /* Child — hanya async-signal-safe calls. execPathBuf/argvBuf/envpBuf
+         * adalah data biasa di stack yang sudah ikut ter-copy oleh fork(). */
+        execve(execPathBuf, argvBuf, envpBuf);
+        /* Jika execve gagal — _exit adalah async-signal-safe (exit() tidak). */
+        _exit(1);
+    }
+
+    /* Parent — set initial terminal size. */
+    if (rows > 0 && cols > 0) {
+        struct winsize ws;
+        memset(&ws, 0, sizeof(ws));
+        ws.ws_row = (unsigned short)rows;
+        ws.ws_col = (unsigned short)cols;
+        if (ioctl(masterFd, TIOCSWINSZ, &ws) < 0) {
+            LOGE("createSessionExec: ioctl(TIOCSWINSZ) gagal: %s", strerror(errno));
+        }
+    }
+
+    if (outFd != NULL) {
+        jint fd = (jint)masterFd;
+        env->SetIntArrayRegion(outFd, 0, 1, &fd);
+    }
+
+    LOGI("Sesi PTY exec baru: pid=%d, masterFd=%d, exec=%s", pid, masterFd, execPathBuf);
+    return (jint)pid;
+}
+
+/*
  * Menulis data ke terminal (seperti mengetik di keyboard).
  * Writes data to the PTY (keyboard input).
  */

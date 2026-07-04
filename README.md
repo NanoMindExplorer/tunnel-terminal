@@ -1,23 +1,26 @@
 # Tunnel Terminal
 
-**Tunnel Terminal** adalah terminal Android AI-native yang merevolusi cara developer bekerja di perangkat mobile. Menggabungkan mesin C/C++ NDK (Pseudo-Terminal asli) dengan AI Copilot multi-provider, terminal berbasis blok, command palette, tool calling, dan banyak lagi.
+**Tunnel Terminal** adalah terminal Android AI-native yang merevolusi cara developer bekerja di perangkat mobile. Menggabungkan mesin C/C++ NDK (Pseudo-Terminal asli) dengan AI Copilot multi-provider, terminal berbasis blok, command palette, tool calling, **lingkungan Linux Ubuntu asli via proot (tanpa root)**, dan banyak lagi.
 
 ![Architecture](https://img.shields.io/badge/Architecture-NDK%20%2B%20Jetpack%20Compose-purple)
 ![AI](https://img.shields.io/badge/AI-Multi%20Provider%20%2B%20Vision%20%2B%20MCP-cyan)
-![Version](https://img.shields.io/badge/version-5.1.0-blue)
+![Linux](https://img.shields.io/badge/Linux-Ubuntu%2024.04%20via%20proot-orange)
+![Version](https://img.shields.io/badge/version-6.1.0-blue)
 ![Stability](https://img.shields.io/badge/stability-production-green)
 
 ## Quick Links
 
 - 📖 [Wiki Lengkap](docs/WIKI.md) — arsitektur, thread safety, phase history
 - 📚 [Panduan Penggunaan](docs/USER_GUIDE.md) — cara pakai semua fitur step-by-step
+- 🐧 [Cara Obtain Binary proot](app/src/main/assets/proot/README.md) — wajib dibaca sebelum build fitur Ubuntu
 
 ## Mengapa Tunnel Terminal?
 
-Terminal Android konvensional (Termux, dll) hanya menampilkan teks dan mengeksekusi command. Tunnel Terminal membawa pengalaman **Warp + Claude Code + Cursor** ke Android:
+Terminal Android konvensional (Termux, dll) hanya menampilkan teks dan mengeksekusi command. Tunnel Terminal membawa pengalaman **Warp + Claude Code + Cursor + Termux proot-distro** ke Android dalam satu app:
 
 - **Block-based UI** — setiap command + output = card diskret (seperti Warp)
 - **AI Agent** — AI bisa baca/tulis file, jalankan command, dengan permission prompts
+- **Linux Environment (Ubuntu)** — jalankan `apt`, `git`, `python`, `nodejs` di Ubuntu 24.04 asli via proot, **tanpa root** — lengkap dengan marker-based exit code capture supaya AI bisa autonously install package
 - **Command Palette** — Ctrl+K untuk akses cepat semua fitur (seperti VS Code)
 - **Markdown Rendering** — AI responses dirender sebagai rich markdown
 - **@context Mentions** — mention file, block, terminal output sebagai AI context
@@ -34,7 +37,7 @@ Terminal Android konvensional (Termux, dll) hanya menampilkan teks dan mengeksek
 |---|-------|--------|
 | 1 | True Linux Terminal | C++ NDK PTY via `forkpty()`, mendukung vim/htop/less |
 | 2 | Block-Based Terminal | Warp-style command+output cards, collapsible, rerun, AI explain |
-| 3 | AI Auto-Pilot | Multi-step command execution, error detection, wait-for-prompt |
+| 3 | AI Auto-Pilot | Multi-step command execution, error detection, marker-based exit code |
 | 4 | AI Tool Calling | read_file, write_file, delete_file, run_command, list_files, search_files |
 | 5 | Permission Prompts | Claude Code-style: Allow once / Always allow / Deny (kecuali run_command/delete_file) |
 | 6 | Inline Diff View | LCS-based diff sebelum apply AI file edits |
@@ -57,6 +60,8 @@ Terminal Android konvensional (Termux, dll) hanya menampilkan teks dan mengeksek
 | 23 | Physical Keyboard | Full support: Enter, Backspace, Tab, Arrows, F1-F4, Ctrl+key, Alt+key |
 | 24 | Mouse Support | Click to focus, scroll wheel |
 | 25 | Pinch-to-Zoom | Font size persist across sessions |
+| 26 | **Linux Environment** | **Ubuntu 24.04 via proot — `apt`, `git`, `python`, `nodejs` tanpa root** |
+| 27 | **Marker-Based Execution** | **AI run_command dibungkus unique marker → capture exit code → kirim balik ke AI sebagai context** |
 
 ## Built-in Commands
 
@@ -70,6 +75,50 @@ Terminal Android konvensional (Termux, dll) hanya menampilkan teks dan mengeksek
 | `system-info` | Info sistem (MOTD) |
 | `open <file>` | Edit file di Tunnel Editor |
 
+## 🐧 Linux Environment (Ubuntu via proot)
+
+Fitur unggulan Phase 36–39: jalankan **Ubuntu 24.04 asli** di dalam Tunnel Terminal tanpa root. Berbeda dari shell Android biasa yang terbatas pada `toybox`, di sini kamu dapat `apt`, `dpkg`, `systemd-userspace` tools, dan ribuan package Ubuntu asli.
+
+### Cara kerja
+
+```
+Tunnel Terminal
+  ├── Tab "Local"     → /system/bin/sh (shell Android bawaan)
+  ├── Tab "SSH"       → remote shell via JSch
+  └── Tab "Ubuntu" 🐧 → proot + Ubuntu 24.04 rootfs
+                         (apt, git, python, nodejs, build-essential, ...)
+```
+
+PTY layer yang sudah teruji (`native-lib.cpp` → `forkpty()`) **tidak diubah**. Fitur ini hanya menambah satu jalur baru: alih-alih `execve("/system/bin/sh")`, sesi Ubuntu memanggil `execve("<proot>", ["--link2symlink", "-0", "-r", "<rootfs>", ...])`. Mekanisme fork/pty/read-loop-nya sama persis.
+
+### Cara pakai
+
+1. Tap tombol 🐧 di TabBar, atau buka Command Palette (Ctrl+K) → "Ubuntu (Linux Environment)"
+2. Pertama kali: dialog instalasi muncul → tap **Install**
+3. App menyalin binary `proot` dari assets, download Ubuntu Base rootfs (~30–60MB) dari `cdimage.ubuntu.com`, ekstrak ke `filesDir/linux/ubuntu/`, setup DNS
+4. Setelah selesai, tab Ubuntu terbuka — langsung bisa `apt update && apt install git`
+5. Untuk uninstall (bebaskan storage): Command Palette → "Manage Linux Environment" → Uninstall
+
+### Skenario penggunaan
+
+- Install tool dev di Android: `apt install git python3 nodejs npm build-essential`
+- Jalankan script Python/Node di Ubuntu environment yang konsisten dengan server
+- Test build config sebelum push ke CI (replikasi environment)
+- Pakai package yang tidak ada di Termux repository
+
+### Known limitations
+
+| Limitasi | Penyebab | Workaround |
+|---|---|---|
+| `systemctl`/`service` tidak jalan | Android tidak punya systemd/cgroup v2 | Jalankan servis manual: `nginx -g "daemon off;" &` |
+| Performa kompilasi C++ berat lambat | Overhead ptrace proot | Cocok untuk pakai tool, kurang cocok untuk compile project besar dari nol |
+| Beberapa device OEM crash di startup | SECCOMP filter tidak kompatibel dengan proot | App auto-retry dengan `PROOT_NO_SECCOMP=1` (tersimpan per-device) |
+| Rootfs makan 300–500MB (basic) atau 1–2GB (dengan dev tools) | Ukuran asli Ubuntu | Cek free storage sebelum install; uninstall kapan saja |
+
+### Catatan distribusi
+
+⚠️ **Fitur ini tidak kompatibel dengan Google Play Store.** Kebijakan Play melarang app mendownload+mengeksekusi binary native saat runtime (alasan Termux sendiri tidak ada di Play Store). Distribusikan APK lewat **GitHub Releases** atau **F-Droid** saja.
+
 ## Build
 
 Membutuhkan: Android Studio Hedgehog+, Android SDK 34, NDK 25.1.8937393+, CMake 3.22.1
@@ -79,6 +128,12 @@ Membutuhkan: Android Studio Hedgehog+, Android SDK 34, NDK 25.1.8937393+, CMake 
 # Output: app/build/outputs/apk/debug/app-debug.apk
 ```
 
+### ⚠️ Wajib sebelum build: obtain binary `proot`
+
+Fitur Ubuntu Linux Environment butuh binary `proot` di `app/src/main/assets/proot/proot`. File ini **tidak di-bundle di repo** (ukuran + licensing). Cara mendapatkannya: ekstrak dari package Termux `.deb` — lihat instruksi lengkap di [`app/src/main/assets/proot/README.md`](app/src/main/assets/proot/README.md).
+
+Tanpa binary ini, app tetap jalan normal untuk semua fitur lain (local shell, SSH, AI, dll), tapi tombol 🐧 → Install akan gagal dengan error "Binary proot tidak ditemukan di assets APK".
+
 ## Security
 
 - `allowBackup=false` — kredensial tidak ikut backup
@@ -87,14 +142,53 @@ Membutuhkan: Android Studio Hedgehog+, Android SDK 34, NDK 25.1.8937393+, CMake 
 - MCP server `http://` ditolak kecuali localhost
 - AI tool calls di code blocks tidak dieksekusi (anti prompt injection)
 - `isMinifyEnabled=true` untuk release (ProGuard + R8)
+- proot dijalankan dengan `-0` (fake root) — terbatas di rootfs app, tidak mengakses system Android
+- Rootfs Ubuntu disimpan di `filesDir/linux/` (private ke app, tidak butuh storage permission)
 
 ## Thread Safety
 
 - `TerminalEmulator`: `synchronized(lock)` on all mutations + snapshot rendering
-- `ShellExecutor`: `outputLock` + `writeLock` + `AtomicBoolean` fd guard
-- `SshShellExecutor`: same pattern
+- `ShellExecutor` / `SshShellExecutor` / `ProotShellExecutor`: same pattern (`outputLock` + `writeLock` + `AtomicBoolean` fd guard)
 - `killSession`: `waitpid(WNOHANG)` before kill (PID recycling safe)
 - ID generator: `AtomicInteger`/`AtomicLong` (no timestamp collision)
+- `MarkerExecutor`: AtomicLong counter untuk unique marker ID per-command
+
+## Architecture (Ringkas)
+
+```
+┌──────────────────────────────────────────────────────────┐
+│                    Jetpack Compose UI                     │
+│  TabBar │ TerminalScreenView │ AIChatPanel │ DiffView    │
+└───────────────────────┬──────────────────────────────────┘
+                        │
+          ┌─────────────┼─────────────┐
+          ▼             ▼             ▼
+   ┌────────────┐ ┌────────────┐ ┌──────────────────┐
+   │ ShellExec  │ │ SshShell   │ │ ProotShellExec   │
+   │ (local PTY)│ │ (JSch)     │ │ (proot+Ubuntu)   │
+   └─────┬──────┘ └─────┬──────┘ └────────┬─────────┘
+         │              │                 │
+         ▼              ▼                 ▼
+   ┌──────────────────────────────────────────────────┐
+   │              TerminalSession interface           │
+   │   start / writeRaw / resize / destroy / ...      │
+   └──────────────────────┬───────────────────────────┘
+                          │
+              ┌───────────┴───────────┐
+              ▼                       ▼
+       ┌─────────────┐         ┌──────────────┐
+       │ TerminalJni │         │  AIAgent     │
+       │ (Kotlin)    │         │  (SSE Flow)  │
+       └──────┬──────┘         └──────┬───────┘
+              │                       │
+              ▼                       ▼
+       ┌─────────────┐         ┌──────────────────┐
+       │ native-lib  │         │ MarkerExecutor   │
+       │ .cpp (NDK)  │         │ (cmd + exit code)│
+       │ forkpty()   │         └──────────────────┘
+       │ execve()    │
+       └─────────────┘
+```
 
 ## Phase History
 
@@ -112,6 +206,22 @@ Membutuhkan: Android Studio Hedgehog+, Android SDK 34, NDK 25.1.8937393+, CMake 
 | 24-26 | Stability fixes — pinch-zoom, block input, fontSize persist |
 | 27-30 | Comprehensive audit — 38 bugs fixed (security, functional, medium, low) |
 | 31 | Crash-on-launch fix — 7 root causes (SharedPreferences, foreground service, JNI) |
+| 32-34 | Input double-fire fix, soft keyboard Enter, text selection, paste, SSH TOFU real fingerprint check |
+| 35-36 | Credit + crypto address, marker-based command execution foundation |
+| 37 | Marker-based AI tool calling — `run_command` dibungkus marker, exit code di-capture, hasil dikirim balik ke AI sebagai context; @command: real implementation |
+| **38-39** | **Linux Environment (Ubuntu via proot) — `createSessionExec()` JNI, `ProotBootstrap` download+extract rootfs, `ProotShellExecutor`, install dialog, SECCOMP auto-retry, uninstall** |
+
+## Credits
+
+**Developer:** NanoMind (https://github.com/NanoMindExplorer)
+
+### Support
+
+Jika fitur ini bermanfaat, dukung pengembangan lanjutan:
+
+- 💰 Crypto: lihat di Settings → About
+- ⭐ Star repo: https://github.com/NanoMindExplorer/tunnel-terminal
+- 🐛 Bug report: buka issue dengan label sesuai phase terkait
 
 ## License
 
