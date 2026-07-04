@@ -11,7 +11,7 @@ import androidx.security.crypto.MasterKey
  *
  * Phase 41 fix (CRIT-01): API key & kredensial SSH sebelumnya disimpan plaintext
  * di SharedPreferences biasa. Siapapun dengan akses root/adb backup bisa baca
- * langsung dari shared_prefs/*.xml. allowBackup=false hanya mencegah eksfiltrasi
+ * langsung dari folder shared_prefs (file XML). allowBackup=false hanya mencegah eksfiltrasi
  * lewat backup resmi Android, bukan lewat root/malware/forensik device hilang.
  *
  * FIX: Pakai EncryptedSharedPreferences (AES256-GCM) untuk semua data sensitif:

@@ -3,6 +3,7 @@ package com.tunnel.terminal
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -210,7 +211,7 @@ fun BlockTerminalView(
             .padding(8.dp)
             /* Phase 44 fix (MED-02): Tambah pinch-to-zoom gesture detector. */
             .pointerInput(Unit) {
-                androidx.compose.foundation.gestures.detectTransformGestures { _, _, zoom, _ ->
+                detectTransformGestures { _, _, zoom, _ ->
                     val newFont = (fontSizeState * zoom).coerceIn(8f, 24f)
                     if (newFont != fontSizeState) {
                         onFontSizeChange(newFont)

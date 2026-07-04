@@ -202,7 +202,7 @@ class SshShellExecutor(
                          * Kalau callback tidak disediakan (backward compat), fallback ke
                          * behavior lama (throw exception). */
                         if (hostKeyChangeCallback != null) {
-                            val userApproved = hostKeyChangeCallback(knownFingerprint, actualFingerprint)
+                            val userApproved = hostKeyChangeCallback!!.invoke(knownFingerprint, actualFingerprint)
                             if (!userApproved) {
                                 session?.disconnect()
                                 throw SecurityException(

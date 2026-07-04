@@ -695,7 +695,7 @@ class MainActivity : ComponentActivity() {
                  * Karena callback ini dipanggil dari suspend context (start()), kita bisa
                  * suspend di sini sampai user tap tombol di dialog. */
                 kotlinx.coroutines.runBlocking {
-                    kotlinx.coroutines.suspendCancellableCoroutine { cont ->
+                    kotlinx.coroutines.suspendCancellableCoroutine<Boolean> { cont ->
                         _sshHostKeyDialogState.value = SshHostKeyDialogState(
                             host = "${config.host}:${config.port}",
                             oldFingerprint = oldKey,
