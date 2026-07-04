@@ -4,6 +4,19 @@
 -keep class com.jcraft.jsch.** { *; }
 -dontwarn com.jcraft.jsch.**
 
+# Phase 41 fix (CRIT-01): EncryptedSharedPreferences (security-crypto) depends on
+# Google Tink library, which references annotation classes from errorprone and
+# javax.annotation that are not bundled in the APK. These are compile-time-only
+# annotations — safe to suppress at runtime.
+-dontwarn com.google.errorprone.annotations.**
+-dontwarn javax.annotation.**
+-dontwarn javax.annotation.concurrent.**
+-dontwarn org.checkerframework.**
+
+# Keep Tink classes (used internally by EncryptedSharedPreferences)
+-keep class com.google.crypto.tink.** { *; }
+-keep class androidx.security.crypto.** { *; }
+
 # Compose (usually handled by compose compiler, but be safe)
 -keep class androidx.compose.** { *; }
 
