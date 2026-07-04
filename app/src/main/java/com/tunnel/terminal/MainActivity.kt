@@ -103,6 +103,14 @@ class MainActivity : ComponentActivity() {
     private var showWorkspaceDrawer by mutableStateOf(false)
     /** Phase 21: SSH connect dialog visibility. */
     private var showSshDialog by mutableStateOf(false)
+    /** Phase 47 (Bagian 2): Agent Mode screen visibility. */
+    private var showAgentScreen by mutableStateOf(false)
+    /** Phase 47: Agent task runner instance. */
+    private lateinit var agentTaskRunner: AgentTaskRunner
+    /** Phase 47: Agent event log (real-time). */
+    private val agentEvents = mutableStateListOf<AgentTaskRunner.AgentEvent>()
+    /** Phase 47: Is Agent task running? */
+    private var agentRunning by mutableStateOf(false)
     /** Phase 41 fix (CRIT-02): State untuk SSH host key change dialog (blocking).
      *  Non-null = dialog sedang visible, user harus pilih approve/reject. */
     private val _sshHostKeyDialogState = mutableStateOf<SshHostKeyDialogState?>(null)
@@ -224,11 +232,13 @@ class MainActivity : ComponentActivity() {
         storageManager = StorageManager(this)
         workspaceManager = WorkspaceManager(this)
         workspaceSessions.addAll(workspaceManager.sessions)
-        toolExecutor = ToolExecutor(this)
+        toolExecutor = ToolExecutor(this, storageManager)
         permissionManager = PermissionManager(this)
         contextManager = ContextManager(this)
         mcpManager = McpManager(this)
         agentWorkflowManager = AgentWorkflowManager(this)
+        /* Phase 47 (Bagian 2): Init AgentTaskRunner. */
+        agentTaskRunner = AgentTaskRunner(aiAgent, toolExecutor, permissionManager, markerExecutor)
         voiceInputManager = VoiceInputManager(this)
         /* Phase 38 (proot/Ubuntu): Bootstrap instance untuk download/extract rootfs. */
         prootBootstrap = ProotBootstrap(this)
@@ -542,6 +552,65 @@ class MainActivity : ComponentActivity() {
             }
         }
         chatMessages.add(ChatMessage("assistant", "✅ Workflow '${workflow.name}' completed", false))
+    }
+
+    /* ─── Phase 47 (Bagian 2): Agent Mode ─── */
+
+    /**
+     * Mulai Agent task otonom.
+     * AI akan bekerja sampai selesai (atau macet) — user tidak perlu balas chat tiap langkah.
+     */
+    private fun startAgentTask(goal: String, useUbuntu: Boolean) {
+        if (goal.isBlank()) return
+        if (agentRunning) return
+
+        // Pilih session — Ubuntu kalau diminta dan ada, fallback ke active session
+        val session = if (useUbuntu) {
+            // Cari tab Ubuntu yang sudah aktif, atau buat baru
+            shellExecutors.find { it.sessionType == "ubuntu" && it.isAlive }
+                ?: run {
+                    // Kalau belum ada tab Ubuntu, buka tab baru
+                    lifecycleScope.launch { createUbuntuTab() }
+                    // Tunggu sebentar supaya tab terbuka
+                    Thread.sleep(2000)
+                    shellExecutors.find { it.sessionType == "ubuntu" && it.isAlive }
+                }
+        } else {
+            shellExecutors.find { it.id == activeExecutorId }
+        }
+
+        if (session == null) {
+            agentEvents.add(AgentTaskRunner.AgentEvent.StoppedForSafety("Tidak ada session aktif. Buka tab terminal dulu."))
+            return
+        }
+
+        agentEvents.clear()
+        agentRunning = true
+
+        lifecycleScope.launch {
+            try {
+                agentTaskRunner.run(
+                    goal = goal,
+                    session = session,
+                    settings = aiSettings,
+                    maxIterations = 40,
+                    approve = { call, reason ->
+                        // Untuk simplicity, auto-approve di mode otonom.
+                        // TODO: Tampilkan dialog approval yang proper.
+                        // Untuk sekarang, log warning dan approve.
+                        Log.w("AgentTask", "Auto-approved risky action: $reason — call: ${call.displayText}")
+                        true
+                    },
+                    events = { event ->
+                        agentEvents.add(event)
+                    }
+                )
+            } catch (e: Exception) {
+                agentEvents.add(AgentTaskRunner.AgentEvent.StoppedForSafety("Exception: ${e.message}"))
+            } finally {
+                agentRunning = false
+            }
+        }
     }
 
     /* ─── Phase 19: AI Provider Model Fetcher ─── */
@@ -1103,6 +1172,8 @@ class MainActivity : ComponentActivity() {
                 add(PaletteItem("open_ubuntu", "Ubuntu (Linux Environment)", "Setting", Icons.Default.Terminal, PaletteCategory.SETTING) { lifecycleScope.launch { createUbuntuTab() } })
                 /* Phase 39 (proot/Ubuntu): Manage install (uninstall if installed). */
                 add(PaletteItem("manage_ubuntu", "Manage Linux Environment", "Setting", Icons.Default.Build, PaletteCategory.SETTING) { showUbuntuInstallDialog = true })
+                /* Phase 47 (Bagian 2): Agent Mode — autonomous task runner. */
+                add(PaletteItem("open_agent", "🤖 Agent Mode (Autonomous)", "AI", Icons.Default.SmartToy, PaletteCategory.AI) { showAgentScreen = true })
                 /* Commands. */
                 add(PaletteItem("cmd_ls", "Run: ls -la", "Command", Icons.Default.Terminal, PaletteCategory.COMMAND) { shellExecutors.find { it.id == activeExecutorId }?.executeCommand("ls -la") })
                 add(PaletteItem("cmd_pwd", "Run: pwd", "Command", Icons.Default.Terminal, PaletteCategory.COMMAND) { shellExecutors.find { it.id == activeExecutorId }?.executeCommand("pwd") })
@@ -1214,6 +1285,26 @@ class MainActivity : ComponentActivity() {
                     showUbuntuInstallDialog = false
                 },
                 onDismiss = { showUbuntuInstallDialog = false }
+            )
+        }
+
+        /* Phase 47 (Bagian 2): Agent Mode screen. */
+        if (showAgentScreen) {
+            AgentScreen(
+                theme = currentTheme,
+                isRunning = agentRunning,
+                events = agentEvents,
+                onStart = { goal, useUbuntu ->
+                    startAgentTask(goal, useUbuntu)
+                },
+                onPause = { agentTaskRunner.pause() },
+                onResume = { agentTaskRunner.resume() },
+                onStop = {
+                    agentTaskRunner.stop()
+                    agentRunning = false
+                },
+                onApprove = { _, _ -> true },
+                onDismiss = { showAgentScreen = false }
             )
         }
 

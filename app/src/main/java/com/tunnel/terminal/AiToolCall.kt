@@ -105,14 +105,16 @@ data class AiToolCall(
             return calls
         }
 
-        /** System prompt yang menjelaskan tools tersedia untuk AI. */
+        /** System prompt yang menjelaskan tools tersedia untuk AI.
+         *  Phase 47 (Bagian 1 Fix 2): Hapus contoh path menyesatkan (/sdcard/...),
+         *  tambah instruksi workspace yang jelas. */
         val SYSTEM_PROMPT_TOOLS = """
             Anda memiliki akses ke tools berikut untuk menyelesaikan tugas user:
 
             TOOLS READ-ONLY (tidak butuh permission):
             - read_file: Baca file. Args: path
-            - list_files: List direktori. Args: dir
-            - search_files: Cari file berisi pattern. Args: pattern, dir (optional)
+            - list_files: List direktori. Args: dir (opsional, default = workspace)
+            - search_files: Cari file berisi pattern. Args: pattern, dir (opsional)
             - get_terminal_output: Ambil output terminal terakhir. Args: (none)
 
             TOOLS DESTRUCTIVE (butuh permission user):
@@ -120,20 +122,30 @@ data class AiToolCall(
             - delete_file: Hapus file. Args: path
             - run_command: Jalankan command di terminal. Args: cmd
 
+            ## DIREKTORI KERJA (PENTING)
+
+            Semua path yang kamu tulis TANPA awalan "/" otomatis berada di workspace
+            project privat (selalu bisa ditulis, tidak perlu izin apa pun). Gunakan
+            ini sebagai DEFAULT, contoh: {"path":"main.py"} atau {"path":"src/utils.py"}.
+
+            Kalau user secara eksplisit minta simpan ke folder pribadi mereka (Download,
+            Documents, dst) — user harus sudah menjalankan "setup-storage" satu kali.
+            Baru gunakan path absolut seperti "/storage/emulated/0/Download/x.txt".
+            JANGAN pakai path absolut untuk file kerja biasa — selalu default ke path
+            relatif workspace.
+
+            Contoh workflow:
+            1. User: "Buat file hello.py yang print Hello World"
+            2. AI: <tool_call>{"tool":"write_file","args":{"path":"hello.py","content":"print('Hello World')"}}</tool_call>
+            3. System: OK: wrote 22 chars to /data/data/com.tunnel.terminal/files/workspace/hello.py
+            4. AI: "File hello.py sudah dibuat di workspace kamu."
+
             Untuk memanggil tool, sertakan dalam response:
-            <tool_call>{"tool":"read_file","args":{"path":"/sdcard/test.txt"},"reasoning":"Saya perlu baca file ini untuk memahami konteks"}</tool_call>
+            <tool_call>{"tool":"read_file","args":{"path":"main.py"}}</tool_call>
 
             Anda bisa memanggil MULTIPLE tools dalam satu response. Setelah tool call,
             sistem akan eksekusi (dengan permission user jika destructive) dan berikan
             hasilnya di message berikutnya. Anda bisa lanjutkan analisa berdasarkan hasil.
-
-            Contoh workflow:
-            1. User: "Fix bug di app.kt"
-            2. AI: <tool_call>{"tool":"read_file","args":{"path":"app.kt"}}</tool_call>
-            3. System: (file content)
-            4. AI: <tool_call>{"tool":"write_file","args":{"path":"app.kt","content":"...fixed..."}}</tool_call>
-            5. User grants permission → file written
-            6. AI: "Saya sudah fix bugnya. Perubahan: ..."
         """.trimIndent()
     }
 }
@@ -142,9 +154,69 @@ data class AiToolCall(
  * ToolExecutor - Eksekusi AiToolCall.
  *
  * Phase 22: Execute AI tool calls dengan permission flow.
+ *
+ * Phase 47 (Bagian 1 Fix 1): Path resolution terpusat dengan workspace sandbox.
+ *
+ * OLD BUG: write_file/read_file/list_files/search_files semua pakai java.io.File
+ * mentah. System prompt AI tidak pernah kasih tahu direktori kerja yang pasti —
+ * jadi AI menebak path setiap kali, kadang berhasil (kebetulan path-nya valid),
+ * kadang gagal diam-diam (file "hilang" karena ditulis ke cwd proses Android yang
+ * defaultnya "/", read-only).
+ *
+ * FIX: Semua path dari AI di-resolve lewat resolvePath() SEBELUM dipakai.
+ * - Path relatif (tidak diawali "/") → otomatis masuk workspace privat app
+ *   (filesDir/workspace/...). Selalu bisa ditulis, tanpa permission apa pun.
+ * - Path absolut yang berada di dalam tree SAF yang sudah di-grant → diizinkan
+ *   (user sudah eksplisit beri akses via setup-storage).
+ * - Selain dua itu → ditolak dengan pesan jelas, bukan gagal diam-diam.
  */
-class ToolExecutor(private val context: Context) {
+class ToolExecutor(
+    private val context: Context,
+    /* Phase 47 (Bagian 1 Fix 1): StorageManager untuk cek granted SAF tree. */
+    private val storageManager: StorageManager? = null
+) {
     private val tag = "ToolExecutor"
+
+    /**
+     * Workspace root — direktori kerja privat app yang selalu bisa ditulis.
+     * Semua path relatif dari AI otomatis masuk sini.
+     */
+    val workspaceRoot: File by lazy {
+        File(context.filesDir, "workspace").apply { mkdirs() }
+    }
+
+    /**
+     * Phase 47 (Bagian 1 Fix 1): Resolve path AI ke File asli, dengan sandbox.
+     *
+     * - Path relatif (tidak diawali "/") → workspaceRoot/path (selalu diizinkan)
+     * - Path absolut di dalam workspaceRoot → diizinkan
+     * - Path absolut di dalam tree SAF yang sudah di-grant → diizinkan
+     * - Selain itu → SecurityException dengan pesan jelas
+     */
+    private fun resolvePath(rawPath: String): File {
+        val candidate = if (rawPath.startsWith("/")) File(rawPath) else File(workspaceRoot, rawPath)
+        val canonical = try { candidate.canonicalFile } catch (e: Exception) { candidate }
+
+        val workspacePath = workspaceRoot.canonicalPath
+        val insideWorkspace = try {
+            canonical.canonicalPath.startsWith(workspacePath)
+        } catch (e: Exception) { false }
+
+        val insideGrantedStorage = storageManager?.isPathWithinGrantedTree(canonical) ?: false
+
+        if (!insideWorkspace && !insideGrantedStorage) {
+            throw SecurityException(
+                "Path '$rawPath' di luar workspace project dan di luar folder yang " +
+                "sudah diizinkan lewat setup-storage. Gunakan path relatif (otomatis " +
+                "masuk workspace: ${workspaceRoot.absolutePath}), atau minta user " +
+                "jalankan setup-storage dulu kalau memang perlu akses ke folder lain."
+            )
+        }
+        return canonical
+    }
+
+    /** Phase 47 (Fix 1): Expose workspaceRoot untuk AgentTaskRunner. */
+    fun getWorkspaceRoot(): File = workspaceRoot
 
     /**
      * Eksekusi tool call. Returns result string.
@@ -157,25 +229,28 @@ class ToolExecutor(private val context: Context) {
             when (call.tool) {
                 "read_file" -> {
                     val path = call.args["path"] ?: return "Error: path required"
-                    val file = File(path)
-                    if (!file.exists()) return "Error: file not found: $path"
-                    if (!file.canRead()) return "Error: cannot read file (permission denied): $path"
+                    /* Phase 47 (Fix 1): Pakai resolvePath() — sandbox ke workspace. */
+                    val file = resolvePath(path)
+                    if (!file.exists()) return "Error: file not found: ${file.absolutePath}"
+                    if (!file.canRead()) return "Error: cannot read file (permission denied): ${file.absolutePath}"
                     file.readText().take(5000)
                 }
                 "list_files" -> {
-                    val dir = call.args["dir"] ?: context.filesDir.absolutePath
-                    val file = File(dir)
-                    if (!file.exists() || !file.isDirectory) return "Error: not a directory: $dir"
+                    /* Phase 47 (Fix 1): Default ke workspaceRoot ("."), bukan filesDir. */
+                    val dirRaw = call.args["dir"] ?: "."
+                    val file = if (dirRaw == ".") workspaceRoot else resolvePath(dirRaw)
+                    if (!file.exists() || !file.isDirectory) return "Error: not a directory: ${file.absolutePath}"
                     file.listFiles()?.joinToString("\n") { f ->
                         "${if (f.isDirectory) "d" else "-"} ${f.name}"
                     } ?: "Error: cannot list directory"
                 }
                 "search_files" -> {
                     val pattern = call.args["pattern"] ?: return "Error: pattern required"
-                    val dir = call.args["dir"] ?: context.filesDir.absolutePath
+                    val dirRaw = call.args["dir"] ?: "."
+                    val file = if (dirRaw == ".") workspaceRoot else resolvePath(dirRaw)
                     val regex = Regex(pattern, RegexOption.IGNORE_CASE)
                     val results = mutableListOf<String>()
-                    File(dir).walkTopDown().take(100).forEach { f ->
+                    file.walkTopDown().take(100).forEach { f ->
                         if (f.isFile && regex.containsMatchIn(f.name)) {
                             results.add(f.absolutePath)
                         }
@@ -190,18 +265,20 @@ class ToolExecutor(private val context: Context) {
                 "write_file" -> {
                     val path = call.args["path"] ?: return "Error: path required"
                     val content = call.args["content"] ?: return "Error: content required"
-                    val file = File(path)
+                    /* Phase 47 (Fix 1): Pakai resolvePath() — sandbox ke workspace. */
+                    val file = resolvePath(path)
                     file.parentFile?.mkdirs()
                     file.writeText(content)
-                    "OK: wrote ${content.length} chars to $path"
+                    "OK: wrote ${content.length} chars to ${file.absolutePath}"
                 }
                 "delete_file" -> {
                     val path = call.args["path"] ?: return "Error: path required"
-                    val file = File(path)
-                    if (!file.exists()) return "Error: file not found: $path"
+                    /* Phase 47 (Fix 1): Pakai resolvePath() — sandbox ke workspace. */
+                    val file = resolvePath(path)
+                    if (!file.exists()) return "Error: file not found: ${file.absolutePath}"
                     /* BUG-37 fix: Cek return value dari delete(). */
-                    if (file.delete()) "OK: deleted $path"
-                    else "Error: failed to delete $path (mungkin direktori tidak kosong atau read-only)"
+                    if (file.delete()) "OK: deleted ${file.absolutePath}"
+                    else "Error: failed to delete ${file.absolutePath} (mungkin direktori tidak kosong atau read-only)"
                 }
                 "run_command" -> {
                     /* Command akan di-execute oleh caller via ShellExecutor. */
@@ -209,6 +286,9 @@ class ToolExecutor(private val context: Context) {
                 }
                 else -> "Error: unknown tool: ${call.tool}"
             }
+        } catch (e: SecurityException) {
+            Log.w(tag, "SecurityException in tool execution: ${e.message}")
+            "Error: ${e.message}"
         } catch (e: Exception) {
             Log.e(tag, "Tool execution failed: ${e.message}")
             "Error: ${e.message}"

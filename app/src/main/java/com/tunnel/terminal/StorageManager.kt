@@ -169,6 +169,76 @@ class StorageManager(private val context: Context) {
     }
 
     /**
+     * Phase 47 (Bagian 1 Fix 3): Ambil path root yang sudah di-grant via SAF.
+     *
+     * SAF tree URI format: `content://com.android.externalstorage.documents/tree/primary%3A`
+     * atau `content://com.android.externalstorage.documents/tree/primary%3ADocuments`
+     *
+     * Kita map URI ini ke path filesystem real (mis. `/storage/emulated/0` atau
+     * `/storage/emulated/0/Documents`). Ini dipakai oleh ToolExecutor.resolvePath()
+     * untuk cek apakah path AI berada di dalam tree SAF yang sudah di-grant.
+     *
+     * Returns: path filesystem root yang di-grant, atau null kalau belum setup.
+     */
+    fun getGrantedRootPath(): String? {
+        if (!isSetupDone()) return null
+        val uri = getTreeUri() ?: return null
+        val uriStr = uri.toString()
+        // Decode tree URI → path. Format umum:
+        //   content://com.android.externalstorage.documents/tree/primary%3A
+        //   content://com.android.externalstorage.documents/tree/primary%3ADocuments
+        return try {
+            val treePart = uriStr.substringAfter("tree/", "")
+            val decoded = java.net.URLDecoder.decode(treePart, "UTF-8")
+            // "primary:" → /storage/emulated/0
+            // "primary:Documents" → /storage/emulated/0/Documents
+            when {
+                decoded.startsWith("primary:") -> {
+                    val subPath = decoded.removePrefix("primary:")
+                    if (subPath.isEmpty()) "/storage/emulated/0"
+                    else "/storage/emulated/0/$subPath"
+                }
+                decoded.startsWith("/") -> decoded
+                else -> {
+                    // Unknown format — fallback ke /storage/emulated/0
+                    Log.w(TAG, "Unknown SAF tree format: $decoded, fallback ke /storage/emulated/0")
+                    "/storage/emulated/0"
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Gagal parse granted root path: ${e.message}")
+            null
+        }
+    }
+
+    /**
+     * Phase 47 (Bagian 1 Fix 3): Cek apakah path tertentu berada di dalam tree SAF.
+     *
+     * Dipakai oleh ToolExecutor.resolvePath() untuk sandbox check — path absolut
+     * yang berada di dalam tree SAF yang sudah di-grant diizinkan (user sudah
+     * eksplisit beri akses via setup-storage).
+     *
+     * CATATAN: menulis lewat java.io.File ke path yang PATH-nya berada di dalam
+     * tree SAF belum tentu benar-benar berhasil hanya karena URI permission sudah
+     * di-grant — SAF grant berlaku di level ContentResolver/DocumentFile, bukan
+     * otomatis membuka akses File API mentah. Untuk write/read yang reliable di
+     * tree SAF, perlu pakai DocumentFile API. Tapi untuk sandbox check di sini,
+     * kita hanya cek path prefix — actual read/write tetap lewat File API dengan
+     * best-effort (di Android <11 ini biasanya work, di 11+ mungkin perlu fallback).
+     */
+    fun isPathWithinGrantedTree(file: java.io.File): Boolean {
+        val grantedRoot = getGrantedRootPath() ?: return false
+        return try {
+            val canonicalPath = file.canonicalPath
+            val canonicalRoot = java.io.File(grantedRoot).canonicalPath
+            canonicalPath.startsWith(canonicalRoot)
+        } catch (e: Exception) {
+            Log.w(TAG, "Gagal cek isPathWithinGrantedTree: ${e.message}")
+            false
+        }
+    }
+
+    /**
      * Hapus setup storage (untuk reset).
      * Clear storage setup (for reset).
      */
