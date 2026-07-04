@@ -16,7 +16,7 @@
 
 ## Mengapa Tunnel Terminal?
 
-Terminal Android konvensional (Termux, dll) hanya menampilkan teks dan mengeksekusi command. Tunnel Terminal membawa pengalaman **Warp + Claude Code + Cursor + Termux proot-distro** ke Android dalam satu app:
+Terminal Android konvensional hanya menampilkan teks dan mengeksekusi command. Tunnel Terminal membawa pengalaman **Warp + Claude Code + Cursor + Termux proot-distro** ke Android dalam satu app:
 
 - **Block-based UI** — setiap command + output = card diskret (seperti Warp)
 - **AI Agent** — AI bisa baca/tulis file, jalankan command, dengan permission prompts
