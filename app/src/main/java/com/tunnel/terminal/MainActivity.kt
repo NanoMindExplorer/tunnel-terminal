@@ -1285,8 +1285,16 @@ class MainActivity : ComponentActivity() {
                         resolveAndOpen(fileName, activeExecutor)
                     }
                     else -> {
-                        /* Forward ke shell. */
-                        activeExecutor.writeRaw(input)
+                        /* Phase 40 fix (A1): Jangan kirim full command lagi — karakter
+                         * sudah dikirim char-by-char via onValueChange (soft keyboard
+                         * commitText) atau handleKeyEvent (physical keyboard).
+                         * Kirim hanya newline untuk trigger execution.
+                         *
+                         * OLD BUG: writeRaw(input) mengirim "ls\n" ke shell, padahal
+                         * 'l' dan 's' sudah dikirim sebelumnya → shell terima "lsls\n".
+                         * FIX: writeRaw("\n") hanya kirim Enter → shell eksekusi baris
+                         * yang sudah ter-build di line buffer-nya. */
+                        activeExecutor.writeRaw("\n")
                     }
                 }
             }
@@ -1638,6 +1646,10 @@ class MainActivity : ComponentActivity() {
 
                         /* Auto-focus saat tab aktif berubah, agar input langsung ready. */
                         LaunchedEffect(activeExecutorId) {
+                            /* Phase 40 fix (H7): Reset enterHandledByKeyEvent saat pindah tab.
+                             * OLD BUG: flag tidak di-reset → Enter di tab B tidak jalan setelah
+                             * physical keyboard Enter di tab A (flag masih true dari tab A). */
+                            enterHandledByKeyEvent = false
                             try {
                                 focusRequester.requestFocus()
                                 if (!hasPhysicalKeyboard) keyboardController?.show()
@@ -1908,11 +1920,16 @@ class MainActivity : ComponentActivity() {
         isProcessingAI = true
 
         /* Tambah user message ke history (untuk display + multi-turn memory).
-         * Phase 19: Attach pending images jika ada. */
+         * Phase 19: Attach pending images jika ada.
+         * Phase 40 fix (H8): Strip @mentions dari user message sebelum kirim ke AI.
+         * OLD BUG: User ketik "@file:foo.txt jelaskan ini" → AI terima pesan dengan
+         * "@file:foo.txt" yang bukan syntax yang AI kenal → AI bingung.
+         * FIX: Hapus mentions dari prompt, kirim content mention sebagai context terpisah. */
         val imagesToSend = pendingImages.toList()
+        val cleanPrompt = contextManager.stripMentions(prompt)
         val userMsg = ChatMessage(
             role = "user",
-            content = if (prompt.isBlank() && imagesToSend.isNotEmpty()) "Tolong analisa gambar ini." else prompt,
+            content = if (cleanPrompt.isBlank() && imagesToSend.isNotEmpty()) "Tolong analisa gambar ini." else cleanPrompt,
             conversationRole = "user",
             images = imagesToSend
         )
@@ -1965,7 +1982,7 @@ class MainActivity : ComponentActivity() {
         try {
             /* Koleksi token-by-token dari streaming Flow. */
             /* Phase 23: Pass fullContext (dengan @mentions resolved) ke AI. */
-            aiAgent.askAIStreaming(aiSettings, chatMessages.toList(), fullContext).collect { delta ->
+            aiAgent.askAIStreaming(aiSettings, chatMessages.toList(), fullContext, activeExecutor?.sessionType ?: "local").collect { delta ->
                 if (abortedWithError != null) return@collect  /* skip further chunks */
                 if (firstChunk) {
                     firstChunk = false

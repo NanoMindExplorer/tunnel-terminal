@@ -3,8 +3,8 @@ package com.tunnel.terminal
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectDragGestures
-import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
@@ -20,7 +20,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.key.*
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
@@ -283,47 +285,78 @@ fun TerminalScreenView(
                     onResize(newRows, newCols, fontSize)
                 }
             }
-            /* Phase 35 (A3): Tap-to-focus + long-press untuk text selection.
-             * detectTapGestures handle onTap (focus) dan onLongPress (start selection). */
+            /* Phase 40 fix (A3): Unified gesture handler — tap + long-press + drag
+             * dalam SATU pointerInput block. Old code pakai 3 pointerInput terpisah
+             * (detectTapGestures + detectDragGestures + detectTransformGestures) yang
+             * saling block gesture detection → long-press tidak start selection, drag
+             * tidak extend selection.
+             *
+             * FIX: awaitEachGesture handle seluruh gesture lifecycle dalam satu detector:
+             * 1. awaitFirstDown → catat posisi + waktu
+             * 2. Loop awaitPointerEvent → cek duration (long-press) + distance (drag)
+             * 3. Up event → jika selecting, copy ke clipboard; jika tap, focus
+             *
+             * Pinch-zoom tetap di pointerInput terpisah (detectTransformGestures)
+             * karena pinch butuh 2 pointer — tidak conflict dengan single-pointer gestures. */
             .pointerInput(Unit) {
-                detectTapGestures(
-                    onTap = { _ -> onTap() },
-                    onLongPress = { offset ->
-                        /* Start selection dari posisi long-press. */
-                        val col = (offset.x / (fontSize * 0.6f * density.density)).toInt().coerceIn(0, renderCols - 1)
-                        val row = (offset.y / (fontSize * 1.2f * density.density)).toInt().coerceIn(0, renderRows - 1)
-                        selectionStart = Pair(row, col)
-                        selectionEnd = Pair(row, col)
-                        isSelecting = true
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = true)
+                    val downTime = System.currentTimeMillis()
+                    val downPos = down.position
+                    var isLongPress = false
+                    var selectionStarted = false
+                    val touchSlop = with(density) { 8.dp.toPx() }
+                    val longPressTimeout = 500L
+
+                    /* Helper: convert pixel position → (row, col) */
+                    fun posToCell(pos: androidx.compose.ui.geometry.Offset): Pair<Int, Int> {
+                        val col = (pos.x / (fontSize * 0.6f * density.density)).toInt().coerceIn(0, renderCols - 1)
+                        val row = (pos.y / (fontSize * 1.2f * density.density)).toInt().coerceIn(0, renderRows - 1)
+                        return Pair(row, col)
                     }
-                )
-            }
-            /* Phase 35 (A3): Drag untuk extend selection. */
-            .pointerInput(isSelecting) {
-                if (isSelecting) {
-                    detectDragGestures(
-                        onDragStart = { offset ->
-                            /* Selection already started by long-press. */
-                        },
-                        onDragEnd = {
-                            /* Selection complete — copy to clipboard. */
-                            val text = getSelectedText(screenSnapshot, selectionStart, selectionEnd, renderCols)
-                            if (text.isNotEmpty()) {
-                                clipboardManager.setText(AnnotatedString(text))
+
+                    while (true) {
+                        val event = awaitPointerEvent(PointerEventPass.Main)
+                        val change = event.changes.firstOrNull() ?: break
+
+                        val duration = System.currentTimeMillis() - downTime
+                        val distance = (change.position - downPos).getDistance()
+
+                        when {
+                            /* Finger lifted → gesture selesai */
+                            !change.pressed -> {
+                                if (selectionStarted) {
+                                    /* Selection complete → copy to clipboard */
+                                    val text = getSelectedText(screenSnapshot, selectionStart, selectionEnd, renderCols)
+                                    if (text.isNotEmpty()) {
+                                        clipboardManager.setText(AnnotatedString(text))
+                                    }
+                                    isSelecting = false
+                                } else if (!isLongPress && distance < touchSlop) {
+                                    /* Tap → focus keyboard */
+                                    onTap()
+                                }
+                                change.consume()
+                                break
                             }
-                            isSelecting = false
-                        },
-                        onDragCancel = {
-                            isSelecting = false
-                        },
-                        onDrag = { change, _ ->
-                            change.consume()
-                            val pos = change.position
-                            val col = (pos.x / (fontSize * 0.6f * density.density)).toInt().coerceIn(0, renderCols - 1)
-                            val row = (pos.y / (fontSize * 1.2f * density.density)).toInt().coerceIn(0, renderRows - 1)
-                            selectionEnd = Pair(row, col)
+                            /* Long-press detected → start selection */
+                            !selectionStarted && !isLongPress && duration > longPressTimeout && distance < touchSlop -> {
+                                isLongPress = true
+                                selectionStarted = true
+                                isSelecting = true
+                                val (row, col) = posToCell(downPos)
+                                selectionStart = Pair(row, col)
+                                selectionEnd = Pair(row, col)
+                                change.consume()
+                            }
+                            /* Drag while selecting → extend selection */
+                            selectionStarted && distance > touchSlop -> {
+                                val (row, col) = posToCell(change.position)
+                                selectionEnd = Pair(row, col)
+                                change.consume()
+                            }
                         }
-                    )
+                    }
                 }
             }
             /* Phase 24: Pinch-to-zoom — pakai external state via onFontSizeChange.

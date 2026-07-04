@@ -129,6 +129,25 @@ class ProotShellExecutor(
             val prootPath = bootstrap.prootBin.absolutePath
             val libPath = bootstrap.libDir.absolutePath
 
+            /* Phase 40 fix (M13): Validate proot binary exists + executable SEBELUM
+             * panggil createSessionExec. Kalau tidak, child process akan exit(1)
+             * dengan error message yang tidak jelas ("Process Exited").
+             * OLD BUG: Tidak ada pre-check → user bingung kenapa install sukses
+             * tapi start gagal. */
+            if (!java.io.File(prootPath).exists()) {
+                isAlive = false
+                emulator.process("\u001B[31m[ERROR] proot binary tidak ditemukan: $prootPath\u001B[0m\n")
+                triggerScreenUpdate()
+                return@withContext
+            }
+            if (!java.io.File(prootPath).canExecute()) {
+                isAlive = false
+                emulator.process("\u001B[31m[ERROR] proot binary tidak executable: $prootPath\u001B[0m\n")
+                emulator.process("\u001B[33mDevice ini mungkin memblokir eksekusi binary dari app storage (W^X policy).\u001B[0m\n")
+                triggerScreenUpdate()
+                return@withContext
+            }
+
             // Build argv untuk proot.
             val argv = mutableListOf(
                 prootPath,
@@ -187,9 +206,12 @@ class ProotShellExecutor(
                 start()
             }
 
+            // Phase 40 fix (H10): Hapus writeRaw("clear\n") — clear screen akan
+            // menghapus MOTD yang sudah di-process ke emulator oleh createUbuntuTab().
+            // OLD BUG: clear dikirim ke shell → shell kirim ESC[2J ke emulator →
+            // MOTD yang sudah dirender terhapus. Race condition antara clear dan MOTD.
             Thread.sleep(200)
             writeRaw("export PS1='\\u@\\h:\\w\\$ '\n")
-            writeRaw("clear\n")
             TerminalJni.resize(masterFd, 24, 80)
         }
     }

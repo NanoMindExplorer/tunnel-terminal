@@ -69,7 +69,8 @@ class AIAgent {
     fun askAIStreaming(
         settings: AISettings,
         conversation: List<ChatMessage>,
-        terminalContext: String
+        terminalContext: String,
+        sessionType: String = "local"
     ): Flow<String> = callbackFlow {
         if (!isConfigured(settings)) {
             trySend(configErrorMessage(settings))
@@ -80,7 +81,7 @@ class AIAgent {
         var connection: HttpURLConnection? = null
         try {
             connection = openConnection(settings, streaming = true)
-            val requestBody = buildRequestBody(settings, conversation, terminalContext, streaming = true)
+            val requestBody = buildRequestBody(settings, conversation, terminalContext, streaming = true, sessionType = sessionType)
             writeRequest(connection, requestBody)
 
             val responseCode = connection.responseCode
@@ -185,15 +186,39 @@ class AIAgent {
         settings: AISettings,
         conversation: List<ChatMessage>,
         terminalContext: String,
-        streaming: Boolean
+        streaming: Boolean,
+        sessionType: String = "local"
     ): String {
+        /* Phase 40 fix (H2+H3): System prompt yang session-aware.
+         * OLD BUGS:
+         *  H2: Typo "Anda adalah .Tunnel Auto-Pilot." (harusnya 'Tunnel Auto-Pilot')
+         *      + nested parens yang rancu + version outdated (v4.8 → v6.1.0)
+         *  H3: System prompt bilang "Tidak ada apt" tapi user di tab Ubuntu BISA apt.
+         *      AI tidak tahu tab mana yang aktif → salah informasi.
+         * FIX: Build shellInfo section berdasarkan sessionType (local/ssh/ubuntu). */
+        val shellInfo = when (sessionType) {
+            "ubuntu" -> """
+                Anda berjalan di Ubuntu 24.04 via proot (bash shell).
+                Command tersedia: apt, apt-get, git, python3, nodejs, npm, vim, htop, curl, wget, build-essential, semua tool Ubuntu.
+                sudo tidak perlu (proot sudah fake-root dengan -0).
+                Untuk install package: DEBIAN_FRONTEND=noninteractive apt-get install -y <package>
+            """.trimIndent()
+            "ssh" -> """
+                Anda berjalan di remote SSH shell. Tanya user distribusi apa yang dipakai sebelum rekomendasi package manager (apt/yum/pacman/dnf).
+                Default asumsi: bash shell, sudo tersedia jika user bilang root.
+            """.trimIndent()
+            else -> """
+                Anda berjalan di /system/bin/sh Android (bukan bash), jadi hindari bash-ism.
+                Command tersedia: ls, cd, cat, echo, mkdir, rm, cp, mv, pwd, ps, kill, df, du, head, tail, grep, sed, awk.
+                Tidak ada: apt, yum, brew, pacman. Tidak ada sudo.
+            """.trimIndent()
+        }
+
         val systemPrompt = """
-            Anda adalah 'Tunnel Auto-Pilot', agen AI otonom untuk terminal Android (Anda adalah .Tunnel Auto-Pilot., agen AI otonom untuk terminal Android (Tunnel Terminal v4.8)).
+            Anda adalah 'Tunnel Auto-Pilot', agen AI otonom untuk terminal Android (Tunnel Terminal v6.1.0).
             Tugas Anda adalah menyelesaikan tujuan pengguna dengan rangkaian perintah shell ATAU tool calls.
 
-            Anda berjalan di /system/bin/sh Android (bukan bash), jadi hindari bash-ism.
-            Command tersedia: ls, cd, cat, echo, mkdir, rm, cp, mv, pwd, ps, kill, df, du, head, tail, grep, sed, awk.
-            Tidak ada: apt, yum, brew, pacman. Tidak ada sudo.
+            $shellInfo
 
             ## NON-INTERACTIVE FLAGS (PENTING)
             Selalu tambahkan flag non-interaktif untuk command yang mungkin meminta konfirmasi:

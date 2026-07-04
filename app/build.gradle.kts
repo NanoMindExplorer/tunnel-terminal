@@ -12,8 +12,16 @@ android {
         minSdk = 24
         targetSdk = 34
         // Phase 38-39: proot + Ubuntu Linux environment (createSessionExec + ProotBootstrap + ProotShellExecutor)
-        versionCode = 26
-        versionName = "6.1.0-phase38-proot-ubuntu"
+        // Phase 40: Fix all 42 audit bugs (A1-A4, H1-H10, M1-M13, L1-L15)
+        versionCode = 27
+        versionName = "6.2.0-phase40-audit-fixes"
+
+        /* Phase 40 fix (M10): Restrict ke arm64-v8a saja — proot binary di assets
+         * hanya arm64. Tanpa abiFilters, APK universal akan crash di device x86_64
+         * karena proot arm64 tidak bisa exec. */
+        ndk {
+            abiFilters += listOf("arm64-v8a")
+        }
     }
 
     buildTypes {

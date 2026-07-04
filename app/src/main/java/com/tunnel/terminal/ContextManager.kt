@@ -41,9 +41,10 @@ class ContextManager(private val context: Context) {
     fun parseMentions(text: String): List<String> {
         val mentions = mutableListOf<String>()
         /* BUG-13 fix: Support quoted values ("...") dan paths dengan spasi.
-         * Old code: [^\s]+ berhenti di spasi pertama — path dengan spasi terpotong.
-         * Fix: Tangkap quoted "..." atau non-space sequence. */
-        val regex = Regex("@(file|block|command|terminal|snippet)(?::(?:\"([^\"]+)\"|(\\S+)))?|@terminal")
+         * Phase 40 fix (M3): Hapus alternatif "|@terminal" yang redundant —
+         * bagian pertama regex sudah match @terminal (tanpa argumen).
+         * Redundansi bisa menyebabkan double-match di edge case. */
+        val regex = Regex("@(file|block|command|terminal|snippet)(?::(?:\"([^\"]+)\"|(\\S+)))?")
         regex.findAll(text).forEach { match ->
             mentions.add(match.value)
         }
@@ -70,7 +71,9 @@ class ContextManager(private val context: Context) {
             val resolvedMention = when {
                 mention.startsWith("@file:") -> resolveFileMention(mention)
                 mention.startsWith("@block:") -> resolveBlockMention(mention, blockManager)
-                mention.startsWith("@command:") -> resolveCommandMention(mention, terminalSession)
+                /* Phase 40 fix (M7): Skip @command: di resolveAll — akan di-resolve
+                 * async via resolveCommandAsync di handleAIPrompt. */
+                mention.startsWith("@command:") -> continue
                 mention == "@terminal" -> resolveTerminalMention(terminalSession)
                 mention.startsWith("@snippet:") -> resolveSnippetMention(mention, snippetManager)
                 else -> ResolvedMention(mention, MentionType.UNKNOWN, "Unknown mention: $mention", mention)
@@ -123,23 +126,13 @@ class ContextManager(private val context: Context) {
         )
     }
 
-    private fun resolveCommandMention(mention: String, session: TerminalSession?): ResolvedMention {
-        val cmd = mention.removePrefix("@command:").trim().removeSurrounding("\"")
-        if (session == null) {
-            return ResolvedMention(mention, MentionType.COMMAND, "No active terminal session", mention)
-        }
-        /* Phase 37: @command: sekarang benar-benar mengeksekusi command via MarkerExecutor.
-         * Output + exit code dikirim sebagai context ke AI.
-         * CATATAN: Eksekusi adalah suspend function — dipanggil async dari resolveAll.
-         * Untuk kompatibilitas dengan interface sync, return placeholder yang akan
-         * di-replace oleh caller async. */
-        return ResolvedMention(
-            mention = mention,
-            type = MentionType.COMMAND,
-            content = "Command: $cmd\n(Note: Command akan dieksekusi secara real-time oleh MarkerExecutor.)",
-            displayName = "command: $cmd"
-        )
-    }
+    /* Phase 40 fix (M7): resolveCommandMention dihapus dari resolveAll.
+     * OLD BUG: Method ini return placeholder ("Command akan dieksekusi secara
+     * real-time oleh MarkerExecutor.") yang ditambahkan ke context string.
+     * Lalu resolveCommandAsync juga dipanggil, menumpuk output nyata.
+     * Double context untuk command yang sama.
+     * FIX: @command: hanya di-resolve via resolveCommandAsync (suspend),
+     * tidak lagi via resolveAll (sync). Skip @command: di resolveAll. */
 
     /**
      * Phase 37: Resolve @command: dengan eksekusi nyata via MarkerExecutor.
@@ -186,9 +179,12 @@ class ContextManager(private val context: Context) {
         }
     }
 
-    /** Hapus mentions dari text (untuk display user message yang clean). */
+    /** Hapus mentions dari text (untuk display user message yang clean).
+     * Phase 40 fix (M12): Pakai regex yang sama dengan parseMentions untuk konsistensi.
+     * OLD BUG: Regex [^\\s]+ tidak handle quoted values → @command:"ls -la" hanya
+     * strip @command:"ls, sisanya " -la" tetap di text. */
     fun stripMentions(text: String): String {
-        return Regex("@(file|block|command|terminal|snippet)(?::([^\\s]+))?|@terminal").replace(text, "").trim()
+        return Regex("@(file|block|command|terminal|snippet)(?::(?:\"([^\"]+)\"|(\\S+)))?").replace(text, "").trim()
     }
 }
 

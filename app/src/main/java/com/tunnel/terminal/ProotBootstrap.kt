@@ -50,10 +50,24 @@ class ProotBootstrap(private val context: Context) {
     companion object {
         private const val TAG = "ProotBootstrap"
 
-        const val ROOTFS_URL_ARM64 =
-            "https://cdimage.ubuntu.com/ubuntu-base/releases/24.04/release/ubuntu-base-24.04.2-base-arm64.tar.gz"
-        const val ROOTFS_URL_AMD64 =
-            "https://cdimage.ubuntu.com/ubuntu-base/releases/24.04/release/ubuntu-base-24.04.2-base-amd64.tar.gz"
+        /**
+         * Phase 40 fix (A2): URL rootfs Ubuntu Base — daftar fallback.
+         *
+         * OLD BUG: Hanya 1 URL hardcode (24.04.2) yang sudah 404 di server Ubuntu.
+         * Ubuntu menghapus point release lama dari cdimage server — hanya 24.04.3
+         * dan 24.04.4 yang tersedia saat audit (4 Jul 2026).
+         *
+         * FIX: Daftar URL berurutan, download mencoba satu per satu sampai ada
+         * yang berhasil (HTTP 200). Kalau semua gagal, throw error yang jelas.
+         */
+        val ROOTFS_URLS_ARM64 = listOf(
+            "https://cdimage.ubuntu.com/ubuntu-base/releases/24.04/release/ubuntu-base-24.04.4-base-arm64.tar.gz",
+            "https://cdimage.ubuntu.com/ubuntu-base/releases/24.04/release/ubuntu-base-24.04.3-base-arm64.tar.gz"
+        )
+        val ROOTFS_URLS_AMD64 = listOf(
+            "https://cdimage.ubuntu.com/ubuntu-base/releases/24.04/release/ubuntu-base-24.04.4-base-amd64.tar.gz",
+            "https://cdimage.ubuntu.com/ubuntu-base/releases/24.04/release/ubuntu-base-24.04.3-base-amd64.tar.gz"
+        )
 
         const val MIN_FREE_BYTES = 1_500L * 1024 * 1024
 
@@ -75,19 +89,22 @@ class ProotBootstrap(private val context: Context) {
     val isInstalled: Boolean
         get() = markerFile.exists() && prootBin.exists() && prootBin.canExecute() && rootfsDir.isDirectory
 
-    private fun pickRootfsUrl(): String {
+    /**
+     * Pilih daftar URL rootfs berdasarkan ABI device.
+     * Phase 40 fix (H4): Untuk ABI 32-bit, throw error (tidak ada rootfs 32-bit yang available).
+     */
+    private fun pickRootfsUrls(): List<String> {
         val abis = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
             android.os.Build.SUPPORTED_ABIS.toList()
         } else {
             listOf(android.os.Build.CPU_ABI)
         }
         return when {
-            abis.any { it.equals("arm64-v8a", true) } -> ROOTFS_URL_ARM64
-            abis.any { it.equals("x86_64", true) } -> ROOTFS_URL_AMD64
-            else -> {
-                Log.w(TAG, "Unsupported ABI $abis — fallback ke arm64 rootfs (kemungkinan tidak akan jalan)")
-                ROOTFS_URL_ARM64
-            }
+            abis.any { it.equals("arm64-v8a", true) } -> ROOTFS_URLS_ARM64
+            abis.any { it.equals("x86_64", true) } -> ROOTFS_URLS_AMD64
+            else -> throw IllegalStateException(
+                "Device 32-bit ($abis) tidak didukung. Linux Environment butuh device 64-bit (arm64-v8a atau x86_64)."
+            )
         }
     }
 
@@ -147,9 +164,29 @@ class ProotBootstrap(private val context: Context) {
         }
 
         // 4. Download rootfs tarball.
-        val rootfsUrl = pickRootfsUrl()
-        downloadWithProgress(rootfsUrl, rootfsTarball) { percent ->
-            listener.onProgress("Mengunduh Ubuntu rootfs", percent)
+        // Phase 40 fix (A2): Coba daftar URL fallback sampai ada yang berhasil.
+        val rootfsUrls = pickRootfsUrls()
+        var downloadSuccess = false
+        var lastError: Exception? = null
+        for ((idx, url) in rootfsUrls.withIndex()) {
+            try {
+                listener.onProgress("Mengunduh Ubuntu rootfs (mirror ${idx + 1}/${rootfsUrls.size})", 0)
+                downloadWithProgress(url, rootfsTarball) { percent ->
+                    listener.onProgress("Mengunduh Ubuntu rootfs", percent)
+                }
+                downloadSuccess = true
+                break
+            } catch (e: Exception) {
+                Log.w(TAG, "Download gagal dari $url: ${e.message}, coba mirror berikutnya...")
+                lastError = e
+                try { if (rootfsTarball.exists()) rootfsTarball.delete() } catch (_: Exception) {}
+            }
+        }
+        if (!downloadSuccess) {
+            throw IllegalStateException(
+                "Semua mirror download gagal (${rootfsUrls.size} URL dicoba). " +
+                "Error terakhir: ${lastError?.message ?: "unknown"}"
+            )
         }
 
         // 5. Ekstrak via tar bawaan Android (toybox).
@@ -190,12 +227,39 @@ class ProotBootstrap(private val context: Context) {
         // 6. Setup DNS.
         setupResolvConf()
 
-        // 7. Bersihkan tarball.
-        rootfsTarball.delete()
+        // 7. Phase 40 fix (H5): Validate proot binary bisa di-exec sebelum tulis marker.
+        // Kalau binary corrupt / wrong ABI / missing libs, error di sini (bukan saat start session).
+        listener.onProgress("Memvalidasi proot binary", 0)
+        try {
+            val validateProcess = ProcessBuilder(
+                prootBin.absolutePath, "--version"
+            ).redirectErrorStream(true).start()
+            val validateOutput = validateProcess.inputStream.bufferedReader().readText()
+            val validateExit = validateProcess.waitFor()
+            if (validateExit != 0 || !validateOutput.contains("proot", ignoreCase = true)) {
+                baseDir.deleteRecursively()
+                throw IllegalStateException(
+                    "Binary proot tidak valid atau tidak bisa di-exec di device ini. " +
+                    "Output: ${validateOutput.take(200)}"
+                )
+            }
+        } catch (e: IllegalStateException) { throw e }
+        catch (e: Exception) {
+            Log.w(TAG, "Validasi proot --version gagal (non-fatal): ${e.message}")
+            /* Non-fatal — beberapa proot build mungkin tidak support --version flag.
+             * Lanjutkan install; error akan muncul saat start session kalau benar-benar broken. */
+        }
+        listener.onProgress("Memvalidasi proot binary", 100)
 
-        // 8. Tulis marker.
+        // 8. Phase 40 fix (H9): Tulis marker SEBELUM hapus tarball.
+        // OLD BUG: hapus tarball dulu, lalu tulis marker. Kalau app crash di antara,
+        // tarball hilang tapi marker belum ada → user harus re-download.
+        // FIX: tulis marker dulu (akui install sukses), baru hapus tarball (best-effort).
         markerFile.writeText(System.currentTimeMillis().toString())
         Log.i(TAG, "Instalasi Ubuntu proot selesai di ${rootfsDir.absolutePath}")
+
+        // 9. Bersihkan tarball (best-effort, tidak fatal kalau gagal).
+        try { rootfsTarball.delete() } catch (_: Exception) {}
     }
 
     fun setupResolvConf() {
@@ -245,12 +309,27 @@ class ProotBootstrap(private val context: Context) {
         }
     }
 
+    /**
+     * Hapus seluruh instalasi (untuk fitur "Uninstall Linux Environment").
+     * Phase 40 fix (M8): Pakai rm -rf via ProcessBuilder (lebih cepat dari Kotlin's
+     * deleteRecursively untuk ribuan file di rootfs Ubuntu).
+     */
     fun uninstall() {
         try {
-            baseDir.deleteRecursively()
+            // Pakai rm -rf via toybox (lebih cepat + reliable untuk file tree besar)
+            val process = ProcessBuilder(
+                "/system/bin/rm", "-rf", baseDir.absolutePath
+            ).redirectErrorStream(true).start()
+            val exit = process.waitFor()
+            if (exit != 0) {
+                // Fallback ke Kotlin's deleteRecursively
+                baseDir.deleteRecursively()
+            }
             Log.i(TAG, "Instalasi Linux environment dihapus")
         } catch (e: Exception) {
             Log.w(TAG, "Gagal hapus instalasi: ${e.message}")
+            // Last resort fallback
+            try { baseDir.deleteRecursively() } catch (_: Exception) {}
         }
     }
 

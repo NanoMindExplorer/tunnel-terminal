@@ -176,7 +176,7 @@ class SshShellExecutor(
                             "Ini bisa berarti server diganti, atau ada serangan Man-in-the-Middle.\n" +
                             "Fingerprint sebelumnya: $knownFingerprint\n" +
                             "Fingerprint sekarang: $actualFingerprint\n" +
-                            "Jika Anda yakin ini aman, ketik 'storage-reset' di terminal untuk reset host keys."
+                            "Jika Anda yakin ini aman, ketik 'ssh-reset-hostkeys' di terminal untuk reset host keys."
                         )
                     } else {
                         Log.i(tag, "SSH TOFU: Host key verified for $hostKeyId")

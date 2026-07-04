@@ -46,9 +46,20 @@ class MarkerExecutor {
         /** Generate unique marker ID. */
         fun nextMarkerId(): Long = markerIdCounter.incrementAndGet()
 
-        /** Build command dengan marker appended. */
+        /**
+         * Build command dengan marker appended.
+         * Phase 40 fix (H6): Capture exit code SEBELUM echo, bukan di echo-nya.
+         *
+         * OLD BUG: `cmd ; echo "__TT_DONE_1_$?__"` — untuk command seperti
+         * `cd /foo && ls`, exit code `$?` adalah exit code `echo` (selalu 0),
+         * BUKAN exit code `ls`. Untuk `false || true`, exit code juga = 0
+         * (padahal user mungkin mau tahu exit code `false`).
+         *
+         * FIX: Run command di subshell, capture exit code ke variable `ec`,
+         * lalu echo marker dengan `ec` (bukan `$?` yang sudah tertimpa).
+         */
         fun wrapCommand(command: String, markerId: Long): String {
-            return "$command ; echo \"${MARKER_PREFIX}${markerId}_\$?${MARKER_SUFFIX}\""
+            return "{ $command ; } ; ec=$?; echo \"${MARKER_PREFIX}${markerId}_${ec}${MARKER_SUFFIX}\""
         }
 
         /** Parse marker dari output terminal. Returns MarkerResult jika ditemukan. */
@@ -111,7 +122,11 @@ class MarkerExecutor {
         var outputAfter = ""
 
         while (System.currentTimeMillis() - startTime < timeoutMs) {
-            delay(100)
+            /* Phase 40 fix (M2): Reduce poll delay dari 100ms → 25ms.
+             * OLD BUG: 100ms delay bisa miss exit code untuk command sangat cepat
+             * (output buffer mungkin sudah ter-truncate). 25ms cukup responsif
+             * tanpa terlalu banyak CPU usage. */
+            delay(25)
             outputAfter = session.getCleanOutput()
 
             // Cari marker di output yang baru (setelah outputBefore)

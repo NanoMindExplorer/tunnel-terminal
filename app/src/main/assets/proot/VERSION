@@ -1,0 +1,6 @@
+proot: 5.1.107.81 (from Termux package)
+libtalloc.so.2: 2.x (from Termux package)
+libandroid-shmem.so: 0.x (from Termux package)
+target_abi: arm64-v8a
+source: pkg install proot in Termux
+date: 2026-07-04
