@@ -702,7 +702,7 @@ class MainActivity : ComponentActivity() {
                             newFingerprint = newKey,
                             onResolve = { approved ->
                                 if (cont.isActive) {
-                                    cont.resume(approved)
+                                    cont.resume(approved) {}
                                 }
                             }
                         )
