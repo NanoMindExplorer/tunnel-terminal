@@ -59,7 +59,7 @@ class MarkerExecutor {
          * lalu echo marker dengan `ec` (bukan `$?` yang sudah tertimpa).
          */
         fun wrapCommand(command: String, markerId: Long): String {
-            return "{ $command ; } ; ec=$?; echo \"${MARKER_PREFIX}${markerId}_${ec}${MARKER_SUFFIX}\""
+            return "{ $command ; } ; ec=\$?; echo \"${MARKER_PREFIX}${markerId}_\${ec}${MARKER_SUFFIX}\""
         }
 
         /** Parse marker dari output terminal. Returns MarkerResult jika ditemukan. */
