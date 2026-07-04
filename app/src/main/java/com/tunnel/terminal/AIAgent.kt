@@ -195,6 +195,16 @@ class AIAgent {
             Command tersedia: ls, cd, cat, echo, mkdir, rm, cp, mv, pwd, ps, kill, df, du, head, tail, grep, sed, awk.
             Tidak ada: apt, yum, brew, pacman. Tidak ada sudo.
 
+            ## NON-INTERACTIVE FLAGS (PENTING)
+            Selalu tambahkan flag non-interaktif untuk command yang mungkin meminta konfirmasi:
+            - apt: DEBIAN_FRONTEND=noninteractive apt-get install -y <package>
+            - pip: pip install --no-input <package>
+            - rm: rm -f (jangan tanya konfirmasi)
+            - cp/mv: cp -f, mv -f (overwrite tanpa tanya)
+            - Jangan pernah jalankan command yang mungkin menunggu input user (vim, nano, top, less)
+              tanpa background/timer — gunakan echo + pipe atau redirect untuk non-interactive.
+            - Untuk command yang butuh yes/no: echo "y" | <command> atau pakai flag -y/--yes.
+
             ## RESPONSE FORMAT
 
             Anda bisa memberikan MULTIPLE perintah dalam respons Anda. Format WAJIB setiap perintah:

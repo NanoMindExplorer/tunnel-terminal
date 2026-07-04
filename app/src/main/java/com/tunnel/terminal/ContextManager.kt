@@ -128,15 +128,39 @@ class ContextManager(private val context: Context) {
         if (session == null) {
             return ResolvedMention(mention, MentionType.COMMAND, "No active terminal session", mention)
         }
-        /* Execute command dan capture output — NOTE: async in real impl.
-         * For now, just note the command. */
+        /* Phase 37: @command: sekarang benar-benar mengeksekusi command via MarkerExecutor.
+         * Output + exit code dikirim sebagai context ke AI.
+         * CATATAN: Eksekusi adalah suspend function — dipanggil async dari resolveAll.
+         * Untuk kompatibilitas dengan interface sync, return placeholder yang akan
+         * di-replace oleh caller async. */
         return ResolvedMention(
             mention = mention,
             type = MentionType.COMMAND,
-            /* BUG-13b fix: Command tidak dieksekusi secara real-time (butuh async).
-             * Beri pesan jujur, jangan klaim "Output will appear in terminal". */
-            content = "Command: $cmd\n(Note: Command output not captured in this version. Run manually in terminal.)",
+            content = "Command: $cmd\n(Note: Command akan dieksekusi secara real-time oleh MarkerExecutor.)",
             displayName = "command: $cmd"
+        )
+    }
+
+    /**
+     * Phase 37: Resolve @command: dengan eksekusi nyata via MarkerExecutor.
+     * Dipanggil async dari handleAIPrompt.
+     */
+    suspend fun resolveCommandAsync(
+        mention: String,
+        session: TerminalSession?,
+        markerExecutor: MarkerExecutor
+    ): ResolvedMention {
+        val cmd = mention.removePrefix("@command:").trim().removeSurrounding("\"")
+        if (session == null) {
+            return ResolvedMention(mention, MentionType.COMMAND, "No active terminal session", mention)
+        }
+        val result = markerExecutor.executeWithMarker(session, cmd, timeoutMs = 15000)
+        val resultText = markerExecutor.formatResultForAI(result)
+        return ResolvedMention(
+            mention = mention,
+            type = MentionType.COMMAND,
+            content = resultText,
+            displayName = "command: $cmd (exit ${result.exitCode})"
         )
     }
 

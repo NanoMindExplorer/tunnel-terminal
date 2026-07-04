@@ -11,9 +11,9 @@ android {
         applicationId = "com.tunnel.terminal"
         minSdk = 24
         targetSdk = 34
-        // Phase 36: Fix Enter not working on soft keyboard
-        versionCode = 24
-        versionName = "5.5.1-phase36-enter-fix"
+        // Phase 37: Marker-based command execution + Auto-Pilot rewrite + @command: real
+        versionCode = 25
+        versionName = "6.0.0-phase37-marker-execution"
     }
 
     buildTypes {

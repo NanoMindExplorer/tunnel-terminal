@@ -319,8 +319,20 @@ class MainActivity : ComponentActivity() {
 
         when {
             call.tool == "run_command" -> {
+                /* Phase 37: run_command pakai MarkerExecutor — bukan fire-and-forget.
+                 * Hasil (output + exit code) dikirim balik ke AI sebagai context. */
                 val cmd = call.args["cmd"] ?: return
-                shellExecutors.find { it.id == activeExecutorId }?.executeCommand(cmd)
+                val session = shellExecutors.find { it.id == activeExecutorId }
+                if (session != null) {
+                    chatMessages.add(ChatMessage("assistant", "🔧 Running: $cmd", false))
+                    val result = markerExecutor.executeWithMarker(session, cmd, timeoutMs = 30000)
+                    val resultText = markerExecutor.formatResultForAI(result)
+                    chatMessages.add(ChatMessage("assistant", "📋 Result:\n$resultText", false))
+                    /* Kirim hasil ke AI sebagai follow-up prompt untuk analisis. */
+                    scope.launch {
+                        handleAIPrompt("Berikut hasil eksekusi command:\n$resultText\n\nApakah perlu perbaikan atau langkah selanjutnya?")
+                    }
+                }
             }
             call.tool == "write_file" -> {
                 /* Phase 23: Inline diff view untuk AI file edits.
@@ -1643,6 +1655,9 @@ class MainActivity : ComponentActivity() {
      * Smart Auto-Pilot: runs commands sequentially, waits for shell prompt,
      * detects errors mid-sequence.
      */
+    /* Phase 37: MarkerExecutor instance untuk command execution dengan marker. */
+    private val markerExecutor = MarkerExecutor()
+
     private suspend fun runAutoPilot(commands: List<String>) {
         val activeExecutor = shellExecutors.find { it.id == activeExecutorId } ?: return
         chatMessages.add(ChatMessage("assistant", "🚀 Auto-Pilot memulai ${commands.size} langkah...", false))
@@ -1651,45 +1666,34 @@ class MainActivity : ComponentActivity() {
             val cmd = commands[i]
             chatMessages.add(ChatMessage("assistant", "▶ [${i + 1}/${commands.size}] Menjalankan: $cmd", false))
 
-            /* Phase 20: Capture output snapshot SEBELUM perintah untuk deteksi delta.
-             * Simpan snapshot String (bukan length) agar tahan terhadap buffer trim.
-             * Old code: simpan length, substring(length) -> crash jika buffer di-trim
-             * (capped at 4000 chars, outputBefore > current length). */
-            val outputBefore = activeExecutor.getCleanOutput()
-            activeExecutor.executeCommand(cmd)
+            /* Phase 37: Pakai MarkerExecutor — bukan regex prompt nebak.
+             * Command dibungkus: cmd ; echo "__TT_DONE_<id>_$?__"
+             * Tunggu marker muncul → pasti selesai + exit code tercapture. */
+            val result = markerExecutor.executeWithMarker(activeExecutor, cmd, timeoutMs = 30000)
 
-            /* Tunggu sampai prompt shell muncul kembali (timeout 15s). */
-            val ok = waitForPrompt(activeExecutor, outputBefore.length, timeoutMs = 15000)
-            if (!ok) {
+            // Tampilkan hasil ke user
+            val statusIcon = if (result.isSuccess) "✓" else "✗"
+            val outputDisplay = if (result.output.isBlank()) "(no output)" else result.output.take(500)
+            chatMessages.add(ChatMessage(
+                "assistant",
+                "$statusIcon [${i + 1}/${commands.size}] Exit code: ${result.exitCode} (${result.executionTimeMs}ms)\n$outputDisplay",
+                false, isError = !result.isSuccess
+            ))
+
+            if (!result.isSuccess && result.exitCode != -1) {
+                chatMessages.add(ChatMessage(
+                    "assistant",
+                    "❌ Command gagal (exit code ${result.exitCode}). Auto-Pilot dihentikan.",
+                    false, isError = true
+                ))
+                return
+            }
+            if (result.exitCode == -1) {
                 chatMessages.add(ChatMessage(
                     "assistant",
                     "⚠️ Timeout menunggu perintah #${i + 1} selesai. Auto-Pilot dihentikan.",
                     false, isError = true
                 ))
-                return
-            }
-
-            /* Phase 20: Deteksi error di output baru. Bandingkan dengan snapshot
-             * string, bukan substring(length) yang bisa out of bounds. */
-            val outputAfter = activeExecutor.getCleanOutput()
-            val newOutput = if (outputAfter.length > outputBefore.length && outputAfter.startsWith(outputBefore)) {
-                /* Normal case: output appended. */
-                outputAfter.substring(outputBefore.length)
-            } else {
-                /* Buffer was trimmed or changed — just use full output. */
-                outputAfter
-            }
-            val lower = newOutput.lowercase()
-            val hasError = lower.contains("error") || lower.contains("not found") ||
-                           lower.contains("no such file") || lower.contains("permission denied") ||
-                           lower.contains("syntax error")
-            if (hasError) {
-                chatMessages.add(ChatMessage(
-                    "assistant",
-                    "❌ Error terdeteksi setelah perintah #${i + 1}:\n${newOutput.take(300)}",
-                    false, isError = true
-                ))
-                chatMessages.add(ChatMessage("assistant", "Auto-Pilot dihentikan karena error.", false))
                 return
             }
         }
@@ -1757,14 +1761,26 @@ class MainActivity : ComponentActivity() {
         val terminalContext = activeExecutor?.getCleanOutput() ?: ""
 
         /* Phase 23: Resolve @context mentions (@file, @block, @command, @terminal, @snippet).
-         * Mentions di-resolve ke content dan di-append ke terminalContext. */
+         * Phase 37: @command: sekarang dieksekusi secara nyata via MarkerExecutor. */
         val (resolvedMentions, mentionContext) = contextManager.resolveAll(
             text = prompt,
             blockManager = blockManager,
             terminalSession = activeExecutor,
             snippetManager = snippetManager
         )
-        val fullContext = terminalContext + mentionContext
+
+        /* Phase 37: Resolve @command: mentions secara async dengan MarkerExecutor. */
+        val commandMentions = resolvedMentions.filter { it.type == ContextManager.MentionType.COMMAND }
+        val asyncCommandContext = if (commandMentions.isNotEmpty() && activeExecutor != null) {
+            val sb = StringBuilder()
+            for (cm in commandMentions) {
+                val resolved = contextManager.resolveCommandAsync(cm.mention, activeExecutor, markerExecutor)
+                sb.append("\n[${resolved.displayName}]:\n${resolved.content}\n")
+            }
+            sb.toString()
+        } else ""
+
+        val fullContext = terminalContext + mentionContext + asyncCommandContext
 
         /* Placeholder assistant message yang akan di-update selama streaming.
          * Placeholder assistant message updated during streaming. */
