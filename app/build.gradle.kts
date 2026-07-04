@@ -12,8 +12,9 @@ android {
         minSdk = 24
         targetSdk = 34
         // Phase 41: Security & Privacy fixes (CRIT-01..04, LOW-02)
-        versionCode = 28
-        versionName = "6.3.0-phase41-security"
+        // Phase 45: Realtime audit fixes (Bug #1 shell cwd, Bug #2 pseudo-cmd stick, Bug #3 proot readiness)
+        versionCode = 29
+        versionName = "6.4.0-phase45-realtime-fixes"
 
         /* Phase 40 fix (M10): Restrict ke arm64-v8a saja — proot binary di assets
          * hanya arm64. Tanpa abiFilters, APK universal akan crash di device x86_64

@@ -1304,6 +1304,41 @@ class MainActivity : ComponentActivity() {
 
             fun processInput(input: String) {
                 val cmd = input.trim().replace("\n", "")
+
+                /* Phase 45 fix Bug #2: Pseudo-command lokal menempel ke command berikutnya.
+                 *
+                 * OLD BUG: Setiap karakter yang user ketik langsung dikirim live ke shell asli
+                 * (writeRaw char-by-char) untuk echo, tab-completion, dst. Saat user tekan
+                 * Enter untuk pseudo-command lokal (help, clear, setup-storage, dst), app
+                 * menjalankan aksi lokalnya sendiri TAPI TIDAK mengirim \n ke shell asli.
+                 * Akibatnya: karakter "setup-storage" masih nangkring di buffer baris internal
+                 * shell. Saat user ketik "ls" berikutnya, 'l' dan 's' nyangkut ke buffer
+                 * yang masih berisi "setup-storage" → shell eksekusi "setup-storagels" →
+                 * error "sh: setup-storagels: inaccessible or not found".
+                 *
+                 * FIX: Sebelum proses pseudo-command lokal, hapus dulu teks itu dari buffer
+                 * baris shell asli dengan mengirim backspace (\u007F) sebanyak panjang cmd.
+                 * Teknik ini valid karena PTY dalam mode "cooked" (default saat menunggu
+                 * prompt) menangani backspace di level kernel: menghapus karakter terakhir
+                 * dari buffer baris internalnya sebelum di-submit.
+                 *
+                 * Berlaku untuk SEMUA pseudo-command lokal: help, clear, setup-storage,
+                 * storage-status, storage-reset, ssh-reset-hostkeys, system-info, open,
+                 * dan systemctl intercept di tab Ubuntu. Branch `else` (command shell biasa)
+                 * TIDAK perlu di-backspace karena karakternya memang harus sampai ke shell. */
+                val isLocalOnly = cmd == "help" || cmd == "clear" || cmd == "setup-storage" ||
+                    cmd == "storage-status" || cmd == "storage-reset" ||
+                    cmd == "ssh-reset-hostkeys" || cmd == "system-info" ||
+                    cmd.startsWith("open ") ||
+                    (activeExecutor.sessionType == "ubuntu" &&
+                        (cmd.startsWith("systemctl ") || cmd.startsWith("service ")))
+
+                if (isLocalOnly && cmd.isNotEmpty()) {
+                    /* Kirim backspace sebanyak panjang cmd untuk hapus dari buffer shell.
+                     * \u007F = DEL (backspace di terminal). */
+                    repeat(cmd.length) { activeExecutor.writeRaw("\u007F") }
+                }
+
                 if (cmd.isNotEmpty()) {
                     val h = activeExecutor.commandHistory
                     if (h.isEmpty() || h.last() != cmd) h.add(cmd)

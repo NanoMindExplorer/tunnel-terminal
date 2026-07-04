@@ -3,6 +3,7 @@
 #include <pty.h>
 #include <sys/ioctl.h>
 #include <sys/wait.h>
+#include <sys/stat.h>   /* Phase 45 fix Bug #1: mkdir() */
 #include <termios.h>
 #include <signal.h>
 #include <stdlib.h>
@@ -64,6 +65,31 @@ Java_com_tunnel_terminal_TerminalJni_createSession(JNIEnv *env, jobject thiz,
         envp[env_idx++] = term_prog_env;
         envp[env_idx++] = home_env;
         envp[env_idx] = NULL;
+
+        /* Phase 45 fix Bug #1: Pindah ke home directory app SEBELUM exec.
+         *
+         * OLD BUG: HOME di-set sebagai env var, tapi itu TIDAK memindahkan cwd
+         * proses. Shell mewarisi cwd dari proses Android app (defaultnya "/",
+         * root filesystem yang read-only & permission-denied untuk app biasa).
+         * Akibatnya: prompt "tunnel@android:/$", ls → "Permission denied",
+         * mkdir → "Read-only file system".
+         *
+         * FIX: mkdir() + chdir() ke home directory app SEBELUM execve().
+         * - mkdir() buat folder kalau belum ada (idempotent — return -1+EEXIST
+         *   kalau sudah ada, yang kita abaikan).
+         * - chdir() pindah cwd proses ke home. Shell yang di-exec mewarisi
+         *   cwd ini → prompt "tunnel@android:~/files/home$" (atau custom PS1).
+         *
+         * Keduanya async-signal-safe (POSIX.1), aman dipanggil di child process
+         * antara fork-exec — konsisten dengan alasan BUG-30 fix di file ini.
+         * Tidak pakai LOGE() di sini karena __android_log_print tidak dijamin
+         * async-signal-safe di proses yang baru di-fork (bisa deadlock kalau
+         * thread lain pegang malloc lock saat fork). Kalau gagal, lanjut saja —
+         * shell tetap jalan, hanya cwd-nya tidak ideal.
+         */
+        static const char home_dir[] = "/data/data/com.tunnel.terminal/files/home";
+        mkdir(home_dir, 0700);  /* idempotent, ignore error if exists */
+        chdir(home_dir);        /* move cwd to home; ignore error if fails */
 
         /* execve adalah async-signal-safe.
          * M1 fix: Gunai static char array untuk argv juga. */
@@ -192,7 +218,12 @@ Java_com_tunnel_terminal_TerminalJni_createSessionExec(JNIEnv *env, jobject thiz
 
     if (pid == 0) {
         /* Child — hanya async-signal-safe calls. execPathBuf/argvBuf/envpBuf
-         * adalah data biasa di stack yang sudah ikut ter-copy oleh fork(). */
+         * adalah data biasa di stack yang sudah ikut ter-copy oleh fork().
+         *
+         * Phase 45 note: TIDAK perlu mkdir()+chdir() ke home_dir di sini
+         * (beda dengan createSession) karena proot mengatur cwd sendiri
+         * lewat flag "-w /root" di argv (lihat ProotShellExecutor.kt).
+         * Proot akan chdir ke rootfs Ubuntu setelah exec. */
         execve(execPathBuf, argvBuf, envpBuf);
         /* Jika execve gagal — _exit adalah async-signal-safe (exit() tidak). */
         _exit(1);

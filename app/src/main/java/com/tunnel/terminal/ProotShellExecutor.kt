@@ -16,6 +16,8 @@ import java.nio.ByteBuffer
 import java.nio.CharBuffer
 import java.nio.charset.CodingErrorAction
 import java.nio.charset.StandardCharsets
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 
@@ -59,6 +61,15 @@ class ProotShellExecutor(
 
     @Volatile
     private var readThread: Thread? = null
+
+    /**
+     * Phase 45 fix Bug #3: Latch yang di-count-down saat readLoop terima byte pertama.
+     * Tanda bahwa proot+bash sudah hidup dan siap menerima input (PS1 setup).
+     * Mengganti Thread.sleep(200) yang fragile — proot start-nya jauh lebih berat
+     * dari sh biasa (ptrace attach + filesystem binding + exec bash di rootfs asing),
+     * 200ms bisa tidak cukup di device lambat.
+     */
+    private var firstByteLatch: CountDownLatch? = null
 
     override val id: Int = globalIdCounter.incrementAndGet()
 
@@ -218,6 +229,11 @@ class ProotShellExecutor(
             pfd = ParcelFileDescriptor.adoptFd(masterFd)
             Log.i(tag, "Sesi Ubuntu proot dimulai: pid=$childPid, fd=$masterFd, id=$id, rootfs=$rootfsPath, libPath=$libPath")
 
+            /* Phase 45 fix Bug #3: Buat latch sebelum start readThread.
+             * readLoop akan count-down latch saat terima byte pertama dari proot
+             * (tanda proot+bash sudah hidup dan kirim output pertama). */
+            firstByteLatch = CountDownLatch(1)
+
             readThread = Thread({ readLoop() }, "proot-read-$id").apply {
                 isDaemon = true
                 start()
@@ -227,7 +243,28 @@ class ProotShellExecutor(
             // menghapus MOTD yang sudah di-process ke emulator oleh createUbuntuTab().
             // OLD BUG: clear dikirim ke shell → shell kirim ESC[2J ke emulator →
             // MOTD yang sudah dirender terhapus. Race condition antara clear dan MOTD.
-            Thread.sleep(200)
+
+            // Phase 45 fix Bug #3: Tunggu byte pertama dari proot (readiness signal)
+            // alih-alih Thread.sleep(200) yang fragile.
+            // OLD BUG: proot start-nya berat (ptrace + fs binding + exec bash di rootfs).
+            // 200ms bisa tidak cukup di device lambat → PS1 terkirim sebelum bash siap
+            // → PS1 gagal ke-set, prompt default bash yang muncul.
+            // FIX: Tunggu firstByteLatch dengan timeout 5 detik. Kalau latch tidak
+            // di-count-down dalam 5s (proot crash/gagal start), fallback ke kirim PS1
+            // saja (sama seperti behavior lama, tapi dengan window yang jauh lebih panjang).
+            try {
+                val ready = firstByteLatch!!.await(5, TimeUnit.SECONDS)
+                if (ready) {
+                    Log.i(tag, "Proot readiness signal diterima, kirim PS1 setup")
+                } else {
+                    Log.w(tag, "Timeout 5s menunggu proot readiness — kirim PS1 anyway (mungkin proot lambat atau crash)")
+                }
+            } catch (_: InterruptedException) {
+                Log.w(tag, "Thread di-interrupt saat tunggu proot readiness")
+            }
+            // Beri sedikit waktu tambahan setelah byte pertama supaya bash benar-benar
+            // siap menerima command (byte pertama bisa jadi header proot, bukan bash prompt).
+            Thread.sleep(100)
             writeRaw("export PS1='\\u@\\h:\\w\\$ '\n")
             TerminalJni.resize(masterFd, 24, 80)
         }
@@ -258,6 +295,14 @@ class ProotShellExecutor(
             while (isAlive && inputStream.read(buffer).also { bytesRead = it } != -1) {
                 if (!isAlive) break
                 if (bytesRead <= 0) continue
+
+                /* Phase 45 fix Bug #3: Count-down latch saat byte pertama diterima.
+                 * Tanda bahwa proot+bash sudah hidup dan mulai kirim output.
+                 * start() menunggu sinyal ini sebelum kirim PS1 setup. */
+                firstByteLatch?.let { latch ->
+                    latch.countDown()
+                    firstByteLatch = null  // avoid repeated countDown (no-op anyway, but cleaner)
+                }
 
                 byteBuffer.position(0)
                 byteBuffer.limit(bytesRead)
