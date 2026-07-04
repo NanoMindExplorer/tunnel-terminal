@@ -31,7 +31,12 @@ import java.nio.charset.StandardCharsets
  *
  * Phase 18: Accept themeHolder untuk TerminalEmulator (theme-aware rendering).
  */
-class ShellExecutor(private val themeHolder: ThemeHolder = ThemeHolder()) : TerminalSession {
+class ShellExecutor(
+    private val themeHolder: ThemeHolder = ThemeHolder(),
+    /* Phase 44 fix (MED-04): Context untuk display metrics — dipakai menghitung
+     * ukuran PTY awal yang lebih akurat dari hardcode 80x24. */
+    private val context: android.content.Context? = null
+) : TerminalSession {
     private val tag = "ShellExecutor"
 
     private var masterFd: Int = -1
@@ -94,6 +99,28 @@ class ShellExecutor(private val themeHolder: ThemeHolder = ThemeHolder()) : Term
             outputBuffer.setLength(0)
             _lastCommandOutput.value = ""
 
+            /* Phase 44 fix (MED-04): Hitung ukuran PTY awal dari display metrics
+             * alih-alih hardcode 80x24. Compose layout belum tersedia saat start()
+             * dipanggil, tapi display metrics sudah. Ini mengurangi flicker saat
+             * tab baru dibuka (sebelumnya: 80x24 → onSizeChanged → resize ke actual).
+             *
+             * Asumsi: fontSize default 12sp, char width ≈ 0.6 × fontSize, char height ≈ 1.2 × fontSize.
+             * Density dari resources. */
+            val displayMetrics = android.util.DisplayMetrics()
+            try {
+                @Suppress("DEPRECATION")
+                (context?.getSystemService(android.content.Context.WINDOW_SERVICE) as? android.view.WindowManager)
+                    ?.defaultDisplay?.getMetrics(displayMetrics)
+            } catch (_: Exception) {}
+            val density = displayMetrics.density.takeIf { it > 0 } ?: 2.0f
+            val screenWidthPx = displayMetrics.widthPixels.takeIf { it > 0 } ?: (1080 * density).toInt()
+            val screenHeightPx = displayMetrics.heightPixels.takeIf { it > 0 } ?: (1920 * density).toInt()
+            val fontSizeSp = 12f
+            val charWidthPx = (fontSizeSp * density * 0.6f).coerceAtLeast(1f)
+            val charHeightPx = (fontSizeSp * density * 1.2f).coerceAtLeast(1f)
+            val initialCols = (screenWidthPx / charWidthPx).toInt().coerceIn(20, 200)
+            val initialRows = (screenHeightPx / charHeightPx).toInt().coerceIn(10, 100)
+
             val outFd = IntArray(1)
             /* M2 fix: Check apakah native library berhasil di-load. */
             if (!TerminalJni.isLoaded) {
@@ -104,7 +131,7 @@ class ShellExecutor(private val themeHolder: ThemeHolder = ThemeHolder()) : Term
                 triggerScreenUpdate()
                 return@withContext
             }
-            childPid = TerminalJni.createSession(24, 80, outFd)
+            childPid = TerminalJni.createSession(initialRows, initialCols, outFd)
             masterFd = outFd.getOrElse(0) { -1 }
 
             if (childPid <= 0 || masterFd < 0) {
@@ -116,7 +143,7 @@ class ShellExecutor(private val themeHolder: ThemeHolder = ThemeHolder()) : Term
             }
 
             pfd = ParcelFileDescriptor.adoptFd(masterFd)
-            Log.i(tag, "Sesi dimulai: pid=$childPid, fd=$masterFd, id=$id")
+            Log.i(tag, "Sesi dimulai: pid=$childPid, fd=$masterFd, id=$id, size=${initialRows}x${initialCols}")
 
             /* Thread pembaca output shell - set sebagai daemon agar tidak block JVM exit.
              * Shell output reader thread - daemon so it never blocks JVM exit. */
@@ -131,7 +158,7 @@ class ShellExecutor(private val themeHolder: ThemeHolder = ThemeHolder()) : Term
             writeRaw("export PS1='tunnel@android:\$PWD\$ '\n")
             /* Kirim resize awal agar shell tahu ukuran terminal.
              * Send initial resize so shell knows terminal size. */
-            TerminalJni.resize(masterFd, 24, 80)
+            TerminalJni.resize(masterFd, initialRows, initialCols)
         }
     }
 

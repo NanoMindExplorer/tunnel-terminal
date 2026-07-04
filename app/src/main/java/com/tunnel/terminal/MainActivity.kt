@@ -103,6 +103,9 @@ class MainActivity : ComponentActivity() {
     private var showWorkspaceDrawer by mutableStateOf(false)
     /** Phase 21: SSH connect dialog visibility. */
     private var showSshDialog by mutableStateOf(false)
+    /** Phase 41 fix (CRIT-02): State untuk SSH host key change dialog (blocking).
+     *  Non-null = dialog sedang visible, user harus pilih approve/reject. */
+    private val _sshHostKeyDialogState = mutableStateOf<SshHostKeyDialogState?>(null)
     /** Phase 38 (proot/Ubuntu): Ubuntu install dialog visibility. */
     private var showUbuntuInstallDialog by mutableStateOf(false)
     /** Phase 38 (proot/Ubuntu): ProotBootstrap instance (lazy — butuh Context). */
@@ -280,13 +283,18 @@ class MainActivity : ComponentActivity() {
 
     /** Change theme at runtime: update holder + persist. */
     private fun changeTheme(newTheme: TerminalTheme) {
+        /* Phase 44 fix (MED-01): Recolor sel yang ada supaya tema baru langsung apply
+         * ke seluruh layar, bukan cuma sel baru. */
+        val oldFg = themeHolder.theme.foreground
+        val oldBg = themeHolder.theme.background
         themeHolder.theme = newTheme
         currentTheme = newTheme
         ThemeManager.setActiveTheme(this, newTheme)
-        /* Trigger screen update on all tabs so theme color applies to existing cells.
-         * Note: existing cells keep their assigned colors (they were set when written).
-         * New cells will use new theme. For full refresh, user can clear screen. */
-        shellExecutors.forEach { it.triggerScreenUpdate() }
+        /* Phase 44 fix: Recolor semua sel di setiap tab. */
+        shellExecutors.forEach { executor ->
+            executor.emulator.recolorForTheme(oldFg, oldBg)
+            executor.triggerScreenUpdate()
+        }
     }
 
     /** Clear chat conversation history (multi-turn memory reset). */
@@ -593,14 +601,21 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun loadAISettings() {
+        /* Phase 41 fix (CRIT-01): Migrasi apiKey dari plaintext prefs lama ke encrypted prefs.
+         * Setelah migrasi, apiKey disimpan di EncryptedSharedPreferences (AES256-GCM). */
+        SecureStorage.migrateAICredentials(this)
+
+        /* Non-sensitive settings (provider, baseUrl, model, dll) tetap di plaintext prefs
+         * untuk kompatibilitas + performance. Hanya apiKey yang dipindah ke encrypted. */
         val prefs = getSharedPreferences("TunnelAIPrefs", Context.MODE_PRIVATE)
+        val securePrefs = SecureStorage.getAIPrefs(this)
         /* C3 fix: Wrap getDouble dalam try-catch — ClassCastException jika preference corrupt
          * atau disimpan sebagai tipe lain oleh versi lama. */
         val temperature = try { prefs.getDouble("temperature", 0.2) } catch (_: Exception) { 0.2 }
         aiSettings = AISettings(
             providerName = prefs.getString("providerName", "OpenAI") ?: "OpenAI",
             baseUrl = prefs.getString("baseUrl", "https://api.openai.com/v1") ?: "https://api.openai.com/v1",
-            apiKey = prefs.getString("apiKey", "") ?: "",
+            apiKey = securePrefs.getString("apiKey", "") ?: "",
             modelName = prefs.getString("modelName", "gpt-4o-mini") ?: "gpt-4o-mini",
             temperature = temperature,
             maxTokens = prefs.getInt("maxTokens", 2000),
@@ -611,16 +626,20 @@ class MainActivity : ComponentActivity() {
 
     private fun saveAISettings(newSettings: AISettings) {
         aiSettings = newSettings
+        /* Phase 41 fix (CRIT-01): apiKey disimpan di encrypted prefs, sisanya plaintext. */
         val prefs = getSharedPreferences("TunnelAIPrefs", Context.MODE_PRIVATE).edit()
         prefs.putString("providerName", newSettings.providerName)
         prefs.putString("baseUrl", newSettings.baseUrl)
-        prefs.putString("apiKey", newSettings.apiKey)
         prefs.putString("modelName", newSettings.modelName)
         prefs.putDouble("temperature", newSettings.temperature)
         prefs.putInt("maxTokens", newSettings.maxTokens)
         prefs.putInt("requestTimeoutMs", newSettings.requestTimeoutMs)
         prefs.putBoolean("supportsVision", newSettings.supportsVision)
         prefs.apply()
+
+        val securePrefs = SecureStorage.getAIPrefs(this).edit()
+        securePrefs.putString("apiKey", newSettings.apiKey)
+        securePrefs.apply()
     }
 
     /* SharedPreferences helper untuk double karena tidak ada putDouble bawaan.
@@ -647,7 +666,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private suspend fun createNewTab() {
-        val newExecutor = ShellExecutor(themeHolder)
+        val newExecutor = ShellExecutor(themeHolder, this)
         /* Phase 24.5: Add to list BEFORE start() agar Compose bisa observe.
          * Old code: start() sebelum add() — jika start() lambat, UI render null.
          * Fix: add first, then start, then set active. */
@@ -665,7 +684,32 @@ class MainActivity : ComponentActivity() {
      * Create new SSH tab with given connection config.
      */
     private suspend fun createSshTab(config: SshConnectionConfig) {
-        val sshExecutor = SshShellExecutor(themeHolder, config, this)
+        /* Phase 41 fix (CRIT-02): Pass hostKeyChangeCallback supaya user dapat dialog
+         * blocking saat fingerprint server berubah (potensi MITM). */
+        val sshExecutor = SshShellExecutor(
+            themeHolder = themeHolder,
+            config = config,
+            context = this,
+            hostKeyChangeCallback = { oldKey, newKey ->
+                /* Blocking call — wait for user decision via suspendCancellableCoroutine..
+                 * Karena callback ini dipanggil dari suspend context (start()), kita bisa
+                 * suspend di sini sampai user tap tombol di dialog. */
+                kotlinx.coroutines.runBlocking {
+                    kotlinx.coroutines.suspendCancellableCoroutine { cont ->
+                        _sshHostKeyDialogState.value = SshHostKeyDialogState(
+                            host = "${config.host}:${config.port}",
+                            oldFingerprint = oldKey,
+                            newFingerprint = newKey,
+                            onResolve = { approved ->
+                                if (cont.isActive) {
+                                    cont.resume(approved)
+                                }
+                            }
+                        )
+                    }
+                }
+            }
+        )
         shellExecutors.add(sshExecutor)
         activeExecutorId = sshExecutor.id
         sshExecutor.start()
@@ -675,11 +719,25 @@ class MainActivity : ComponentActivity() {
      * Phase 38 (proot/Ubuntu): Buat tab Ubuntu baru. Kalau belum terinstal,
      * tampilkan dialog instalasi (akan auto-createUbuntuTab() setelah sukses).
      *
+     * Phase 41 fix (CRIT-04): Di flavor "playstore", fitur proot dinonaktifkan
+     * (BuildConfig.ENABLE_PROOT = false). Tombol 🐧 disembunyikan di TabBar,
+     * dan fungsi ini return early dengan toast info.
+     *
      * Retry logic: kalau sesi mati dalam <2 detik (indikasi SECCOMP issue),
      * destroy + retry sekali dengan disableSeccomp=true. Preferensi disimpan
      * supaya percobaan berikutnya pakai flag yang sama.
      */
     private suspend fun createUbuntuTab() {
+        /* Phase 41 fix (CRIT-04): Nonaktifkan fitur Ubuntu di playstore flavor. */
+        if (!com.tunnel.terminal.BuildConfig.ENABLE_PROOT) {
+            Toast.makeText(
+                this,
+                "Fitur Linux Environment tidak tersedia di build ini (Play Store policy). " +
+                "Gunakan build Full dari GitHub Releases.",
+                Toast.LENGTH_LONG
+            ).show()
+            return
+        }
         if (!prootBootstrap.isInstalled) {
             showUbuntuInstallDialog = true
             return
@@ -1028,6 +1086,24 @@ class MainActivity : ComponentActivity() {
             )
         }
 
+        /* Phase 41 fix (CRIT-02): SSH Host Key Change blocking dialog.
+         * Muncul saat fingerprint server berubah (potential MITM).
+         * User HARUS actively choose — tidak ada auto-approve. */
+        _sshHostKeyDialogState.value?.let { dialogState ->
+            SshHostKeyChangeDialog(
+                state = dialogState,
+                theme = currentTheme,
+                onDismiss = {
+                    _sshHostKeyDialogState.value = null
+                    dialogState.onResolve(false)
+                },
+                onApprove = {
+                    _sshHostKeyDialogState.value = null
+                    dialogState.onResolve(true)
+                }
+            )
+        }
+
         /* Phase 39 (proot/Ubuntu): Install / manage Linux environment dialog. */
         if (showUbuntuInstallDialog) {
             UbuntuInstallDialog(
@@ -1284,6 +1360,23 @@ class MainActivity : ComponentActivity() {
                         val fileName = cmd.removePrefix("open ").trim()
                         resolveAndOpen(fileName, activeExecutor)
                     }
+                    /* Phase 43 fix (LOW-04): Intercept systemctl/service di tab Ubuntu.
+                     * Tampilkan workaround langsung di terminal supaya user tidak perlu
+                     * buka GitHub untuk tahu solusi. */
+                    activeExecutor.sessionType == "ubuntu" &&
+                        (cmd.startsWith("systemctl ") || cmd.startsWith("service ")) -> {
+                        activeExecutor.emulator.process(
+                            "\n\u001B[33m[INFO] systemctl/service tidak didukung di proot (tidak ada systemd).\u001B[0m\n" +
+                            "\u001B[36mWorkaround: jalankan servis manual sebagai proses biasa.\u001B[0m\n" +
+                            "\u001B[36mContoh:\u001B[0m\n" +
+                            "  nginx -g \"daemon off;\" &\n" +
+                            "  sshd -D &\n" +
+                            "  cron -f &\n" +
+                            "  mysqld_safe &\n\n" +
+                            "\u001B[36mAtau install supervisor: apt install supervisor && supervisord\u001B[0m\n\n"
+                        )
+                        activeExecutor.triggerScreenUpdate()
+                    }
                     else -> {
                         /* Phase 40 fix (A1): Jangan kirim full command lagi — karakter
                          * sudah dikirim char-by-char via onValueChange (soft keyboard
@@ -1459,6 +1552,9 @@ class MainActivity : ComponentActivity() {
                         tabs = tabsData, activeTabId = activeExecutorId,
                         onTabSelected = {
                             activeExecutorId = it
+                            /* Phase 43 fix (HIGH-05): Update session aktif di PermissionManager
+                             * supaya permission "Always Allow" di-scope per-tab. */
+                            permissionManager.setActiveSession(it)
                             /* Phase 19.5: currentCommandBuffer & historyIndex sekarang per-tab
                              * (disimpan di ShellExecutor), tidak perlu reset di sini. */
                         },
@@ -1468,8 +1564,12 @@ class MainActivity : ComponentActivity() {
                         onOpenFileExplorer = { showFileExplorer = true },
                         onOpenWorkspace = { showWorkspaceDrawer = true },
                         onOpenSsh = { showSshDialog = true },
+                        /* Phase 41 fix (CRIT-04): Sembunyikan tombol Ubuntu di playstore flavor.
+                         * ubuntuInstalled=true supaya dot indikator tidak muncul (karena feature
+                         * memang tidak ada, bukan "belum diinstall"). */
                         onOpenUbuntu = { lifecycleScope.launch { createUbuntuTab() } },
-                        ubuntuInstalled = prootBootstrap.isInstalled,
+                        ubuntuInstalled = if (com.tunnel.terminal.BuildConfig.ENABLE_PROOT) prootBootstrap.isInstalled else true,
+                        ubuntuEnabled = com.tunnel.terminal.BuildConfig.ENABLE_PROOT,
                         onToggleSplit = {
                             splitMode = !splitMode
                             if (splitMode) {
@@ -1633,7 +1733,14 @@ class MainActivity : ComponentActivity() {
                                         drawerState.open()
                                     }
                                 },
-                                onToggleCollapse = { id -> blockManager.toggleCollapse(id) }
+                                onToggleCollapse = { id -> blockManager.toggleCollapse(id) },
+                                /* Phase 44 fix (MED-02): Pinch-to-zoom sekarang jalan di Block Mode. */
+                                fontSizeState = terminalFontSize,
+                                onFontSizeChange = {
+                                    terminalFontSize = it
+                                    getSharedPreferences("TunnelUI", Context.MODE_PRIVATE)
+                                        .edit().putFloat("fontSize", it).apply()
+                                }
                             )
                         }
                     } else {

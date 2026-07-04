@@ -1,6 +1,6 @@
 # Tunnel Terminal — Panduan Penggunaan Lengkap
 
-**Versi:** 5.1.0 | **Platform:** Android 7.0+ (API 24+)
+**Versi:** 6.3.0 (Phase 41) | **Platform:** Android 7.0+ (API 24+) | **ABI:** arm64-v8a
 
 ---
 
@@ -396,7 +396,7 @@ Di AI chat input, ketik `@` untuk mention context:
 |---------|-------------|
 | `@file:/sdcard/test.txt` | Isi file (max 5000 chars) |
 | `@block:3` | Output command block ke-3 |
-| `@command:"ls -la"` | Note: command (stub — jalankan manual) |
+| `@command:"ls -la"` | Execute command via MarkerExecutor + attach output (with exit code) as context |
 | `@terminal` | Output terminal aktif (max 3000 chars) |
 | `@snippet:my_workflow` | Saved snippet |
 
@@ -450,11 +450,71 @@ Ketik `@` → suggestions muncul (file, block, snippet, dll)
 
 - First connect: host key di-accept (TOFU — Trust On First Use)
 - Subsequent: host key diverifikasi
-- Jika key berubah → warning (potential MITM)
+- Jika key berubah → dialog blocking muncul dengan fingerprint lama vs baru (Phase 41 fix).
+  User harus actively pilih [Batalkan] (default, aman) atau [Lanjutkan — tidak disarankan].
 
 ---
 
-## 13. Code Editor
+## 13. Linux Environment (Ubuntu via proot)
+
+> ⭐ **Fitur unggulan Phase 38-39** — Jalankan Ubuntu 24.04 asli di Android tanpa root.
+
+### Cara Kerja
+
+Tunnel Terminal menambahkan jalur ketiga di samping Local shell dan SSH: jalankan
+proot + Ubuntu rootfs. PTY layer yang sama (`native-lib.cpp` → `forkpty()`) digunakan,
+hanya target exec yang berbeda (`execve("<proot>", ...)` alih-alih `/system/bin/sh`).
+
+### Instalasi
+
+1. Tap tombol 🐧 di TabBar (sebelah tombol 🔌 SSH)
+2. Dialog instalasi muncul → tap **Install**
+3. App akan:
+   - Salin binary `proot` dari assets APK ke storage app
+   - Cek storage cukup (minimal 1.5GB free)
+   - Download Ubuntu Base rootfs (~30-60MB) dari cdimage.ubuntu.com (dengan fallback URL)
+   - Ekstrak rootfs via `/system/bin/tar`
+   - Setup DNS (8.8.8.8 / 1.1.1.1)
+   - Validasi binary proot (`proot --version`)
+4. Setelah selesai, tab Ubuntu terbuka otomatis
+
+### Penggunaan
+
+```bash
+# Setelah tab Ubuntu terbuka:
+whoami          # root (proot fake-root dengan -0)
+uname -a        # Linux ... Ubuntu 24.04 ...
+apt update
+DEBIAN_FRONTEND=noninteractive apt-get install -y git python3 nodejs
+git clone https://github.com/your/repo
+cd repo && python3 main.py
+```
+
+### Troubleshooting Proot
+
+| Masalah | Solusi |
+|---------|--------|
+| Sesi mati dalam <2 detik | App auto-retry dengan `PROOT_NO_SECCOMP=1`. Restart sekali lagi. |
+| `apt update` gagal resolve host | DNS di-refresh tiap start sesi. Restart tab. |
+| `systemctl start nginx` tidak jalan | proot tidak support systemd. Jalankan manual: `nginx -g "daemon off;" &` |
+| Storage penuh saat `apt install` | Uninstall Linux Environment (Manage → Uninstall), lalu install ulang |
+| Performa lambat untuk compile C++ | Overhead ptrace proot signifikan. Cocok untuk pakai tool, kurang untuk compile project besar |
+
+### Uninstall
+
+1. Command Palette (Ctrl+K) → "Manage Linux Environment"
+2. Tap **Uninstall**
+3. Semua file rootfs + binary proot dihapus dari storage app
+
+### Catatan Distribusi
+
+⚠️ Fitur ini tidak kompatibel dengan Google Play Store (download+exec binary native
+saat runtime melanggar kebijakan). Build "Full" (GitHub Releases/F-Droid) memiliki
+fitur ini; build "playstore" menyembunyikan tombol 🐧 dan menonaktifkan fungsi.
+
+---
+
+## 14. Code Editor
 
 ### Membuka Editor
 

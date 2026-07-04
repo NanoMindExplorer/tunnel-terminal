@@ -221,6 +221,12 @@ class ToolExecutor(private val context: Context) {
  *
  * Phase 22: Permission flow (like Claude Code).
  * User approve/deny sebelum AI run destructive tools.
+ *
+ * Phase 43 fix (HIGH-05): Permission scope PER-SESSION (tab).
+ * OLD BUG: "Always Allow" untuk write_file bersifat GLOBAL — user yang approve
+ * di tab Local ikut approve di tab SSH/Ubuntu (konteks risiko berbeda).
+ * FIX: Sertakan sessionId di key permission: "tool_<sessionId>_<tool>".
+ * Saat pindah tab, permission "Always Allow" dari tab lain tidak berlaku.
  */
 class PermissionManager(context: Context) {
     private val prefs = context.getSharedPreferences("TunnelPermissions", Context.MODE_PRIVATE)
@@ -232,13 +238,25 @@ class PermissionManager(context: Context) {
      * jika AI di-inject via indirect prompt injection. */
     private val alwaysDenyAlwaysAllow = setOf("run_command", "delete_file")
 
-    /** Get permission state for tool. */
+    /** Session ID aktif saat ini. Diperbarui saat user pindah tab. */
+    @Volatile
+    private var activeSessionId: Int = 0
+
+    /** Update session ID aktif (dipanggil saat user pindah tab). */
+    fun setActiveSession(sessionId: Int) {
+        activeSessionId = sessionId
+    }
+
+    /** Build permission key dengan scope session. */
+    private fun permissionKey(tool: String): String = "tool_${activeSessionId}_$tool"
+
+    /** Get permission state for tool (scoped ke session aktif). */
     fun getPermission(tool: String): PermissionState {
-        val state = prefs.getString("tool_$tool", PermissionState.ASK.name)
+        val state = prefs.getString(permissionKey(tool), PermissionState.ASK.name)
         return runCatching { PermissionState.valueOf(state!!) }.getOrDefault(PermissionState.ASK)
     }
 
-    /** Set permission state for tool.
+    /** Set permission state for tool (scoped ke session aktif).
      * BUG-01 fix: Tolak ALWAYS_ALLOW untuk run_command/delete_file. */
     fun setPermission(tool: String, state: PermissionState) {
         val effectiveState = if (tool in alwaysDenyAlwaysAllow && state == PermissionState.ALWAYS_ALLOW) {
@@ -246,7 +264,7 @@ class PermissionManager(context: Context) {
         } else {
             state
         }
-        prefs.edit().putString("tool_$tool", effectiveState.name).apply()
+        prefs.edit().putString(permissionKey(tool), effectiveState.name).apply()
     }
 
     /** Check if tool call needs permission prompt. */
@@ -268,9 +286,13 @@ class PermissionManager(context: Context) {
     /** BUG-01 fix: Check apakah tool boleh di-"Always Allow". */
     fun canAlwaysAllow(tool: String): Boolean = tool !in alwaysDenyAlwaysAllow
 
-    /** Reset all permissions to ASK. */
+    /** Reset all permissions to ASK (untuk session aktif). */
     fun resetAll() {
-        prefs.edit().clear().apply()
+        /* Phase 43 fix: Hanya reset permission untuk session aktif, bukan semua session. */
+        val keysToRemove = prefs.all.keys.filter { it.startsWith("tool_${activeSessionId}_") }
+        val editor = prefs.edit()
+        keysToRemove.forEach { editor.remove(it) }
+        editor.apply()
     }
 }
 

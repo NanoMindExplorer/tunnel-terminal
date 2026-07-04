@@ -139,6 +139,7 @@ class ProotBootstrap(private val context: Context) {
         // 2. Salin shared libraries proot (libtalloc.so.2, libandroid-shmem.so).
         listener.onProgress("Menyiapkan proot libraries", 0)
         libDir.mkdirs()
+        val missingLibs = mutableListOf<String>()
         for (libName in PROOT_LIBS) {
             try {
                 context.assets.open("$ASSET_PROOT_LIB_DIR/$libName").use { input ->
@@ -147,9 +148,18 @@ class ProotBootstrap(private val context: Context) {
                 Log.i(TAG, "Library $libName disalin ke ${libDir.absolutePath}")
             } catch (e: Exception) {
                 Log.w(TAG, "Library $libName tidak ditemukan di assets — proot mungkin akan gagal jalan: ${e.message}")
-                /* Tidak throw — biarkan tetap install, error akan muncul saat proot dijalankan
-                 * kalau ternyata lib dibutuhkan tapi tidak ada. */
+                missingLibs.add(libName)
+                /* Phase 43 fix (MED-07): Track lib yang missing — akan di-warning ke user
+                 * SEBELUM proot dijalankan, bukan menunggu error generik "Exec format error". */
             }
+        }
+        /* Phase 43 fix (MED-07): Tulis file manifest lib yang missing supaya
+         * ProotShellExecutor bisa tampilkan pesan jelas saat start gagal. */
+        if (missingLibs.isNotEmpty()) {
+            File(baseDir, ".missing_libs").writeText(missingLibs.joinToString("\n"))
+            Log.w(TAG, "Missing libs: $missingLibs — proot mungkin tidak akan jalan")
+        } else {
+            File(baseDir, ".missing_libs").delete()
         }
         listener.onProgress("Menyiapkan proot libraries", 100)
 

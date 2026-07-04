@@ -13,6 +13,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -193,7 +194,11 @@ fun BlockTerminalView(
     onBlockClick: (CommandBlock) -> Unit = {},
     onBlockRerun: (CommandBlock) -> Unit = {},
     onBlockExplain: (CommandBlock) -> Unit = {},
-    onToggleCollapse: (Long) -> Unit = {}
+    onToggleCollapse: (Long) -> Unit = {},
+    /* Phase 44 fix (MED-02): Pinch-to-zoom support di Block Mode.
+     * Sebelumnya pinch-zoom hanya jalan di raw mode — inkonsistensi UX. */
+    fontSizeState: Float = 12f,
+    onFontSizeChange: (Float) -> Unit = {}
 ) {
     val scrollState = androidx.compose.foundation.rememberScrollState()
 
@@ -203,6 +208,15 @@ fun BlockTerminalView(
             .background(theme.background)
             .verticalScroll(scrollState)
             .padding(8.dp)
+            /* Phase 44 fix (MED-02): Tambah pinch-to-zoom gesture detector. */
+            .pointerInput(Unit) {
+                androidx.compose.foundation.gestures.detectTransformGestures { _, _, zoom, _ ->
+                    val newFont = (fontSizeState * zoom).coerceIn(8f, 24f)
+                    if (newFont != fontSizeState) {
+                        onFontSizeChange(newFont)
+                    }
+                }
+            }
     ) {
         if (blocks.isEmpty()) {
             Text(

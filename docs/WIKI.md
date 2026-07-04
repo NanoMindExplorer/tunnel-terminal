@@ -1,6 +1,6 @@
 # Tunnel Terminal — Wiki
 
-**Versi:** 5.1.0 (Phase 31)
+**Versi:** 6.3.0 (Phase 41 — Security & Privacy)
 **Repo:** https://github.com/NanoMindExplorer/tunnel-terminal
 
 ---

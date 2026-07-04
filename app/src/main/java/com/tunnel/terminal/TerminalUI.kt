@@ -63,6 +63,8 @@ fun TabBar(
     isBlockMode: Boolean = false,
     onOpenUbuntu: () -> Unit = {},
     ubuntuInstalled: Boolean = true,
+    /* Phase 41 fix (CRIT-04): Flag untuk sembunyikan tombol Ubuntu di playstore flavor. */
+    ubuntuEnabled: Boolean = true,
     theme: TerminalTheme = ThemeManager.defaultTheme
 ) {
     LazyRow(
@@ -107,26 +109,29 @@ fun TabBar(
             }
         }
         /* Phase 38 (proot/Ubuntu): Ubuntu (Linux Environment) button.
-         * Icon pakai penguin 🐧 + dot indikator install state. */
-        item {
-            Box(
-                modifier = Modifier
-                    .background(
-                        if (ubuntuInstalled) theme.uiSurface else theme.uiBg,
-                        RoundedCornerShape(4.dp)
-                    )
-                    .clickable { onOpenUbuntu() }
-                    .padding(horizontal = 10.dp, vertical = 10.dp)
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("🐧", color = theme.uiText, fontSize = 12.sp)
-                    if (!ubuntuInstalled) {
-                        Spacer(modifier = Modifier.width(3.dp))
-                        Box(
-                            modifier = Modifier
-                                .size(6.dp)
-                                .background(theme.uiAccent, CircleShape)
+         * Icon pakai penguin 🐧 + dot indikator install state.
+         * Phase 41 fix (CRIT-04): Disembunyikan di playstore flavor (ubuntuEnabled=false). */
+        if (ubuntuEnabled) {
+            item {
+                Box(
+                    modifier = Modifier
+                        .background(
+                            if (ubuntuInstalled) theme.uiSurface else theme.uiBg,
+                            RoundedCornerShape(4.dp)
                         )
+                        .clickable { onOpenUbuntu() }
+                        .padding(horizontal = 10.dp, vertical = 10.dp)
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("🐧", color = theme.uiText, fontSize = 12.sp)
+                        if (!ubuntuInstalled) {
+                            Spacer(modifier = Modifier.width(3.dp))
+                            Box(
+                                modifier = Modifier
+                                    .size(6.dp)
+                                    .background(theme.uiAccent, CircleShape)
+                            )
+                        }
                     }
                 }
             }
@@ -1274,6 +1279,18 @@ fun UbuntuInstallDialog(
     val rootfsMb = remember(installed) {
         if (installed) bootstrap.getRootfsSizeMb() else 0
     }
+    /* Phase 43 fix (LOW-03): Tampilkan status SECCOMP mode (normal vs fallback). */
+    val seccompPrefs = remember(installed) {
+        runCatching {
+            bootstrap.let {
+                val ctx = it.javaClass.getDeclaredField("context")
+                ctx.isAccessible = true
+                (ctx.get(it) as android.content.Context)
+                    .getSharedPreferences("TunnelLinux", android.content.Context.MODE_PRIVATE)
+                    .getBoolean("proot_no_seccomp", false)
+            }
+        }.getOrDefault(false)
+    }
 
     AlertDialog(
         onDismissRequest = { if (!installing) onDismiss() },
@@ -1313,6 +1330,16 @@ fun UbuntuInstallDialog(
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                         Text("Status:", color = theme.uiTextMuted, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
                         Text("✓ Installed", color = Color(0xFF4CAF50), fontSize = 11.sp, fontFamily = FontFamily.Monospace)
+                    }
+                    /* Phase 43 fix (LOW-03): Tampilkan SECCOMP mode untuk debugging. */
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text("SECCOMP mode:", color = theme.uiTextMuted, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
+                        Text(
+                            if (seccompPrefs) "⚠ Fallback (PROOT_NO_SECCOMP=1)" else "Normal",
+                            color = if (seccompPrefs) Color(0xFFFFAB00) else Color(0xFF4CAF50),
+                            fontSize = 11.sp,
+                            fontFamily = FontFamily.Monospace
+                        )
                     }
                 } else {
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
@@ -1413,6 +1440,124 @@ fun UbuntuInstallDialog(
                 TextButton(onClick = onDismiss) {
                     Text("Cancel", color = theme.uiTextMuted, fontFamily = FontFamily.Monospace)
                 }
+            }
+        }
+    )
+}
+
+/**
+ * Phase 41 fix (CRIT-02): Dialog blocking untuk SSH host key change.
+ *
+ * Muncul saat fingerprint server SSH berubah sejak koneksi terakhir kali.
+ * Potensi penyebab: server reinstall, server pindah IP, atau serangan MITM.
+ *
+ * User HARUS actively choose:
+ *  - [Batalkan] (default, dismissible) → koneksi dibatalkan, fingerprint lama dipertahankan
+ *  - [Tetap lanjutkan — tidak disarankan] → koneksi diteruskan, fingerprint diperbarui
+ *
+ * Tidak ada auto-approve. User awam yang tidak paham risiko akan default ke "Batalkan"
+ * (paling aman). User yang tahu server mereka berubah bisa pilih lanjutkan.
+ */
+@Composable
+fun SshHostKeyChangeDialog(
+    state: SshHostKeyDialogState,
+    theme: TerminalTheme,
+    onDismiss: () -> Unit,
+    onApprove: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,  /* dismiss = reject (default safe behavior) */
+        modifier = Modifier.background(theme.uiBg),
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("⚠️ ", color = Color(0xFFFF5252), fontSize = 20.sp)
+                Text(
+                    "Peringatan Keamanan SSH",
+                    color = theme.uiText,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 16.sp
+                )
+            }
+        },
+        text = {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                Text(
+                    "Host key untuk server ${state.host} telah BERUBAH sejak koneksi terakhir Anda.",
+                    color = theme.uiText,
+                    fontSize = 12.sp,
+                    fontFamily = FontFamily.Monospace
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    "Ini bisa berarti:",
+                    color = theme.uiTextMuted,
+                    fontSize = 11.sp,
+                    fontFamily = FontFamily.Monospace
+                )
+                Text(
+                    "• Server di-reinstall/diganti (aman)\n" +
+                    "• Server pindah IP/host (perlu verifikasi)\n" +
+                    "• Serangan Man-in-the-Middle (BERBAHAYA)",
+                    color = theme.uiTextMuted,
+                    fontSize = 11.sp,
+                    fontFamily = FontFamily.Monospace
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+
+                /* Fingerprint comparison */
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    color = Color(0x33FF5252),
+                    shape = RoundedCornerShape(4.dp)
+                ) {
+                    Column(modifier = Modifier.padding(8.dp)) {
+                        Text(
+                            "Fingerprint LAMA:",
+                            color = theme.uiTextMuted,
+                            fontSize = 10.sp,
+                            fontFamily = FontFamily.Monospace
+                        )
+                        Text(
+                            state.oldFingerprint.take(80) + if (state.oldFingerprint.length > 80) "..." else "",
+                            color = Color(0xFFFFAB00),
+                            fontSize = 9.sp,
+                            fontFamily = FontFamily.Monospace
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            "Fingerprint BARU:",
+                            color = theme.uiTextMuted,
+                            fontSize = 10.sp,
+                            fontFamily = FontFamily.Monospace
+                        )
+                        Text(
+                            state.newFingerprint.take(80) + if (state.newFingerprint.length > 80) "..." else "",
+                            color = Color(0xFFFF5252),
+                            fontSize = 9.sp,
+                            fontFamily = FontFamily.Monospace
+                        )
+                    }
+                }
+                Spacer(modifier = Modifier.height(12.dp))
+                Text(
+                    "Jika Anda TIDAK yakin server Anda berubah, pilih BATALKAN untuk keamanan.",
+                    color = Color(0xFFFF5252),
+                    fontSize = 11.sp,
+                    fontFamily = FontFamily.Monospace,
+                    fontStyle = androidx.compose.ui.text.font.FontStyle.Italic
+                )
+            }
+        },
+        confirmButton = {
+            /* Default (Enter) = Batalkan. Tombol "Lanjutkan" tidak default — user harus
+             * actively click, mengakui risk. */
+            TextButton(onClick = onDismiss) {
+                Text("Batalkan", color = Color(0xFFFF5252), fontFamily = FontFamily.Monospace)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onApprove) {
+                Text("Lanjutkan (tidak disarankan)", color = theme.uiTextMuted, fontFamily = FontFamily.Monospace)
             }
         }
     )

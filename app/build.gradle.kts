@@ -11,16 +11,41 @@ android {
         applicationId = "com.tunnel.terminal"
         minSdk = 24
         targetSdk = 34
-        // Phase 38-39: proot + Ubuntu Linux environment (createSessionExec + ProotBootstrap + ProotShellExecutor)
-        // Phase 40: Fix all 42 audit bugs (A1-A4, H1-H10, M1-M13, L1-L15)
-        versionCode = 27
-        versionName = "6.2.0-phase40-audit-fixes"
+        // Phase 41: Security & Privacy fixes (CRIT-01..04, LOW-02)
+        versionCode = 28
+        versionName = "6.3.0-phase41-security"
 
         /* Phase 40 fix (M10): Restrict ke arm64-v8a saja — proot binary di assets
          * hanya arm64. Tanpa abiFilters, APK universal akan crash di device x86_64
          * karena proot arm64 tidak bisa exec. */
         ndk {
             abiFilters += listOf("arm64-v8a")
+        }
+    }
+
+    /* Phase 41 fix (CRIT-04): Product flavors untuk distribusi dual-channel.
+     *
+     * - "full" (default): Semua fitur termasuk proot/Ubuntu. Untuk GitHub Releases/F-Droid.
+     *   Fitur proot didownload+exec runtime → melanggar Play Store policy.
+     *
+     * - "playstore": Exclude kode path proot (ProotBootstrap, ProotShellExecutor) +
+     *   assets/proot. Aman untuk Play Store, tapi fitur 🐧 dinonaktifkan.
+     *
+     * Build command:
+     *   ./gradlew assembleFullRelease      → APK untuk GitHub/F-Droid (dengan proot)
+     *   ./gradlew assemblePlaystoreRelease → APK untuk Play Store (tanpa proot)
+     */
+    flavorDimensions += "distribution"
+    productFlavors {
+        create("full") {
+            dimension = "distribution"
+            /* Default — semua fitur aktif. */
+            buildConfigField("Boolean", "ENABLE_PROOT", "true")
+        }
+        create("playstore") {
+            dimension = "distribution"
+            /* Exclude assets/proot folder dari playstore build. */
+            buildConfigField("Boolean", "ENABLE_PROOT", "false")
         }
     }
 
@@ -42,6 +67,7 @@ android {
     }
     buildFeatures {
         compose = true
+        buildConfig = true
     }
     composeOptions {
         kotlinCompilerExtensionVersion = "1.5.1"
@@ -80,6 +106,10 @@ dependencies {
 
     // Phase 17: DocumentFile untuk Storage Access Framework (StorageManager)
     implementation("androidx.documentfile:documentfile:1.0.1")
+
+    // Phase 41 fix (CRIT-01): EncryptedSharedPreferences untuk menyimpan API key &
+    // SSH credentials secara aman (sebelumnya plaintext di SharedPreferences).
+    implementation("androidx.security:security-crypto:1.1.0-alpha06")
 
     // BUG-21 fix: Update JSch dari 0.2.17 ke 0.2.21 (versi terbaru mwiede fork)
     implementation("com.github.mwiede:jsch:0.2.21")

@@ -218,6 +218,57 @@ class TerminalEmulator(private val themeHolder: ThemeHolder = ThemeHolder()) {
         }
     }
 
+    /**
+     * Phase 44 fix (MED-01): Recolor semua sel yang masih pakai warna default tema lama
+     * ke warna default tema baru. Dipanggil saat user ganti tema.
+     *
+     * OLD BUG: Sel yang ditulis dengan defaultFg/defaultBg (sebagian besar sel biasa)
+     * menyimpan referensi warna dari tema saat sel itu ditulis. Ganti tema hanya
+     * mengubah defaultFg/defaultBg untuk sel BARU — sel lama tetap warna lama →
+     * layar "belang" sampai user ketik `clear`.
+     *
+     * FIX: Iterasi seluruh screen + altScreen. Untuk sel yang fgColor/bgColor-nya
+     * sama dengan warna default tema LAMA, remap ke warna default tema BARU.
+     * Sel yang sudah di-override lewat SGR eksplisit (mis. merah untuk error)
+     * tidak diubah — preserve user intent.
+     *
+     * Catatan: Ini best-effort. Kalau warna default lama kebetulan sama dengan
+     * warna SGR eksplisit, sel itu akan ikut di-remap (false positive). Tapi
+     * untuk use case umum (tema gelap→terang atau sebaliknya), ini cukup baik.
+     */
+    fun recolorForTheme(oldFg: Color, oldBg: Color) = synchronized(lock) {
+        val newFg = defaultFg
+        val newBg = defaultBg
+        for (row in screen.indices) {
+            for (col in screen[row].indices) {
+                val cell = screen[row][col]
+                var changed = false
+                if (cell.fgColor == oldFg) { cell.fgColor = newFg; changed = true }
+                if (cell.bgColor == oldBg) { cell.bgColor = newBg; changed = true }
+                /* Jika cell reverse video, swap fg/bg juga ikut default — remap. */
+                if (cell.reverse) {
+                    if (cell.fgColor == oldBg) cell.fgColor = newBg
+                    if (cell.bgColor == oldFg) cell.bgColor = newFg
+                }
+                if (changed) screen[row][col] = cell
+            }
+        }
+        /* Apply ke altScreen juga. */
+        altScreen?.let { alt ->
+            for (row in alt.indices) {
+                for (col in alt[row].indices) {
+                    val cell = alt[row][col]
+                    if (cell.fgColor == oldFg) cell.fgColor = newFg
+                    if (cell.bgColor == oldBg) cell.bgColor = newBg
+                    if (cell.reverse) {
+                        if (cell.fgColor == oldBg) cell.fgColor = newBg
+                        if (cell.bgColor == oldFg) cell.bgColor = newFg
+                    }
+                }
+            }
+        }
+    }
+
     private fun processInternal(data: String) {
         /* Prepend pending buffer dari process() sebelumnya.
          * Prepend pending buffer from previous process() call. */

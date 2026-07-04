@@ -20,3 +20,15 @@ local.properties
 # OS
 .DS_Store
 Thumbs.db
+
+# Native build intermediates (LOW-02)
+.cxx/
+.externalNativeBuild/
+
+# Phase 41 fix (CRIT-03): proot binary — obtain manually, lihat
+# app/src/main/assets/proot/README.md untuk cara mendapatkannya.
+# Jangan commit binary native ke repo publik (lisensi + ukuran).
+app/src/main/assets/proot/proot
+app/src/main/assets/proot/*.so
+app/src/main/assets/proot/*.so.*
+app/src/main/assets/proot/lib/

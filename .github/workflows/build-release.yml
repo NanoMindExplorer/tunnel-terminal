@@ -1,0 +1,116 @@
+name: Build & Release APK
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag name for release (e.g. v6.3.0)'
+        required: true
+        default: 'v6.3.0'
+
+jobs:
+  build:
+    name: Build APK (Full flavor)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: 'ndk;25.1.8937393 cmake;3.22.1'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
+
+      - name: Obtain proot binary from Termux package
+        run: |
+          # Phase 42 (HIGH-02): Auto-obtain proot binary for release build.
+          # Maintainer tidak perlu manual obtain — CI lakukan otomatis.
+          mkdir -p app/src/main/assets/proot/lib
+
+          # Download proot .deb from Termux packages (arm64)
+          # Cari versi terbaru dari packages.termux.dev
+          echo "Downloading proot .deb from Termux packages..."
+          DEB_URL=$(curl -s "https://packages.termux.dev/apt/termux-main/pool/main/p/proot/" | \
+            grep -oE 'proot_[0-9][^"]*_aarch64.deb' | sort -V | tail -1)
+          if [ -z "$DEB_URL" ]; then
+            echo "ERROR: Could not find proot aarch64 .deb"
+            exit 1
+          fi
+          echo "Found: $DEB_URL"
+          curl -L -o proot.deb "https://packages.termux.dev/apt/termux-main/pool/main/p/proot/$DEB_URL"
+
+          # Extract .deb (ar archive containing data.tar.xz)
+          ar x proot.deb
+          tar -xf data.tar.xz
+
+          # Copy proot binary
+          cp ./data/data/com.termux/files/usr/bin/proot app/src/main/assets/proot/proot
+          chmod 755 app/src/main/assets/proot/proot
+
+          # Copy shared lib dependencies (libtalloc.so.2, libandroid-shmem.so)
+          cp ./data/data/com.termux/files/usr/lib/libtalloc.so.2 app/src/main/assets/proot/lib/ 2>/dev/null || true
+          cp ./data/data/com.termux/files/usr/lib/libandroid-shmem.so app/src/main/assets/proot/lib/ 2>/dev/null || true
+
+          # Verify
+          file app/src/main/assets/proot/proot
+          ls -la app/src/main/assets/proot/lib/
+
+      - name: Build Full Release APK
+        run: ./gradlew assembleFullRelease --no-daemon
+
+      - name: Sign APK
+        uses: r0adkll/sign-android-release@v1
+        id: sign_apk
+        with:
+          releaseDirectory: app/build/outputs/apk/full/release
+          signingKeyBase64: ${{ secrets.SIGNING_KEY_BASE64 }}
+          alias: ${{ secrets.KEY_ALIAS }}
+          keyStorePassword: ${{ secrets.KEYSTORE_PASSWORD }}
+          keyPassword: ${{ secrets.KEY_PASSWORD }}
+        env:
+          BUILD_TOOLS_VERSION: "33.0.1"
+
+      - name: Rename APK
+        run: |
+          mv ${{ steps.sign_apk.outputs.signedReleaseFile }} \
+             tunnel-terminal-${{ github.event.inputs.tag || github.ref_name }}-full-arm64.apk
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          name: Tunnel Terminal ${{ github.event.inputs.tag || github.ref_name }}
+          body: |
+            # Tunnel Terminal ${{ github.event.inputs.tag || github.ref_name }}
+
+            ## Installation
+            1. Download the APK file below
+            2. Enable "Install from unknown sources" in Android settings
+            3. Tap the APK to install
+
+            ## What's new
+            - See [CHANGELOG](https://github.com/NanoMindExplorer/tunnel-terminal/blob/main/README.md#phase-history)
+
+            ## Notes
+            - This is the **Full** build (includes Ubuntu Linux Environment feature)
+            - Not compatible with Google Play Store (proot policy)
+            - Target ABI: arm64-v8a only
+          files: |
+            tunnel-terminal-*.apk
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

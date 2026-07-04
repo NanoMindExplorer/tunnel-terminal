@@ -39,6 +39,21 @@ data class SshConnectionConfig(
 )
 
 /**
+ * Phase 41 fix (CRIT-02): State untuk SSH host key change blocking dialog.
+ *
+ * Saat fingerprint server berubah (potential MITM), dialog ini harus tampil
+ * dan user harus actively approve/reject sebelum koneksi diteruskan.
+ * Default = reject (paling aman).
+ */
+data class SshHostKeyDialogState(
+    val host: String,
+    val oldFingerprint: String,
+    val newFingerprint: String,
+    /** Dipanggil saat user pilih tombol. true = lanjutkan (risky), false = batalkan. */
+    val onResolve: (Boolean) -> Unit
+)
+
+/**
  * SshShellExecutor - Remote SSH terminal session using JSch.
  *
  * Phase 21: SSH client implementation. Implements TerminalSession interface
@@ -58,7 +73,10 @@ data class SshConnectionConfig(
 class SshShellExecutor(
     private val themeHolder: ThemeHolder,
     private val config: SshConnectionConfig,
-    private val context: Context? = null
+    private val context: Context? = null,
+    /** Phase 41 fix (CRIT-02): Callback untuk konfirmasi user saat host key berubah.
+     *  Return true = user pilih "Tetap lanjutkan" (tidak disarankan), false = batalkan. */
+    private val hostKeyChangeCallback: ((oldKey: String, newKey: String) -> Boolean)? = null
 ) : TerminalSession {
     private val tag = "SshShellExecutor"
 
@@ -169,15 +187,46 @@ class SshShellExecutor(
                         hostKeyPrefs?.edit()?.putString(hostKeyId, actualFingerprint)?.apply()
                         Log.i(tag, "SSH TOFU: First connect to $hostKeyId, fingerprint saved")
                     } else if (knownFingerprint != actualFingerprint) {
-                        /* FINGERPRINT BERUBAH — potensi MITM! Disconnect segera. */
-                        session?.disconnect()
-                        throw SecurityException(
-                            "PERINGATAN KEAMANAN: Host key untuk ${config.host}:${config.port} telah berubah!\n" +
-                            "Ini bisa berarti server diganti, atau ada serangan Man-in-the-Middle.\n" +
-                            "Fingerprint sebelumnya: $knownFingerprint\n" +
-                            "Fingerprint sekarang: $actualFingerprint\n" +
-                            "Jika Anda yakin ini aman, ketik 'ssh-reset-hostkeys' di terminal untuk reset host keys."
-                        )
+                        /* Phase 41 fix (CRIT-02): FINGERPRINT BERUBAH — tampilkan dialog blocking
+                         * ke user, BUKAN cuma throw exception yang di-log.
+                         *
+                         * OLD BUG: throw SecurityException → user lihat error message tapi
+                         * connection sudah di-disconnect sebelum user bisa konfirmasi. User
+                         * awam tidak akan sadar ada kemungkinan MITM.
+                         *
+                         * FIX: Panggil hostKeyChangeCallback (blocking) → UI tampilkan dialog
+                         * dengan fingerprint lama vs baru + tombol [Batalkan] (default) /
+                         * [Tetap lanjutkan — tidak disarankan]. User harus actively accept
+                         * risk sebelum connection diteruskan.
+                         *
+                         * Kalau callback tidak disediakan (backward compat), fallback ke
+                         * behavior lama (throw exception). */
+                        if (hostKeyChangeCallback != null) {
+                            val userApproved = hostKeyChangeCallback(knownFingerprint, actualFingerprint)
+                            if (!userApproved) {
+                                session?.disconnect()
+                                throw SecurityException(
+                                    "Koneksi dibatalkan oleh user — host key berubah untuk ${config.host}:${config.port}.\n" +
+                                    "Fingerprint lama: $knownFingerprint\n" +
+                                    "Fingerprint baru: $actualFingerprint\n" +
+                                    "Jika ini expected (mis. server reinstall), ketik 'ssh-reset-hostkeys' lalu connect ulang."
+                                )
+                            }
+                            /* User approved — update fingerprint stored. */
+                            hostKeyPrefs?.edit()?.putString(hostKeyId, actualFingerprint)?.apply()
+                            Log.w(tag, "SSH TOFU: User APPROVED host key change for $hostKeyId (potential MITM risk)")
+                            emulator.process("\u001B[33m[SSH] ⚠ Host key berubah — Anda memilih untuk melanjutkan. Fingerprint diperbarui.\u001B[0m\n")
+                        } else {
+                            /* Fallback: tidak ada callback → disconnect + throw (behavior lama). */
+                            session?.disconnect()
+                            throw SecurityException(
+                                "PERINGATAN KEAMANAN: Host key untuk ${config.host}:${config.port} telah berubah!\n" +
+                                "Ini bisa berarti server diganti, atau ada serangan Man-in-the-Middle.\n" +
+                                "Fingerprint sebelumnya: $knownFingerprint\n" +
+                                "Fingerprint sekarang: $actualFingerprint\n" +
+                                "Jika Anda yakin ini aman, ketik 'ssh-reset-hostkeys' di terminal untuk reset host keys."
+                            )
+                        }
                     } else {
                         Log.i(tag, "SSH TOFU: Host key verified for $hostKeyId")
                     }

@@ -148,6 +148,23 @@ class ProotShellExecutor(
                 return@withContext
             }
 
+            /* Phase 43 fix (MED-07): Check missing libs manifest. Kalau ada lib
+             * yang missing saat install, tampilkan pesan jelas SEBELUM exec proot,
+             * bukan tunggu error generik "library not found" dari loader. */
+            val missingLibsFile = java.io.File(bootstrap.baseDir, ".missing_libs")
+            if (missingLibsFile.exists()) {
+                val missingLibs = missingLibsFile.readText().trim()
+                if (missingLibs.isNotEmpty()) {
+                    isAlive = false
+                    emulator.process("\u001B[31m[ERROR] Shared library proot tidak ditemukan di assets APK:\u001B[0m\n")
+                    emulator.process("\u001B[33mMissing: $missingLibs\u001B[0m\n")
+                    emulator.process("\u001B[33mAplikasi mungkin tidak di-build dengan binary proot yang lengkap.\u001B[0m\n")
+                    emulator.process("\u001B[33mLihat app/src/main/assets/proot/README.md untuk cara obtain lib dependencies.\u001B[0m\n")
+                    triggerScreenUpdate()
+                    return@withContext
+                }
+            }
+
             // Build argv untuk proot.
             val argv = mutableListOf(
                 prootPath,
