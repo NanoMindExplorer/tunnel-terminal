@@ -1,6 +1,6 @@
 # Tunnel Terminal
 
-**Tunnel Terminal** adalah terminal Android AI-native yang merevolusi cara developer bekerja di perangkat mobile. Menggabungkan mesin C/C++ NDK (Pseudo-Terminal asli) dengan AI Copilot multi-provider, terminal berbasis blok, command palette, tool calling, **lingkungan Linux Ubuntu asli via proot (tanpa root)**, dan banyak lagi.
+**Tunnel Terminal** adalah terminal Android AI-native yang merubah cara developer bekerja di perangkat mobile. Menggabungkan mesin C/C++ NDK (Pseudo-Terminal asli) dengan AI Copilot multi-provider, terminal berbasis blok, command palette, tool calling, **lingkungan Linux Ubuntu asli via proot (tanpa root)**, dan banyak lagi.
 
 ![Architecture](https://img.shields.io/badge/Architecture-NDK%20%2B%20Jetpack%20Compose-purple)
 ![AI](https://img.shields.io/badge/AI-Multi%20Provider%20%2B%20Vision%20%2B%20MCP-cyan)
