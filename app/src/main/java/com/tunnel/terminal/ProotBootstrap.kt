@@ -13,18 +13,28 @@ import java.net.URL
  * Phase 37 (proot/Ubuntu): Semua data disimpan di context.filesDir/linux/ — private
  * ke app, tidak butuh permission storage apa pun.
  *
+ * Phase 39.1: Updated untuk handle shared library dependencies proot:
+ *  - libtalloc.so.2 (dari package libtalloc Termux)
+ *  - libandroid-shmem.so (dari package libandroid-shmem Termux)
+ * Library-library ini di-bundle di assets/proot/lib/ dan disalin ke baseDir/lib/
+ * saat install. ProotShellExecutor men-set LD_LIBRARY_PATH ke baseDir/lib/.
+ *
  * Alur instalasi:
  *  1. Salin binary `proot` dari assets APK ke filesDir/linux/proot (assets tidak
  *     bisa di-exec langsung, harus disalin dulu + setExecutable).
- *  2. Cek storage cukup (minimal ~1.5GB untuk rootfs + apt cache).
- *  3. Download rootfs Ubuntu Base (tarball .tar.gz) dari cdimage.ubuntu.com.
- *  4. Ekstrak tarball via /system/bin/tar (toybox bawaan Android).
- *  5. Setup /etc/resolv.conf di rootfs supaya DNS jalan (`apt update` bisa resolve).
- *  6. Tulis marker `.installed` supaya `isInstalled` true di launch berikutnya.
+ *  2. Salin library `libtalloc.so.2` + `libandroid-shmem.so` dari assets ke filesDir/linux/lib/.
+ *  3. Cek storage cukup (minimal ~1.5GB untuk rootfs + apt cache).
+ *  4. Download rootfs Ubuntu Base (tarball .tar.gz) dari cdimage.ubuntu.com.
+ *  5. Ekstrak tarball via /system/bin/tar (toybox bawaan Android).
+ *  6. Setup /etc/resolv.conf di rootfs supaya DNS jalan (`apt update` bisa resolve).
+ *  7. Tulis marker `.installed` supaya `isInstalled` true di launch berikutnya.
  *
  * Directory layout (setelah install sukses):
  *   context.filesDir/linux/
  *     ├── proot                   (executable binary, dari assets)
+ *     ├── lib/
+ *     │   ├── libtalloc.so.2      (shared lib untuk proot)
+ *     │   └── libandroid-shmem.so (shared lib untuk proot)
  *     ├── ubuntu/                 (rootfs hasil ekstrak tarball)
  *     │   ├── bin/bash
  *     │   ├── usr/bin/apt
@@ -40,47 +50,32 @@ class ProotBootstrap(private val context: Context) {
     companion object {
         private const val TAG = "ProotBootstrap"
 
-        /**
-         * URL rootfs Ubuntu Base 24.04 (arm64). Format URL konsisten antar versi —
-         * kalau perlu ganti versi, cek https://cdimage.ubuntu.com/ubuntu-base/releases/.
-         *
-         * Catatan: ini cuma contoh untuk arm64. Untuk device x86_64 (emulator),
-         * ganti `arm64` → `amd64` di URL + nama file. TODO: deteksi ABI saat runtime.
-         */
         const val ROOTFS_URL_ARM64 =
             "https://cdimage.ubuntu.com/ubuntu-base/releases/24.04/release/ubuntu-base-24.04.2-base-arm64.tar.gz"
         const val ROOTFS_URL_AMD64 =
             "https://cdimage.ubuntu.com/ubuntu-base/releases/24.04/release/ubuntu-base-24.04.2-base-amd64.tar.gz"
 
-        /** Minimal free space yang dibutuhkan: 1.5GB (rootfs + apt cache + tool dev). */
         const val MIN_FREE_BYTES = 1_500L * 1024 * 1024
 
-        /** Nama binary proot di folder assets. */
         const val ASSET_PROOT_PATH = "proot/proot"
+        /** Folder di assets yang berisi shared libraries proot. */
+        const val ASSET_PROOT_LIB_DIR = "proot/lib"
+        /** Library yang dibutuhkan proot (urutan penting untuk loading). */
+        val PROOT_LIBS = listOf("libtalloc.so.2", "libandroid-shmem.so")
     }
 
-    /** Base directory untuk seluruh instalasi Linux environment. */
     val baseDir = File(context.filesDir, "linux")
-
-    /** Directory rootfs Ubuntu hasil ekstrak. */
     val rootfsDir = File(baseDir, "ubuntu")
-
-    /** Binary proot (disalin dari assets, executable). */
     val prootBin = File(baseDir, "proot")
-
-    /** Marker file — keberadaannya = instalasi sukses. */
+    /** Directory untuk shared libraries proot (libtalloc, libandroid-shmem). */
+    val libDir = File(baseDir, "lib")
     private val markerFile = File(baseDir, ".installed")
-
-    /** Tarball sementara (dihapus setelah ekstrak). */
     private val rootfsTarball = File(baseDir, "rootfs.tar.gz")
 
-    /** True jika instalasi sudah pernah selesai (marker file ada + proot executable). */
     val isInstalled: Boolean
         get() = markerFile.exists() && prootBin.exists() && prootBin.canExecute() && rootfsDir.isDirectory
 
-    /** Pilih URL rootfs berdasarkan ABI device. */
     private fun pickRootfsUrl(): String {
-        /* Cek ABI utama device. arm64-v8a → arm64 rootfs; x86_64 → amd64 rootfs. */
         val abis = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
             android.os.Build.SUPPORTED_ABIS.toList()
         } else {
@@ -96,23 +91,14 @@ class ProotBootstrap(private val context: Context) {
         }
     }
 
-    /** Progress callback: (stage, persen 0-100). */
     fun interface ProgressListener {
         fun onProgress(stage: String, percent: Int)
     }
 
-    /**
-     * Jalankan seluruh proses instalasi. Panggil dari coroutine (Dispatchers.IO) —
-     * ini melakukan I/O jaringan dan disk yang berat, JANGAN panggil dari main thread.
-     *
-     * Throws IllegalStateException pada kegagalan (asset hilang, storage tidak cukup,
-     * download gagal, ekstrak gagal). Caller tangani via try/catch + tampilkan ke UI.
-     */
     suspend fun install(listener: ProgressListener) {
         baseDir.mkdirs()
 
-        // 1. Salin proot dari assets APK ke storage app. Assets tidak executable
-        //    langsung, harus disalin ke filesystem biasa dulu + setExecutable.
+        // 1. Salin proot binary dari assets APK ke storage app.
         listener.onProgress("Menyiapkan proot binary", 0)
         val assetProotBytes = try {
             context.assets.open(ASSET_PROOT_PATH).use { it.readBytes() }
@@ -133,7 +119,24 @@ class ProotBootstrap(private val context: Context) {
         }
         listener.onProgress("Menyiapkan proot binary", 100)
 
-        // 2. Cek storage cukup (perlu minimal 1.5GB bebas untuk rootfs + apt cache).
+        // 2. Salin shared libraries proot (libtalloc.so.2, libandroid-shmem.so).
+        listener.onProgress("Menyiapkan proot libraries", 0)
+        libDir.mkdirs()
+        for (libName in PROOT_LIBS) {
+            try {
+                context.assets.open("$ASSET_PROOT_LIB_DIR/$libName").use { input ->
+                    FileOutputStream(File(libDir, libName)).use { output -> input.copyTo(output) }
+                }
+                Log.i(TAG, "Library $libName disalin ke ${libDir.absolutePath}")
+            } catch (e: Exception) {
+                Log.w(TAG, "Library $libName tidak ditemukan di assets — proot mungkin akan gagal jalan: ${e.message}")
+                /* Tidak throw — biarkan tetap install, error akan muncul saat proot dijalankan
+                 * kalau ternyata lib dibutuhkan tapi tidak ada. */
+            }
+        }
+        listener.onProgress("Menyiapkan proot libraries", 100)
+
+        // 3. Cek storage cukup.
         val freeBytes = baseDir.usableSpace
         if (freeBytes < MIN_FREE_BYTES) {
             throw IllegalStateException(
@@ -143,14 +146,13 @@ class ProotBootstrap(private val context: Context) {
             )
         }
 
-        // 3. Download rootfs tarball dengan progress.
+        // 4. Download rootfs tarball.
         val rootfsUrl = pickRootfsUrl()
         downloadWithProgress(rootfsUrl, rootfsTarball) { percent ->
             listener.onProgress("Mengunduh Ubuntu rootfs", percent)
         }
 
-        // 4. Ekstrak. Pakai tar bawaan Android (toybox) via ProcessBuilder —
-        //    lebih simpel & cepat daripada implementasi tar parser sendiri di Kotlin.
+        // 5. Ekstrak via tar bawaan Android (toybox).
         rootfsDir.mkdirs()
         listener.onProgress("Mengekstrak rootfs", 0)
         val extractProcess = ProcessBuilder(
@@ -158,7 +160,6 @@ class ProotBootstrap(private val context: Context) {
             "-C", rootfsDir.absolutePath
         ).redirectErrorStream(true).start()
 
-        // Stream output untuk hindari process block jika stdout pipe penuh.
         val processOutput = StringBuilder()
         val outputReader = Thread {
             try {
@@ -169,10 +170,9 @@ class ProotBootstrap(private val context: Context) {
                         line = r.readLine()
                     }
                 }
-            } catch (_: Exception) { /* ignore — process exit akan handle */ }
+            } catch (_: Exception) {}
         }.apply { isDaemon = true; start() }
 
-        // Tunggu proses selesai dengan timeout 10 menit (rootfs besar bisa lama).
         val finished = extractProcess.waitFor(10, java.util.concurrent.TimeUnit.MINUTES)
         if (!finished) {
             extractProcess.destroyForcibly()
@@ -187,33 +187,23 @@ class ProotBootstrap(private val context: Context) {
         }
         listener.onProgress("Mengekstrak rootfs", 100)
 
-        // 5. Setup awal: DNS, supaya apt update bisa resolve hostname.
+        // 6. Setup DNS.
         setupResolvConf()
 
-        // 6. Bersihkan tarball (sudah tidak perlu, hemat storage).
+        // 7. Bersihkan tarball.
         rootfsTarball.delete()
 
-        // 7. Tulis marker.
+        // 8. Tulis marker.
         markerFile.writeText(System.currentTimeMillis().toString())
         Log.i(TAG, "Instalasi Ubuntu proot selesai di ${rootfsDir.absolutePath}")
     }
 
-    /**
-     * Setup /etc/resolv.conf di rootfs supaya DNS resolve jalan.
-     * Phase 39: Call ini tiap kali sesi Ubuntu dibuka juga (bukan cuma saat install)
-     * supaya kalau user pindah jaringan (WiFi↔data), DNS tetap fresh.
-     */
     fun setupResolvConf() {
         val resolvConf = File(rootfsDir, "etc/resolv.conf")
         resolvConf.parentFile?.mkdirs()
         resolvConf.writeText("nameserver 8.8.8.8\nnameserver 1.1.1.1\n")
     }
 
-    /**
-     * Download file dengan progress callback. Throws IllegalStateException jika gagal.
-     * Stream langsung ke disk (tidak load seluruh file ke memory) supaya rootfs
-     * 30-60MB tidak OOM.
-     */
     private fun downloadWithProgress(url: String, dest: File, onProgress: (Int) -> Unit) {
         val connection = (URL(url).openConnection() as HttpURLConnection).apply {
             connectTimeout = 30000
@@ -227,12 +217,12 @@ class ProotBootstrap(private val context: Context) {
             if (responseCode !in 200..299) {
                 throw IllegalStateException("HTTP $responseCode saat download $url")
             }
-            val totalBytes = connection.contentLength.toLong()  /* bisa -1 jika unknown */
+            val totalBytes = connection.contentLength.toLong()
             var downloadedBytes = 0L
             var lastReportedPercent = -1
             connection.inputStream.use { input ->
                 FileOutputStream(dest).use { output ->
-                    val buffer = ByteArray(64 * 1024)  /* 64KB chunks */
+                    val buffer = ByteArray(64 * 1024)
                     var bytesRead: Int
                     while (input.read(buffer).also { bytesRead = it } != -1) {
                         output.write(buffer, 0, bytesRead)
@@ -248,7 +238,6 @@ class ProotBootstrap(private val context: Context) {
                 }
             }
         } catch (e: Exception) {
-            /* Hapus file parsial supaya retry bersih. */
             try { if (dest.exists()) dest.delete() } catch (_: Exception) {}
             throw IllegalStateException("Download gagal: ${e.message}", e)
         } finally {
@@ -256,7 +245,6 @@ class ProotBootstrap(private val context: Context) {
         }
     }
 
-    /** Hapus seluruh instalasi (untuk fitur "Uninstall Linux Environment"). */
     fun uninstall() {
         try {
             baseDir.deleteRecursively()
@@ -266,10 +254,8 @@ class ProotBootstrap(private val context: Context) {
         }
     }
 
-    /** Cek free space di baseDir, return dalam MB. */
     fun getFreeSpaceMb(): Long = baseDir.usableSpace / 1024 / 1024
 
-    /** Total ukuran rootfs dalam MB (untuk info di Settings). */
     fun getRootfsSizeMb(): Long {
         if (!rootfsDir.isDirectory) return 0
         return rootfsDir.walkBottomUp().filter { it.isFile }.sumOf { it.length() } / 1024 / 1024

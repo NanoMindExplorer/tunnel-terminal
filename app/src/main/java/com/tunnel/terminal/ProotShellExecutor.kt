@@ -26,6 +26,9 @@ import java.util.concurrent.atomic.AtomicInteger
  * hanya di start(): panggil TerminalJni.createSessionExec() dengan argv proot, alih-alih
  * createSession() yang hardcode /system/bin/sh.
  *
+ * Phase 39.1: Updated untuk set LD_LIBRARY_PATH supaya proot bisa temukan libtalloc.so.2
+ * dan libandroid-shmem.so yang di-bundle di baseDir/lib/.
+ *
  * Semua logic readLoop/writeRaw/destroy/resizeTerminal SAMA PERSIS seperti ShellExecutor
  * karena itu semua generic PTY handling yang tidak peduli program apa yang jalan di
  * ujung lain. proot hanya menjembatani syscall translate — tetap beroperasi di fd PTY
@@ -36,12 +39,11 @@ import java.util.concurrent.atomic.AtomicInteger
  *         /usr/bin/env -i HOME=/root TERM=xterm-256color PATH=... LANG=C.UTF-8 \
  *         /bin/bash --login
  *
- * Catatan:
- *  - `-0` (fake root) WAJIB supaya apt/dpkg bisa jalan (mereka butuh uid 0).
- *  - `--link2symlink` fix masalah hardlink di proot (dipakai Termux).
- *  - `-b /dev /proc /sys` bind mount filesystem kernel ke rootfs.
- *  - `/usr/bin/env -i` reset env supaya proot env bersih (tidak warisi env Android).
- *  - Untuk device dengan SECCOMP filter ketat, fallback: set PROOT_NO_SECCOMP=1 di envp.
+ * envp yang di-set:
+ *   PROOT_TMP_DIR=<rootfs>/tmp   — temp dir untuk proot internal
+ *   LD_LIBRARY_PATH=<baseDir>/lib — cari libtalloc.so.2 + libandroid-shmem.so di sini
+ *   PATH=<system path>           — supaya proot bisa find /system/bin utilities
+ *   PROOT_NO_SECCOMP=1           — (opsional) untuk device dengan SECCOMP filter strict
  */
 class ProotShellExecutor(
     private val themeHolder: ThemeHolder = ThemeHolder(),
@@ -60,10 +62,8 @@ class ProotShellExecutor(
 
     override val id: Int = globalIdCounter.incrementAndGet()
 
-    /** AtomicBoolean guard untuk mencegah double-close fd (BUG-26 fix pattern). */
     private val fdClosed = AtomicBoolean(false)
 
-    /** Track apakah sesi mati dalam <2 detik setelah start (indikasi SECCOMP issue). */
     @Volatile
     private var startTime: Long = 0L
 
@@ -96,15 +96,8 @@ class ProotShellExecutor(
     @Volatile
     override var currentPrompt: String = "root@ubuntu:~# "
 
-    /** "ubuntu" — supaya UI bisa render ikon label khusus (Ubuntu logo). */
     override val sessionType: String = "ubuntu"
 
-    /**
-     * Mulai sesi proot + Ubuntu.
-     * Start proot+Ubuntu session via createSessionExec.
-     *
-     * Pre-condition: bootstrap.isInstalled == true. Caller wajib cek dulu.
-     */
     override suspend fun start() {
         withContext(Dispatchers.IO) {
             isAlive = true
@@ -130,17 +123,17 @@ class ProotShellExecutor(
                 return@withContext
             }
 
-            // Selalu refresh resolv.conf tiap start (user bisa pindah WiFi/data antar sesi).
             try { bootstrap.setupResolvConf() } catch (_: Exception) {}
 
             val rootfsPath = bootstrap.rootfsDir.absolutePath
             val prootPath = bootstrap.prootBin.absolutePath
+            val libPath = bootstrap.libDir.absolutePath
 
             // Build argv untuk proot.
             val argv = mutableListOf(
                 prootPath,
                 "--link2symlink",
-                "-0",                       // fake root (uid 0) — wajib supaya apt/dpkg jalan
+                "-0",
                 "-r", rootfsPath,
                 "-b", "/dev",
                 "-b", "/proc",
@@ -155,8 +148,10 @@ class ProotShellExecutor(
             )
 
             // Build envp (environment yang diteruskan ke execve).
+            // Phase 39.1: Tambah LD_LIBRARY_PATH supaya proot bisa find libtalloc + libandroid-shmem.
             val envp = mutableListOf(
                 "PROOT_TMP_DIR=${rootfsPath}/tmp",
+                "LD_LIBRARY_PATH=$libPath",
                 "PATH=${System.getenv("PATH") ?: "/system/bin"}"
             )
             if (disableSeccomp) {
@@ -185,14 +180,13 @@ class ProotShellExecutor(
             }
 
             pfd = ParcelFileDescriptor.adoptFd(masterFd)
-            Log.i(tag, "Sesi Ubuntu proot dimulai: pid=$childPid, fd=$masterFd, id=$id, rootfs=$rootfsPath")
+            Log.i(tag, "Sesi Ubuntu proot dimulai: pid=$childPid, fd=$masterFd, id=$id, rootfs=$rootfsPath, libPath=$libPath")
 
             readThread = Thread({ readLoop() }, "proot-read-$id").apply {
                 isDaemon = true
                 start()
             }
 
-            // Beri waktu singkat untuk bash siap, lalu set PS1 yang jelas (Ubuntu-like).
             Thread.sleep(200)
             writeRaw("export PS1='\\u@\\h:\\w\\$ '\n")
             writeRaw("clear\n")
@@ -253,15 +247,14 @@ class ProotShellExecutor(
             try { emulator.flush() } catch (_: Exception) {}
             isAlive = false
 
-            // Phase 39: Deteksi early death (<2s) → indikasi SECCOMP issue atau proot crash.
             val uptime = System.currentTimeMillis() - startTime
             if (uptime < 2000) {
-                Log.w(tag, "Sesi Ubuntu mati dalam ${uptime}ms — kemungkinan SECCOMP issue")
+                Log.w(tag, "Sesi Ubuntu mati dalam ${uptime}ms — kemungkinan SECCOMP issue atau lib tidak ditemukan")
                 emulator.process("\n\u001B[31m[Ubuntu session mati prematur dalam ${uptime}ms.\u001B[0m\n")
                 if (!disableSeccomp) {
                     emulator.process("\u001B[33mKemungkinan SECCOMP filter Android tidak kompatibel. Coba restart — sistem akan retry dengan PROOT_NO_SECCOMP=1.\u001B[0m\n")
                 } else {
-                    emulator.process("\u001B[33mPROOT_NO_SECCOMP=1 sudah dicoba tapi tetap gagal. Device ini mungkin tidak support proot.\u001B[0m\n")
+                    emulator.process("\u001B[33mPROOT_NO_SECCOMP=1 sudah dicoba tapi tetap gagal. Cek log: kemungkinan libtalloc.so.2 atau libandroid-shmem.so tidak ditemukan.\u001B[0m\n")
                 }
             } else {
                 emulator.process("\n\u001B[33m[Ubuntu session exited. Tap screen to restart.]\u001B[0m\n")
@@ -318,7 +311,6 @@ class ProotShellExecutor(
         if (!isAlive && masterFd < 0 && childPid < 0 && readThread == null) return
         isAlive = false
 
-        // Close pfd FIRST to unblock readLoop's inputStream.read().
         try {
             if (fdClosed.compareAndSet(false, true)) {
                 pfd?.close()
@@ -332,12 +324,11 @@ class ProotShellExecutor(
         } catch (_: Exception) {}
         readThread = null
 
-        // Kill child process (SIGTERM → SIGKILL).
         try {
             if (childPid > 1) {
-                TerminalJni.killSession(childPid, 15)  // SIGTERM
+                TerminalJni.killSession(childPid, 15)
                 Thread.sleep(50)
-                TerminalJni.killSession(childPid, 9)   // SIGKILL + reap
+                TerminalJni.killSession(childPid, 9)
                 childPid = -1
             }
         } catch (e: Exception) {
