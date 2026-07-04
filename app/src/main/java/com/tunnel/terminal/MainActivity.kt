@@ -7,6 +7,7 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.util.Log
 import android.view.KeyEvent
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -336,11 +337,10 @@ class MainActivity : ComponentActivity() {
                 val session = shellExecutors.find { it.id == activeExecutorId }
                 if (session != null) {
                     chatMessages.add(ChatMessage("assistant", "🔧 Running: $cmd", false))
-                    val result = markerExecutor.executeWithMarker(session, cmd, timeoutMs = 30000)
-                    val resultText = markerExecutor.formatResultForAI(result)
-                    chatMessages.add(ChatMessage("assistant", "📋 Result:\n$resultText", false))
-                    /* Kirim hasil ke AI sebagai follow-up prompt untuk analisis. */
-                    scope.launch {
+                    lifecycleScope.launch {
+                        val result = markerExecutor.executeWithMarker(session, cmd, timeoutMs = 30000)
+                        val resultText = markerExecutor.formatResultForAI(result)
+                        chatMessages.add(ChatMessage("assistant", "📋 Result:\n$resultText", false))
                         handleAIPrompt("Berikut hasil eksekusi command:\n$resultText\n\nApakah perlu perbaikan atau langkah selanjutnya?")
                     }
                 }
