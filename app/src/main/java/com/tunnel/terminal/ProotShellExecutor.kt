@@ -109,6 +109,10 @@ class ProotShellExecutor(
 
     override val sessionType: String = "ubuntu"
 
+    /** Phase 46 (Pilar 2): Deskripsi lingkungan untuk AI context. */
+    override val environmentDescription: String
+        get() = "Ubuntu 24.04 LTS via proot — apt-get & dpkg tersedia. TIDAK ADA systemd (systemctl/service tidak berfungsi — jalankan servis sebagai proses biasa dengan &). sudo tidak perlu (proot fake-root dengan -0). Untuk install package: DEBIAN_FRONTEND=noninteractive apt-get install -y <package>."
+
     override suspend fun start() {
         withContext(Dispatchers.IO) {
             isAlive = true

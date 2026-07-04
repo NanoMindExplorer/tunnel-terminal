@@ -237,6 +237,10 @@ class ProotBootstrap(private val context: Context) {
         // 6. Setup DNS.
         setupResolvConf()
 
+        // 6.5. Phase 46 (Pilar 3): Setup non-interactive apt environment.
+        // Cegah prompt interaktif dari akarnya — jangan cuma andalkan deteksi idle-timeout.
+        setupNonInteractiveApt()
+
         // 7. Phase 40 fix (H5): Validate proot binary bisa di-exec sebelum tulis marker.
         // Kalau binary corrupt / wrong ABI / missing libs, error di sini (bukan saat start session).
         listener.onProgress("Memvalidasi proot binary", 0)
@@ -276,6 +280,50 @@ class ProotBootstrap(private val context: Context) {
         val resolvConf = File(rootfsDir, "etc/resolv.conf")
         resolvConf.parentFile?.mkdirs()
         resolvConf.writeText("nameserver 8.8.8.8\nnameserver 1.1.1.1\n")
+    }
+
+    /**
+     * Phase 46 (Pilar 3): Setup non-interactive apt environment.
+     *
+     * Cegah prompt interaktif dari akarnya — jangan cuma andalkan deteksi idle-timeout
+     * di MarkerExecutor (yang cuma jaring pengaman).
+     *
+     * Dua flag yang perlu jalan bersamaan:
+     * 1. DEBIAN_FRONTEND=noninteractive — tekan dialog konfigurasi debconf
+     *    (mis. pemilihan region tzdata, konfigurasi mysql-server, dll).
+     * 2. APT_LISTCHANGES_FRONTEND=none — tekan output apt-listchanges yang bisa interaktif.
+     *
+     * CATATAN: ini TIDAK menekan prompt "Do you want to continue? [Y/n]" dari apt-get
+     * sendiri — itu perlu flag -y terpisah di command-nya (sudah di-instruksikan ke AI
+     * di system prompt Pilar 3).
+     *
+     * Juga preseed timezone langsung (etc/timezone), supaya paket seperti tzdata
+     * tidak pernah menampilkan dialog pilih region/kota sama sekali.
+     */
+    private fun setupNonInteractiveApt() {
+        try {
+            // Profile script — di-source otomatis oleh bash login shell.
+            val profileScript = File(rootfsDir, "etc/profile.d/tunnel-noninteractive.sh")
+            profileScript.parentFile?.mkdirs()
+            val tz = java.util.TimeZone.getDefault().id
+            profileScript.writeText("""
+                # Phase 46 (Pilar 3): Non-interactive apt environment
+                # Setup oleh Tunnel Terminal untuk mencegah prompt interaktif
+                export DEBIAN_FRONTEND=noninteractive
+                export APT_LISTCHANGES_FRONTEND=none
+                export TZ=$tz
+            """.trimIndent() + "\n")
+            profileScript.setExecutable(false)
+
+            // Preseed timezone langsung
+            val timezoneFile = File(rootfsDir, "etc/timezone")
+            timezoneFile.parentFile?.mkdirs()
+            timezoneFile.writeText(tz + "\n")
+
+            Log.i(TAG, "Non-interactive apt environment setup: DEBIAN_FRONTEND=noninteractive, TZ=$tz")
+        } catch (e: Exception) {
+            Log.w(TAG, "Gagal setup non-interactive apt: ${e.message} — non-fatal, apt tetap jalan tapi mungkin prompt interaktif")
+        }
     }
 
     private fun downloadWithProgress(url: String, dest: File, onProgress: (Int) -> Unit) {

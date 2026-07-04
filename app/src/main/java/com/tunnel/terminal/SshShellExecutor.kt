@@ -116,6 +116,10 @@ class SshShellExecutor(
 
     override val sessionType: String = "ssh"
 
+    /** Phase 46 (Pilar 2): Deskripsi lingkungan untuk AI context. */
+    override val environmentDescription: String
+        get() = "Sesi SSH remote: ${config.username}@${config.host} — OS/package manager tergantung server tujuan, jangan diasumsikan. Tanya user distribusi apa yang dipakai sebelum rekomendasi package manager (apt/yum/pacman/dnf)."
+
     private val writeLock = Any()
 
     /**

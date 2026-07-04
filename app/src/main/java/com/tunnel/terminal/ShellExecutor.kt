@@ -89,6 +89,10 @@ class ShellExecutor(
 
     override val sessionType: String = "local"
 
+    /** Phase 46 (Pilar 2): Deskripsi lingkungan untuk AI context. */
+    override val environmentDescription: String
+        get() = "Android shell lokal (toybox/mksh) — TIDAK ADA package manager (bukan apt, bukan pkg). Command tersedia: ls, cd, cat, echo, mkdir, rm, cp, mv, pwd, ps, kill, df, du, head, tail, grep, sed, awk. Tidak ada sudo."
+
     /**
      * Mulai sesi PTY baru.
      * Start a new PTY session.

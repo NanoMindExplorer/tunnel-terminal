@@ -10,6 +10,9 @@ import java.util.concurrent.atomic.AtomicLong
  * MarkerExecutor - Eksekusi command dengan unique marker untuk deteksi completion + exit code.
  *
  * Phase 37: Revolusi command execution untuk AI Auto-Pilot + Tool Calling.
+ * Phase 46 (Pilar 1): Fix computeNewOutput bug + dual-layer timeout (max + idle) +
+ * ExecutionOutcome sealed class untuk bedakan "completed" vs "possibly waiting for input"
+ * vs "timed out".
  *
  * Masalah lama:
  * - Auto-Pilot pakai regex nebak prompt shell → false positive (output mengandung $ atau #)
@@ -17,20 +20,26 @@ import java.util.concurrent.atomic.AtomicLong
  * - @command: stub kosong → tidak pernah benar-benar mengeksekusi
  *
  * Solusi: Marker-based execution
- * - Setiap command dibungkus: `cmd ; echo "__TT_DONE_<id>_<exitcode>__"`
+ * - Setiap command dibungkus: `{ cmd ; } ; ec=$?; echo "__TT_DONE_<id>_${ec}__"`
  * - Marker unik per-command (AtomicLong counter) → tidak collide dengan output command
  * - Tunggu marker muncul di output → command selesai, exit code tercapture
  * - Kirim hasil balik ke AI sebagai context untuk analisis/next step
  *
+ * Phase 46 (Pilar 1) — Dua perbaikan utama:
+ *
+ * 1. **computeNewOutput helper** — satukan logic "hitung output baru" jadi satu fungsi
+ *    dengan fallback konsisten untuk kasus buffer roll-over. OLD BUG: pakai
+ *    `substringAfter(before, "")` yang diam-diam mengembalikan string kosong persis
+ *    saat buffer sudah ke-truncate (output command lebih panjang dari kapasitas buffer).
+ *
+ * 2. **Dual-layer timeout (max + idle)** — bedakan "masih progress" vs "diam mencurigakan".
+ *    apt-get install yang wajar HAMPIR SELALU menghasilkan output baru minimal setiap
+ *    beberapa detik (progress download, "Unpacking...", "Setting up..."). Diam total
+ *    selama 15 detik = sinyal kuat bahwa proses menunggu input, bukan cuma lambat.
+ *
  * Marker format: __TT_DONE_<id>_<exitcode>__
  * - id: unique counter (mis. 1, 2, 3, ...)
  * - exitcode: $? dari shell (0 = success, non-zero = error)
- *
- * Contoh:
- *   Command: ls -la
- *   Dikirim ke PTY: ls -la ; echo "__TT_DONE_1_$?__"
- *   Output terminal: [ls output...]\n__TT_DONE_1_0__
- *   Parser: menemukan marker → id=1, exitCode=0 → command selesai, success
  */
 class MarkerExecutor {
 
@@ -49,14 +58,6 @@ class MarkerExecutor {
         /**
          * Build command dengan marker appended.
          * Phase 40 fix (H6): Capture exit code SEBELUM echo, bukan di echo-nya.
-         *
-         * OLD BUG: `cmd ; echo "__TT_DONE_1_$?__"` — untuk command seperti
-         * `cd /foo && ls`, exit code `$?` adalah exit code `echo` (selalu 0),
-         * BUKAN exit code `ls`. Untuk `false || true`, exit code juga = 0
-         * (padahal user mungkin mau tahu exit code `false`).
-         *
-         * FIX: Run command di subshell, capture exit code ke variable `ec`,
-         * lalu echo marker dengan `ec` (bukan `$?` yang sudah tertimpa).
          */
         fun wrapCommand(command: String, markerId: Long): String {
             return "{ $command ; } ; ec=\$?; echo \"${MARKER_PREFIX}${markerId}_\${ec}${MARKER_SUFFIX}\""
@@ -73,6 +74,30 @@ class MarkerExecutor {
         /** Hapus marker dari output (untuk display yang clean). */
         fun stripMarker(output: String): String {
             return MARKER_REGEX.replace(output, "").trim()
+        }
+
+        /**
+         * Phase 46 fix (Pilar 1a): Hitung output baru dengan fallback yang konsisten
+         * untuk kasus buffer roll-over.
+         *
+         * OLD BUG: Di polling loop, logic `if (after.length > before.length && after.startsWith(before))`
+         * handle roll-over dengan fallback ke `after` apa adanya (benar). TAPI di final
+         * result extraction, pakai `substringAfter(before, "")` yang diam-diam mengembalikan
+         * string kosong persis saat kondisi roll-over terjadi (before tidak lagi jadi prefix).
+         *
+         * FIX: Satukan logic ke fungsi ini, pakai di kedua tempat. Fallback ke `after`
+         * apa adanya kalau roll-over terjadi — jangan pernah kembalikan string kosong.
+         */
+        private fun computeNewOutput(before: String, after: String): String {
+            return if (after.length > before.length && after.startsWith(before)) {
+                after.substring(before.length)
+            } else {
+                // Buffer sudah ke-truncate (output command lebih panjang dari kapasitas
+                // buffer getCleanOutput()) — 'before' tidak lagi jadi prefix dari 'after'.
+                // Pakai 'after' apa adanya. JANGAN pakai substringAfter(before, "") di sini —
+                // itu diam-diam mengembalikan string kosong persis saat kondisi ini terjadi.
+                after
+            }
         }
     }
 
@@ -95,18 +120,51 @@ class MarkerExecutor {
     )
 
     /**
-     * Eksekusi command di session tertentu, tunggu marker, return result.
+     * Phase 46 (Pilar 1b): Outcome dari eksekusi command dengan dual-layer timeout.
      *
-     * @param session TerminalSession (local PTY atau SSH)
+     * Tiga kemungkinan outcome:
+     * - **Completed**: Marker ditemukan → command selesai, exit code tercapture.
+     * - **PossiblyWaitingForInput**: Tidak ada output baru selama idleTimeoutMs →
+     *   kemungkinan command sedang menunggu input interaktif (mis. apt dialog konfirmasi).
+     *   JANGAN kirim command baru menebak jawaban — tampilkan ke user + beri tahu AI.
+     * - **TimedOut**: Total waktu melebihi maxTimeoutMs tanpa marker → command benar-benar
+     *   macet atau terlalu lambat.
+     *
+     * Idle-based detection jauh lebih andal daripada single timeout: apt-get install
+     * yang wajar HAMPIR SELALU menghasilkan output baru minimal setiap beberapa detik.
+     * Diam total selama 15s = sinyal kuat bahwa proses menunggu input, bukan cuma lambat.
+     */
+    sealed class ExecutionOutcome {
+        /** Command selesai dengan exit code tercapture. */
+        data class Completed(val result: CommandResult) : ExecutionOutcome()
+
+        /** Command kemungkinan menunggu input interaktif (idle > idleTimeoutMs). */
+        data class PossiblyWaitingForInput(
+            val partialOutput: String,
+            val elapsedMs: Long
+        ) : ExecutionOutcome()
+
+        /** Command melebihi maxTimeoutMs tanpa marker. */
+        data class TimedOut(val partialOutput: String) : ExecutionOutcome()
+    }
+
+    /**
+     * Eksekusi command di session tertentu, tunggu marker, return ExecutionOutcome.
+     *
+     * Phase 46 (Pilar 1b): Dual-layer timeout (max + idle).
+     *
+     * @param session TerminalSession (local PTY, SSH, atau proot/Ubuntu)
      * @param command Command to execute (tanpa marker — akan di-wrap otomatis)
-     * @param timeoutMs Timeout dalam millisecond (default 30s)
-     * @return CommandResult dengan output, exit code, dan timing
+     * @param maxTimeoutMs Total maximum time (default 30s). Untuk apt install, set 300000 (5 min).
+     * @param idleTimeoutMs Jika tidak ada output baru selama ini → curiga nunggu input (default 15s).
+     * @return ExecutionOutcome (Completed / PossiblyWaitingForInput / TimedOut)
      */
     suspend fun executeWithMarker(
         session: TerminalSession,
         command: String,
-        timeoutMs: Long = 30000
-    ): CommandResult = withContext(Dispatchers.IO) {
+        maxTimeoutMs: Long = 30000,
+        idleTimeoutMs: Long = 15000
+    ): ExecutionOutcome = withContext(Dispatchers.IO) {
         val markerId = nextMarkerId()
         val wrappedCommand = wrapCommand(command, markerId)
         val startTime = System.currentTimeMillis()
@@ -117,61 +175,61 @@ class MarkerExecutor {
         // Kirim command + marker ke PTY
         session.writeRaw(wrappedCommand + "\n")
 
-        // Poll untuk marker di output
-        var result: MarkerResult? = null
-        var outputAfter = ""
+        // Track idle — update lastChangeTime setiap kali output berubah
+        var lastOutputLen = outputBefore.length
+        var lastChangeTime = startTime
+        var outputAfter = outputBefore
 
-        while (System.currentTimeMillis() - startTime < timeoutMs) {
-            /* Phase 40 fix (M2): Reduce poll delay dari 100ms → 25ms.
-             * OLD BUG: 100ms delay bisa miss exit code untuk command sangat cepat
-             * (output buffer mungkin sudah ter-truncate). 25ms cukup responsif
-             * tanpa terlalu banyak CPU usage. */
+        while (System.currentTimeMillis() - startTime < maxTimeoutMs) {
+            /* Phase 40 fix (M2): poll delay 25ms — cukup responsif tanpa CPU waste. */
             delay(25)
             outputAfter = session.getCleanOutput()
 
-            // Cari marker di output yang baru (setelah outputBefore)
-            val newOutput = if (outputAfter.length > outputBefore.length && outputAfter.startsWith(outputBefore)) {
-                outputAfter.substring(outputBefore.length)
-            } else {
-                outputAfter
+            // Phase 46 (Pilar 1a): Pakai computeNewOutput helper (fix roll-over bug)
+            val newOutput = computeNewOutput(outputBefore, outputAfter)
+
+            // Cek marker
+            val marker = parseMarker(newOutput)
+            if (marker != null && marker.id == markerId) {
+                val executionTimeMs = System.currentTimeMillis() - startTime
+                val markerPos = newOutput.indexOf(marker.rawMarker)
+                val cleanOutput = if (markerPos >= 0) {
+                    stripMarker(newOutput.substring(0, markerPos))
+                } else {
+                    stripMarker(newOutput)
+                }
+                Log.i(TAG, "Command '$command' completed: exitCode=${marker.exitCode}, time=${executionTimeMs}ms")
+                return@withContext ExecutionOutcome.Completed(
+                    CommandResult(
+                        command = command,
+                        output = cleanOutput.trim(),
+                        exitCode = marker.exitCode,
+                        isSuccess = marker.isSuccess,
+                        executionTimeMs = executionTimeMs
+                    )
+                )
             }
 
-            result = parseMarker(newOutput)
-            if (result != null && result.id == markerId) break
+            // Track idle — update lastChangeTime kalau output berubah
+            if (outputAfter.length != lastOutputLen) {
+                lastOutputLen = outputAfter.length
+                lastChangeTime = System.currentTimeMillis()
+            } else if (System.currentTimeMillis() - lastChangeTime > idleTimeoutMs) {
+                // Idle > idleTimeoutMs → kemungkinan menunggu input interaktif
+                val elapsedMs = System.currentTimeMillis() - startTime
+                val partialOutput = stripMarker(computeNewOutput(outputBefore, outputAfter))
+                Log.w(TAG, "Command '$command' possibly waiting for input (idle ${idleTimeoutMs}ms, elapsed ${elapsedMs}ms)")
+                return@withContext ExecutionOutcome.PossiblyWaitingForInput(
+                    partialOutput = partialOutput,
+                    elapsedMs = elapsedMs
+                )
+            }
         }
 
-        val executionTimeMs = System.currentTimeMillis() - startTime
-
-        if (result == null) {
-            // Timeout — marker tidak ditemukan
-            Log.w(TAG, "Timeout waiting for marker $markerId (cmd: $command)")
-            return@withContext CommandResult(
-                command = command,
-                output = stripMarker(outputAfter.substringAfter(outputBefore, "")),
-                exitCode = -1,
-                isSuccess = false,
-                executionTimeMs = executionTimeMs
-            )
-        }
-
-        // Extract output antara outputBefore dan marker
-        val fullNewOutput = outputAfter.substringAfter(outputBefore, "")
-        val markerPos = fullNewOutput.indexOf(result.rawMarker)
-        val cleanOutput = if (markerPos >= 0) {
-            stripMarker(fullNewOutput.substring(0, markerPos))
-        } else {
-            stripMarker(fullNewOutput)
-        }
-
-        Log.i(TAG, "Command '$command' completed: exitCode=${result.exitCode}, time=${executionTimeMs}ms")
-
-        CommandResult(
-            command = command,
-            output = cleanOutput.trim(),
-            exitCode = result.exitCode,
-            isSuccess = result.isSuccess,
-            executionTimeMs = executionTimeMs
-        )
+        // Max timeout tercapai tanpa marker
+        val partialOutput = stripMarker(computeNewOutput(outputBefore, outputAfter))
+        Log.w(TAG, "Timeout waiting for marker $markerId (cmd: $command, maxTimeout ${maxTimeoutMs}ms)")
+        ExecutionOutcome.TimedOut(partialOutput)
     }
 
     /**
@@ -196,6 +254,41 @@ class MarkerExecutor {
                     append("\n... (output truncated, ${result.output.length - 2000} more chars)")
                 }
                 append("\n")
+            }
+        }
+    }
+
+    /**
+     * Phase 46 (Pilar 1b): Format ExecutionOutcome untuk AI.
+     * Tangani ketiga outcome dengan pesan yang jelas ke AI.
+     */
+    fun formatOutcomeForAI(outcome: ExecutionOutcome): String {
+        return when (outcome) {
+            is ExecutionOutcome.Completed -> formatResultForAI(outcome.result)
+            is ExecutionOutcome.PossiblyWaitingForInput -> buildString {
+                append("Command: (idle timeout — kemungkinan menunggu input)\n")
+                append("Status: POSSIBLY_WAITING_FOR_INPUT\n")
+                append("Elapsed: ${outcome.elapsedMs}ms (no new output for 15s)\n")
+                append("Partial output:\n")
+                if (outcome.partialOutput.isBlank()) {
+                    append("(no output captured)\n")
+                } else {
+                    append(outcome.partialOutput.take(1500))
+                    append("\n")
+                }
+                append("\nKemungkinan command sedang menunggu input interaktif (mis. konfirmasi apt). ")
+                append("JANGAN kirim command baru menebak jawaban — tanyakan ke user apa yang harus dilakukan.")
+            }
+            is ExecutionOutcome.TimedOut -> buildString {
+                append("Command: (max timeout exceeded)\n")
+                append("Status: TIMED_OUT\n")
+                append("Partial output:\n")
+                if (outcome.partialOutput.isBlank()) {
+                    append("(no output captured)\n")
+                } else {
+                    append(outcome.partialOutput.take(1500))
+                    append("\n")
+                }
             }
         }
     }

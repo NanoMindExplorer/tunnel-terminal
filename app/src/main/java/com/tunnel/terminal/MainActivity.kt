@@ -340,16 +340,21 @@ class MainActivity : ComponentActivity() {
         when {
             call.tool == "run_command" -> {
                 /* Phase 37: run_command pakai MarkerExecutor — bukan fire-and-forget.
+                 * Phase 46 (Pilar 1b): Handle ExecutionOutcome (3 kemungkinan).
                  * Hasil (output + exit code) dikirim balik ke AI sebagai context. */
                 val cmd = call.args["cmd"] ?: return
                 val session = shellExecutors.find { it.id == activeExecutorId }
                 if (session != null) {
                     chatMessages.add(ChatMessage("assistant", "🔧 Running: $cmd", false))
                     lifecycleScope.launch {
-                        val result = markerExecutor.executeWithMarker(session, cmd, timeoutMs = 30000)
-                        val resultText = markerExecutor.formatResultForAI(result)
-                        chatMessages.add(ChatMessage("assistant", "📋 Result:\n$resultText", false))
-                        handleAIPrompt("Berikut hasil eksekusi command:\n$resultText\n\nApakah perlu perbaikan atau langkah selanjutnya?")
+                        val outcome = markerExecutor.executeWithMarker(
+                            session, cmd,
+                            maxTimeoutMs = 300000,  // 5 min — apt install bisa lama
+                            idleTimeoutMs = 15000   // 15s idle = curiga nunggu input
+                        )
+                        val outcomeText = markerExecutor.formatOutcomeForAI(outcome)
+                        chatMessages.add(ChatMessage("assistant", "📋 Result:\n$outcomeText", false))
+                        handleAIPrompt("Berikut hasil eksekusi command:\n$outcomeText\n\nApakah perlu perbaikan atau langkah selanjutnya?")
                     }
                 }
             }
@@ -416,32 +421,122 @@ class MainActivity : ComponentActivity() {
         val activeExecutor = shellExecutors.find { it.id == activeExecutorId } ?: return
         chatMessages.add(ChatMessage("assistant", "🤖 Starting workflow: ${workflow.name}", false))
 
+        /* Phase 46 (Pilar 4): Track last step result untuk CONDITIONAL_STEP.
+         * Upgrade dari string-matching di output (rapuh) ke exit-code (pasti). */
+        var lastStepResult: MarkerExecutor.CommandResult? = null
+
         for (step in workflow.steps) {
             chatMessages.add(ChatMessage("assistant", "▶ Step: ${step.displayText}", false))
             when (step.type) {
                 AgentStep.StepType.AI_STEP -> {
-                    /* Phase 24: Tunggu AI selesai sebelum lanjut ke step berikutnya.
-                     * Old code: handleAIPrompt di-guard isProcessingAI → skip jika AI masih jalan.
-                     * Fix: tunggu AI idle sebelum call, lalu call. */
+                    /* Phase 24: Tunggu AI selesai sebelum lanjut ke step berikutnya. */
                     while (isProcessingAI) { delay(100) }
                     handleAIPrompt(step.prompt)
                     /* Tunggu AI selesai sebelum next step. */
                     while (isProcessingAI) { delay(100) }
                 }
                 AgentStep.StepType.COMMAND_STEP -> {
-                    activeExecutor.executeCommand(step.command)
-                    if (step.waitForOutput) {
-                        delay(step.timeoutMs)
+                    /* Phase 46 (Pilar 4): Pakai MarkerExecutor dengan ExecutionOutcome.
+                     * maxTimeoutMs dari step config (coerceAtLeast 60s), idleTimeoutMs 15s.
+                     * Old code: executeCommand + delay — tidak tahu kapan command selesai,
+                     * tidak tahu exit code, tidak tahu kalau command nunggu input. */
+                    val outcome = markerExecutor.executeWithMarker(
+                        activeExecutor, step.command,
+                        maxTimeoutMs = step.timeoutMs.coerceAtLeast(60000),
+                        idleTimeoutMs = 15000
+                    )
+                    when (outcome) {
+                        is MarkerExecutor.ExecutionOutcome.Completed -> {
+                            lastStepResult = outcome.result
+                            val statusIcon = if (outcome.result.isSuccess) "✓" else "✗"
+                            val outputDisplay = if (outcome.result.output.isBlank()) "(no output)" else outcome.result.output.take(300)
+                            chatMessages.add(ChatMessage(
+                                "assistant",
+                                "$statusIcon Exit code: ${outcome.result.exitCode} (${outcome.result.executionTimeMs}ms)\n$outputDisplay",
+                                false, isError = !outcome.result.isSuccess
+                            ))
+                            if (!outcome.result.isSuccess) {
+                                chatMessages.add(ChatMessage(
+                                    "assistant",
+                                    "❌ Workflow dihentikan: Step gagal (exit code ${outcome.result.exitCode}).",
+                                    false, isError = true
+                                ))
+                                return
+                            }
+                        }
+                        is MarkerExecutor.ExecutionOutcome.PossiblyWaitingForInput -> {
+                            val outputDisplay = if (outcome.partialOutput.isBlank()) "(no output)" else outcome.partialOutput.take(300)
+                            chatMessages.add(ChatMessage(
+                                "assistant",
+                                "⚠️ Workflow dihentikan: Step kemungkinan menunggu input interaktif " +
+                                "(idle 15s, elapsed ${outcome.elapsedMs}ms).\n$outputDisplay\n" +
+                                "Periksa output dan beri arahan manual.",
+                                false, isError = true
+                            ))
+                            return
+                        }
+                        is MarkerExecutor.ExecutionOutcome.TimedOut -> {
+                            val outputDisplay = if (outcome.partialOutput.isBlank()) "(no output)" else outcome.partialOutput.take(300)
+                            chatMessages.add(ChatMessage(
+                                "assistant",
+                                "⚠️ Workflow dihentikan: Step timeout (${step.timeoutMs}ms).\n$outputDisplay",
+                                false, isError = true
+                            ))
+                            return
+                        }
                     }
                 }
                 AgentStep.StepType.DELAY_STEP -> {
                     delay(step.timeoutMs)
                 }
                 AgentStep.StepType.CONDITIONAL_STEP -> {
-                    val output = activeExecutor.getCleanOutput().lowercase()
-                    if (output.contains(step.prompt.lowercase())) {
-                        activeExecutor.executeCommand(step.command)
-                        if (step.waitForOutput) delay(step.timeoutMs)
+                    /* Phase 46 (Pilar 4): Upgrade dari string-matching di output (rapuh)
+                     * ke exit-code (pasti). CONDITIONAL_STEP jalan kalau step sebelumnya sukses.
+                     *
+                     * Old code: cari string step.prompt di output terminal → false positive
+                     * (mis. "error" muncul di output command yang sebenarnya sukses).
+                     * New code: cek lastStepResult?.isSuccess == true. */
+                    val lastSucceeded = lastStepResult?.isSuccess == true
+                    if (lastSucceeded) {
+                        val outcome = markerExecutor.executeWithMarker(
+                            activeExecutor, step.command,
+                            maxTimeoutMs = step.timeoutMs.coerceAtLeast(60000),
+                            idleTimeoutMs = 15000
+                        )
+                        when (outcome) {
+                            is MarkerExecutor.ExecutionOutcome.Completed -> {
+                                lastStepResult = outcome.result
+                                val statusIcon = if (outcome.result.isSuccess) "✓" else "✗"
+                                val outputDisplay = if (outcome.result.output.isBlank()) "(no output)" else outcome.result.output.take(300)
+                                chatMessages.add(ChatMessage(
+                                    "assistant",
+                                    "$statusIcon Conditional step — Exit code: ${outcome.result.exitCode} (${outcome.result.executionTimeMs}ms)\n$outputDisplay",
+                                    false, isError = !outcome.result.isSuccess
+                                ))
+                            }
+                            is MarkerExecutor.ExecutionOutcome.PossiblyWaitingForInput -> {
+                                chatMessages.add(ChatMessage(
+                                    "assistant",
+                                    "⚠️ Conditional step kemungkinan menunggu input. Workflow dihentikan.",
+                                    false, isError = true
+                                ))
+                                return
+                            }
+                            is MarkerExecutor.ExecutionOutcome.TimedOut -> {
+                                chatMessages.add(ChatMessage(
+                                    "assistant",
+                                    "⚠️ Conditional step timeout. Workflow dihentikan.",
+                                    false, isError = true
+                                ))
+                                return
+                            }
+                        }
+                    } else {
+                        chatMessages.add(ChatMessage(
+                            "assistant",
+                            "⏭️ Conditional step di-skip (step sebelumnya tidak sukses).",
+                            false
+                        ))
                     }
                 }
             }
@@ -1984,34 +2079,54 @@ class MainActivity : ComponentActivity() {
             chatMessages.add(ChatMessage("assistant", "▶ [${i + 1}/${commands.size}] Menjalankan: $cmd", false))
 
             /* Phase 37: Pakai MarkerExecutor — bukan regex prompt nebak.
-             * Command dibungkus: cmd ; echo "__TT_DONE_<id>_$?__"
-             * Tunggu marker muncul → pasti selesai + exit code tercapture. */
-            val result = markerExecutor.executeWithMarker(activeExecutor, cmd, timeoutMs = 30000)
+             * Phase 46 (Pilar 1b): Handle ExecutionOutcome (3 kemungkinan).
+             * maxTimeoutMs 5 menit (apt install bisa lama), idleTimeoutMs 15s (curiga nunggu input). */
+            val outcome = markerExecutor.executeWithMarker(
+                activeExecutor, cmd,
+                maxTimeoutMs = 300000,
+                idleTimeoutMs = 15000
+            )
 
-            // Tampilkan hasil ke user
-            val statusIcon = if (result.isSuccess) "✓" else "✗"
-            val outputDisplay = if (result.output.isBlank()) "(no output)" else result.output.take(500)
-            chatMessages.add(ChatMessage(
-                "assistant",
-                "$statusIcon [${i + 1}/${commands.size}] Exit code: ${result.exitCode} (${result.executionTimeMs}ms)\n$outputDisplay",
-                false, isError = !result.isSuccess
-            ))
-
-            if (!result.isSuccess && result.exitCode != -1) {
-                chatMessages.add(ChatMessage(
-                    "assistant",
-                    "❌ Command gagal (exit code ${result.exitCode}). Auto-Pilot dihentikan.",
-                    false, isError = true
-                ))
-                return
-            }
-            if (result.exitCode == -1) {
-                chatMessages.add(ChatMessage(
-                    "assistant",
-                    "⚠️ Timeout menunggu perintah #${i + 1} selesai. Auto-Pilot dihentikan.",
-                    false, isError = true
-                ))
-                return
+            when (outcome) {
+                is MarkerExecutor.ExecutionOutcome.Completed -> {
+                    val result = outcome.result
+                    val statusIcon = if (result.isSuccess) "✓" else "✗"
+                    val outputDisplay = if (result.output.isBlank()) "(no output)" else result.output.take(500)
+                    chatMessages.add(ChatMessage(
+                        "assistant",
+                        "$statusIcon [${i + 1}/${commands.size}] Exit code: ${result.exitCode} (${result.executionTimeMs}ms)\n$outputDisplay",
+                        false, isError = !result.isSuccess
+                    ))
+                    if (!result.isSuccess) {
+                        chatMessages.add(ChatMessage(
+                            "assistant",
+                            "❌ Command gagal (exit code ${result.exitCode}). Auto-Pilot dihentikan.",
+                            false, isError = true
+                        ))
+                        return
+                    }
+                }
+                is MarkerExecutor.ExecutionOutcome.PossiblyWaitingForInput -> {
+                    val outputDisplay = if (outcome.partialOutput.isBlank()) "(no output)" else outcome.partialOutput.take(500)
+                    chatMessages.add(ChatMessage(
+                        "assistant",
+                        "⚠️ [${i + 1}/${commands.size}] Kemungkinan menunggu input interaktif " +
+                        "(idle 15s, elapsed ${outcome.elapsedMs}ms).\n$outputDisplay\n" +
+                        "Auto-Pilot dihentikan — periksa output dan beri arahan manual.",
+                        false, isError = true
+                    ))
+                    return
+                }
+                is MarkerExecutor.ExecutionOutcome.TimedOut -> {
+                    val outputDisplay = if (outcome.partialOutput.isBlank()) "(no output)" else outcome.partialOutput.take(500)
+                    chatMessages.add(ChatMessage(
+                        "assistant",
+                        "⚠️ [${i + 1}/${commands.size}] Timeout (5 menit) menunggu command selesai.\n$outputDisplay\n" +
+                        "Auto-Pilot dihentikan.",
+                        false, isError = true
+                    ))
+                    return
+                }
             }
         }
         chatMessages.add(ChatMessage("assistant", "✅ Auto-Pilot selesai! Semua ${commands.size} perintah berhasil.", false))
@@ -2124,7 +2239,11 @@ class MainActivity : ComponentActivity() {
         try {
             /* Koleksi token-by-token dari streaming Flow. */
             /* Phase 23: Pass fullContext (dengan @mentions resolved) ke AI. */
-            aiAgent.askAIStreaming(aiSettings, chatMessages.toList(), fullContext, activeExecutor?.sessionType ?: "local").collect { delta ->
+            aiAgent.askAIStreaming(
+                aiSettings, chatMessages.toList(), fullContext,
+                activeExecutor?.sessionType ?: "local",
+                activeExecutor?.environmentDescription ?: ""
+            ).collect { delta ->
                 if (abortedWithError != null) return@collect  /* skip further chunks */
                 if (firstChunk) {
                     firstChunk = false

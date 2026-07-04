@@ -13,8 +13,9 @@ android {
         targetSdk = 34
         // Phase 41: Security & Privacy fixes (CRIT-01..04, LOW-02)
         // Phase 45: Realtime audit fixes (Bug #1 shell cwd, Bug #2 pseudo-cmd stick, Bug #3 proot readiness)
-        versionCode = 29
-        versionName = "6.4.0-phase45-realtime-fixes"
+        // Phase 46: AI↔Ubuntu integration (4 pillars: MarkerExecutor fix, environmentDescription, non-interactive apt, AgentWorkflow unify)
+        versionCode = 30
+        versionName = "6.5.0-phase46-ai-ubuntu-integration"
 
         /* Phase 40 fix (M10): Restrict ke arm64-v8a saja — proot binary di assets
          * hanya arm64. Tanpa abiFilters, APK universal akan crash di device x86_64

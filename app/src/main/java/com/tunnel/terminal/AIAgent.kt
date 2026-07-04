@@ -70,7 +70,8 @@ class AIAgent {
         settings: AISettings,
         conversation: List<ChatMessage>,
         terminalContext: String,
-        sessionType: String = "local"
+        sessionType: String = "local",
+        environmentDescription: String = ""
     ): Flow<String> = callbackFlow {
         if (!isConfigured(settings)) {
             trySend(configErrorMessage(settings))
@@ -81,7 +82,10 @@ class AIAgent {
         var connection: HttpURLConnection? = null
         try {
             connection = openConnection(settings, streaming = true)
-            val requestBody = buildRequestBody(settings, conversation, terminalContext, streaming = true, sessionType = sessionType)
+            val requestBody = buildRequestBody(
+                settings, conversation, terminalContext, streaming = true,
+                sessionType = sessionType, environmentDescription = environmentDescription
+            )
             writeRequest(connection, requestBody)
 
             val responseCode = connection.responseCode
@@ -187,7 +191,8 @@ class AIAgent {
         conversation: List<ChatMessage>,
         terminalContext: String,
         streaming: Boolean,
-        sessionType: String = "local"
+        sessionType: String = "local",
+        environmentDescription: String = ""
     ): String {
         /* Phase 40 fix (H2+H3): System prompt yang session-aware.
          * OLD BUGS:
@@ -229,6 +234,18 @@ class AIAgent {
             - Jangan pernah jalankan command yang mungkin menunggu input user (vim, nano, top, less)
               tanpa background/timer — gunakan echo + pipe atau redirect untuk non-interactive.
             - Untuk command yang butuh yes/no: echo "y" | <command> atau pakai flag -y/--yes.
+
+            ## Phase 46 (Pilar 3) — INSTRUKSI KHUSUS UBUNTU (proot)
+            Jika lingkungan aktif adalah Ubuntu (proot):
+            - SELALU tambahkan flag -y untuk apt-get install/remove/upgrade
+              (mis. "apt-get install -y nodejs"), supaya tidak menunggu konfirmasi yang tidak bisa kamu jawab.
+            - Package manager yang benar adalah apt-get/dpkg. JANGAN sarankan "pkg install"
+              (itu Termux, bukan environment ini) atau "yum/dnf" (itu RHEL-based, bukan Ubuntu).
+            - systemctl/service TIDAK berfungsi (tidak ada systemd) — servis dijalankan sebagai
+              proses biasa dengan & (mis. "nginx -g 'daemon off;' &").
+            - Jika hasil command berstatus "kemungkinan menunggu input" (POSSIBLY_WAITING_FOR_INPUT),
+              JANGAN kirim command baru menebak jawabannya — jelaskan ke user apa yang terlihat
+              di output dan minta arahan.
 
             ## RESPONSE FORMAT
 
@@ -293,10 +310,19 @@ class AIAgent {
             }
 
             /* Tambahkan terminal context sebagai pesan system tambahan jika ada.
+             * Phase 46 (Pilar 2): Sertakan environmentDescription di baris paling atas
+             * sebelum output terminal, supaya AI tahu persis lingkungan aktif.
              * Append terminal context as additional system message if present. */
             val cleanContext = stripAnsi(terminalContext).take(1500)
-            if (cleanContext.isNotBlank()) {
-                put(JSONObject().put("role", "system").put("content", "Konteks Terminal saat ini:\n$cleanContext"))
+            if (cleanContext.isNotBlank() || environmentDescription.isNotBlank()) {
+                val contextParts = mutableListOf<String>()
+                if (environmentDescription.isNotBlank()) {
+                    contextParts.add("Lingkungan terminal aktif: $environmentDescription")
+                }
+                if (cleanContext.isNotBlank()) {
+                    contextParts.add("Konteks Terminal saat ini:\n$cleanContext")
+                }
+                put(JSONObject().put("role", "system").put("content", contextParts.joinToString("\n\n")))
             }
         }
 

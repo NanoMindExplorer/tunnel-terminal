@@ -23,6 +23,17 @@ interface TerminalSession {
     /** "local" untuk ShellExecutor, "ssh" untuk SshShellExecutor. */
     val sessionType: String
 
+    /**
+     * Phase 46 (Pilar 2): Deskripsi singkat lingkungan, dikirim ke AI sebagai konteks.
+     *
+     * Supaya AI tidak salah saran (mis. "pkg install" di Ubuntu, atau "apt" di Android shell).
+     * Implementasi per tipe sesi:
+     * - ShellExecutor: "Android shell lokal (toybox/mksh) — TIDAK ADA package manager"
+     * - SshShellExecutor: "Sesi SSH remote — OS/package manager tergantung server"
+     * - ProotShellExecutor: "Ubuntu 24.04 LTS via proot — apt-get & dpkg tersedia"
+     */
+    val environmentDescription: String
+
     fun triggerScreenUpdate()
     suspend fun start()
     suspend fun restart()

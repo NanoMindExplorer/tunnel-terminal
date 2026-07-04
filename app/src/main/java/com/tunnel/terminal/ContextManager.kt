@@ -147,13 +147,23 @@ class ContextManager(private val context: Context) {
         if (session == null) {
             return ResolvedMention(mention, MentionType.COMMAND, "No active terminal session", mention)
         }
-        val result = markerExecutor.executeWithMarker(session, cmd, timeoutMs = 15000)
-        val resultText = markerExecutor.formatResultForAI(result)
+        /* Phase 46 (Pilar 1b): Handle ExecutionOutcome (3 kemungkinan). */
+        val outcome = markerExecutor.executeWithMarker(
+            session, cmd,
+            maxTimeoutMs = 60000,   // @command: context biasanya command cepat, 60s cukup
+            idleTimeoutMs = 15000
+        )
+        val outcomeText = markerExecutor.formatOutcomeForAI(outcome)
+        val displayExit = when (outcome) {
+            is MarkerExecutor.ExecutionOutcome.Completed -> "exit ${outcome.result.exitCode}"
+            is MarkerExecutor.ExecutionOutcome.PossiblyWaitingForInput -> "possibly waiting for input"
+            is MarkerExecutor.ExecutionOutcome.TimedOut -> "timed out"
+        }
         return ResolvedMention(
             mention = mention,
             type = MentionType.COMMAND,
-            content = resultText,
-            displayName = "command: $cmd (exit ${result.exitCode})"
+            content = outcomeText,
+            displayName = "command: $cmd ($displayExit)"
         )
     }
 
