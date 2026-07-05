@@ -218,7 +218,7 @@ class ToolExecutor(
     }
 
     /** Phase 47 (Fix 1): Expose workspaceRoot untuk AgentTaskRunner. */
-    fun getWorkspaceRoot(): File = workspaceRoot
+    fun workspaceRootFile(): File = workspaceRoot
 
     /**
      * Eksekusi tool call. Returns result string.

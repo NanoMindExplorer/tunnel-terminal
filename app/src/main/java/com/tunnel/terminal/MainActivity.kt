@@ -2453,7 +2453,7 @@ class MainActivity : ComponentActivity() {
                 activeExecutor?.sessionType ?: "local",
                 activeExecutor?.environmentDescription ?: "",
                 /* Phase 50 fix (B-5): Inject project context (git, manifests, file tree). */
-                projectContext.buildContext(toolExecutor.getWorkspaceRoot())
+                projectContext.buildContext(toolExecutor.workspaceRootFile())
             ).collect { delta ->
                 if (abortedWithError != null) return@collect  /* skip further chunks */
                 if (firstChunk) {
