@@ -82,7 +82,7 @@ class AgentTaskRunner(
         Regex("""rm\s+-rf\s+/(?!root/workspace|home/)"""),  // rm -rf di luar workspace/home
         Regex("""curl.*\|\s*(sh|bash)"""),                   // pipe ke shell dari internet
         Regex("""wget.*\|\s*(sh|bash)"""),
-        Regex("""\bdd\b.*of="""),                            // dd ke device
+        Regex("\\bdd\\b.*of="),                            // dd ke device
         Regex("""\bsudo\b"""),                               // sudo (tidak ada di proot, tapi jaga)
         Regex("""mkfs\.""),                                   // format filesystem
         Regex(""">\s*/dev/sd[a-z]"""),                        // write langsung ke device
