@@ -118,7 +118,7 @@ class AIAgent {
             .put("name", "run_command").put("description", "Jalankan command di terminal aktif.")
             .put("parameters", org.json.JSONObject()
                 .put("type", "object")
-                .put("properties", org.json.JSONObject().put("cmd", org.json.JSONObject().put("type", "string").put("description", "Command shell"))
+                .put("properties", org.json.JSONObject().put("cmd", org.json.JSONObject().put("type", "string").put("description", "Command shell")))
                 .put("required", org.json.JSONArray().put("cmd"))
             )
         ))

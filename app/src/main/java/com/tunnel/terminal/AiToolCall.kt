@@ -341,7 +341,7 @@ class ToolExecutor(
                 "plan_task" -> {
                     /* Phase 58 fix (§4.6): Set rencana tugas. */
                     val stepsStr = call.args["steps"] ?: return "Error: steps required (JSON array string)"
-                    val steps = try { org.json.JSONArray(stepsStr).map { it.toString() } }
+                    val steps = try { val arr = org.json.JSONArray(stepsStr); (0 until arr.length()).map { arr[it].toString() } }
                         catch (e: Exception) { return "Error: steps must be JSON array: ${e.message}" }
                     taskPlanManager?.setPlan(steps) ?: "Error: TaskPlanManager not available"
                 }
