@@ -371,12 +371,24 @@ fun TerminalScreenView(
                     val longPressTimeout = 500L
 
                     /* Helper: convert pixel position → (row, col)
-                     * Phase 53 fix: Use with(density) { fontSize.sp.toPx() } for fontScale support. */
+                     * Phase 53 fix: Use with(density) { fontSize.sp.toPx() } for fontScale support.
+                     * Phase 55 fix: Compensate for scrollState.offset + padding(4.dp) —
+                     * pos.y dari pointerInput adalah relatif ke Composable, tapi text grid
+                     * ada di dalam Column yang di-scroll + di-padding. Tanpa kompensasi,
+                     * seleksi meleset ke atas (terutama saat sudah scroll ke bawah). */
+                    val paddingPx = with(density) { 4.dp.toPx() }
                     fun posToCell(pos: androidx.compose.ui.geometry.Offset): Pair<Int, Int> {
                         val charW = with(density) { fontSize.sp.toPx() * 0.6f }
                         val charH = with(density) { fontSize.sp.toPx() * 1.2f }
-                        val col = (pos.x / charW).toInt().coerceIn(0, renderCols - 1)
-                        val row = (pos.y / charH).toInt().coerceIn(0, renderRows - 1)
+                        /* Kompensasi: pos.y dari pointerInput sudah relatif ke Composable,
+                         * tapi grid ada di dalam Column(padding(4.dp) + verticalScroll).
+                         * Saat scroll ke bawah, scrollState.value > 0 → pos.y perlu dikurangi
+                         * scroll offset supaya mapping ke row yang benar.
+                         * Saat scroll di atas (value=0), pos.y perlu dikurangi paddingPx. */
+                        val adjustedY = pos.y + scrollState.value - paddingPx
+                        val adjustedX = pos.x - paddingPx
+                        val col = (adjustedX / charW).toInt().coerceIn(0, renderCols - 1)
+                        val row = (adjustedY / charH).toInt().coerceIn(0, renderRows - 1)
                         return Pair(row, col)
                     }
 
