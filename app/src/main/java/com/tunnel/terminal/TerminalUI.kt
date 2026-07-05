@@ -1567,3 +1567,114 @@ fun SshHostKeyChangeDialog(
         }
     )
 }
+
+/**
+ * Phase 49 fix (D-4): MCP Server Management dialog.
+ * User bisa add/remove MCP servers dari UI — sebelumnya hanya via kode.
+ */
+@Composable
+fun McpServerManagementDialog(
+    theme: TerminalTheme,
+    servers: List<McpServerConfig>,
+    onAddServer: (McpServerConfig) -> Unit,
+    onRemoveServer: (String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    var name by remember { mutableStateOf("") }
+    var url by remember { mutableStateOf("") }
+    var apiKey by remember { mutableStateOf("") }
+    var transport by remember { mutableStateOf(McpTransport.SSE) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        modifier = Modifier.background(theme.uiBg),
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("🔌 ", color = theme.uiAccent, fontSize = 18.sp)
+                Text("MCP Server Management", color = theme.uiText, fontFamily = FontFamily.Monospace, fontSize = 14.sp)
+            }
+        },
+        text = {
+            Column(modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState())) {
+                /* Existing servers */
+                if (servers.isNotEmpty()) {
+                    Text("Configured Servers:", color = theme.uiTextMuted, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
+                    Spacer(modifier = Modifier.height(4.dp))
+                    servers.forEach { server ->
+                        Surface(
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+                            color = theme.uiSurface,
+                            shape = RoundedCornerShape(4.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(8.dp).fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text("${server.name} (${server.transport})", color = theme.uiText, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
+                                    Text(server.url, color = theme.uiTextMuted, fontSize = 9.sp, fontFamily = FontFamily.Monospace)
+                                }
+                                TextButton(onClick = { onRemoveServer(server.name) }) {
+                                    Text("Remove", color = Color(0xFFFF5252), fontSize = 10.sp, fontFamily = FontFamily.Monospace)
+                                }
+                            }
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(12.dp))
+                }
+
+                /* Add new server form */
+                Text("Add New Server:", color = theme.uiAccent, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
+                Spacer(modifier = Modifier.height(4.dp))
+                OutlinedTextField(
+                    value = name, onValueChange = { name = it },
+                    label = { Text("Name", color = theme.uiTextMuted, fontSize = 9.sp) },
+                    modifier = Modifier.fillMaxWidth(),
+                    textStyle = androidx.compose.ui.text.TextStyle(color = theme.uiText, fontFamily = FontFamily.Monospace, fontSize = 11.sp),
+                    colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = theme.uiAccent, unfocusedBorderColor = theme.uiSurface)
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                OutlinedTextField(
+                    value = url, onValueChange = { url = it },
+                    label = { Text("URL (https://...)", color = theme.uiTextMuted, fontSize = 9.sp) },
+                    modifier = Modifier.fillMaxWidth(),
+                    textStyle = androidx.compose.ui.text.TextStyle(color = theme.uiText, fontFamily = FontFamily.Monospace, fontSize = 11.sp),
+                    colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = theme.uiAccent, unfocusedBorderColor = theme.uiSurface)
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                OutlinedTextField(
+                    value = apiKey, onValueChange = { apiKey = it },
+                    label = { Text("API Key (optional)", color = theme.uiTextMuted, fontSize = 9.sp) },
+                    modifier = Modifier.fillMaxWidth(),
+                    textStyle = androidx.compose.ui.text.TextStyle(color = theme.uiText, fontFamily = FontFamily.Monospace, fontSize = 11.sp),
+                    colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = theme.uiAccent, unfocusedBorderColor = theme.uiSurface)
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    FilterChip(selected = transport == McpTransport.SSE, onClick = { transport = McpTransport.SSE }, label = { Text("SSE", fontSize = 9.sp) })
+                    Spacer(modifier = Modifier.width(4.dp))
+                    FilterChip(selected = transport == McpTransport.HTTP, onClick = { transport = McpTransport.HTTP }, label = { Text("HTTP", fontSize = 9.sp) })
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = {
+                    if (name.isNotBlank() && url.isNotBlank()) {
+                        onAddServer(McpServerConfig(name = name.trim(), transport = transport, url = url.trim(), apiKey = apiKey.trim()))
+                        name = ""; url = ""; apiKey = ""
+                    }
+                },
+                enabled = name.isNotBlank() && url.isNotBlank()
+            ) {
+                Text("Add Server", color = if (name.isNotBlank() && url.isNotBlank()) theme.uiAccent else theme.uiTextMuted, fontFamily = FontFamily.Monospace, fontSize = 11.sp)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Close", color = theme.uiTextMuted, fontFamily = FontFamily.Monospace, fontSize = 11.sp)
+            }
+        }
+    )
+}

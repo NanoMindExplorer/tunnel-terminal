@@ -16,8 +16,9 @@ android {
         // Phase 46: AI↔Ubuntu integration (4 pillars: MarkerExecutor fix, environmentDescription, non-interactive apt, AgentWorkflow unify)
         // Phase 47: Storage permission fix (workspace sandbox) + Agent Mode (autonomous task runner)
         // Phase 48: Rendering fixes (F-1 atomic snapshot, F-2 alt-screen resize, F-5 throttle) + A-5 random marker + C-1 .gradle cleanup + D-1/D-2 WIKI update
-        versionCode = 32
-        versionName = "6.7.0-phase48-rendering-fixes"
+        // Phase 49: Scrollback buffer (E-1) + Screen persistence via Application (F-3) + MCP server management UI (D-4)
+        versionCode = 33
+        versionName = "6.8.0-phase49-scrollback-persistence-mcp"
 
         /* Phase 40 fix (M10): Restrict ke arm64-v8a saja — proot binary di assets
          * hanya arm64. Tanpa abiFilters, APK universal akan crash di device x86_64

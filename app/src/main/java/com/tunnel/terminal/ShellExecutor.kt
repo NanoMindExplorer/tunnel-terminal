@@ -275,6 +275,8 @@ class ShellExecutor(
      */
     override fun clearScreen() {
         emulator.process("\u001B[2J\u001B[H")
+        /* Phase 49 fix (E-1): Clear scrollback juga saat user ketik 'clear'. */
+        emulator.clearScrollback()
         synchronized(outputLock) {
             outputBuffer.setLength(0)
         }

@@ -67,7 +67,9 @@ import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 class MainActivity : ComponentActivity() {
     /* Phase 21: Changed from ShellExecutor to TerminalSession interface
      * untuk support SSH sessions alongside local PTY. */
-    private val shellExecutors = mutableStateListOf<TerminalSession>()
+    /* Phase 49 fix (F-3): shellExecutors + activeExecutorId di-hold di Application scope
+     * supaya survive Activity recreate (rotasi, low-memory kill). Screen buffer tidak hilang. */
+    private val shellExecutors: androidx.compose.runtime.SnapshotStateList<TerminalSession>
     private var activeExecutorId by mutableStateOf(0)
     private val aiAgent = AIAgent()
 
@@ -105,6 +107,8 @@ class MainActivity : ComponentActivity() {
     private var showSshDialog by mutableStateOf(false)
     /** Phase 47 (Bagian 2): Agent Mode screen visibility. */
     private var showAgentScreen by mutableStateOf(false)
+    /** Phase 49 (D-4): MCP server management dialog visibility. */
+    private var showMcpServerDialog by mutableStateOf(false)
     /** Phase 47: Agent task runner instance. */
     private lateinit var agentTaskRunner: AgentTaskRunner
     /** Phase 47: Agent event log (real-time). */
@@ -227,6 +231,14 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        /* Phase 49 fix (F-3): Ambil shellExecutors dari Application scope.
+         * Survive Activity recreate — screen buffer tidak hilang saat rotasi/low-memory. */
+        val app = application as TunnelApp
+        shellExecutors = app.shellExecutors
+        if (app.activeExecutorId != 0) {
+            activeExecutorId = app.activeExecutorId
+        }
+
         snippetManager = SnippetManager(this)
         snippetsState.addAll(snippetManager.snippets)
         storageManager = StorageManager(this)
@@ -257,6 +269,11 @@ class MainActivity : ComponentActivity() {
         setContent {
             MaterialTheme {
                 Surface(modifier = Modifier.fillMaxSize(), color = currentTheme.background) {
+                    /* Phase 49 fix (F-3): Sync activeExecutorId ke Application scope
+                     * supaya survive Activity recreate. */
+                    LaunchedEffect(activeExecutorId) {
+                        (application as? TunnelApp)?.activeExecutorId = activeExecutorId
+                    }
                     TerminalApp()
                 }
             }
@@ -280,8 +297,11 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        /* Buat tab pertama. */
-        lifecycleScope.launch { createNewTab() }
+        /* Buat tab pertama — HANYA kalau belum ada (Phase 49 F-3: Activity recreate
+         * tidak buat tab baru, pakai yang sudah ada di Application scope). */
+        if (shellExecutors.isEmpty()) {
+            lifecycleScope.launch { createNewTab() }
+        }
     }
 
     /** Load saved theme from prefs and apply to themeHolder. */
@@ -1174,6 +1194,8 @@ class MainActivity : ComponentActivity() {
                 add(PaletteItem("manage_ubuntu", "Manage Linux Environment", "Setting", Icons.Default.Build, PaletteCategory.SETTING) { showUbuntuInstallDialog = true })
                 /* Phase 47 (Bagian 2): Agent Mode — autonomous task runner. */
                 add(PaletteItem("open_agent", "🤖 Agent Mode (Autonomous)", "AI", Icons.Default.SmartToy, PaletteCategory.AI) { showAgentScreen = true })
+                /* Phase 49 (D-4): MCP server management UI. */
+                add(PaletteItem("manage_mcp", "Manage MCP Servers", "Setting", Icons.Default.Cloud, PaletteCategory.SETTING) { showMcpServerDialog = true })
                 /* Commands. */
                 add(PaletteItem("cmd_ls", "Run: ls -la", "Command", Icons.Default.Terminal, PaletteCategory.COMMAND) { shellExecutors.find { it.id == activeExecutorId }?.executeCommand("ls -la") })
                 add(PaletteItem("cmd_pwd", "Run: pwd", "Command", Icons.Default.Terminal, PaletteCategory.COMMAND) { shellExecutors.find { it.id == activeExecutorId }?.executeCommand("pwd") })
@@ -1305,6 +1327,21 @@ class MainActivity : ComponentActivity() {
                 },
                 onApprove = { _, _ -> true },
                 onDismiss = { showAgentScreen = false }
+            )
+        }
+
+        /* Phase 49 (D-4): MCP Server Management dialog. */
+        if (showMcpServerDialog) {
+            McpServerManagementDialog(
+                theme = currentTheme,
+                servers = mcpManager.servers,
+                onAddServer = { config ->
+                    mcpManager.addServer(config)
+                },
+                onRemoveServer = { name ->
+                    mcpManager.removeServer(name)
+                },
+                onDismiss = { showMcpServerDialog = false }
             )
         }
 

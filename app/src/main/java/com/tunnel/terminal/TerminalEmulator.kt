@@ -55,6 +55,21 @@ class TerminalEmulator(private val themeHolder: ThemeHolder = ThemeHolder()) {
 
     /** Screen buffer utama. Main screen buffer. */
     private var screen = Array(rows) { Array(cols) { blankCell() } }
+
+    /**
+     * Phase 49 fix (E-1): Scrollback buffer — simpan baris yang keluar dari layar.
+     *
+     * OLD BUG: Baris yang scroll keluar dari screen hilang permanen. User tidak bisa
+     * scroll ke atas untuk lihat output sebelumnya (mis. apt install dengan banyak log).
+     *
+     * FIX: Ring buffer yang simpan maksimal SCROLLBACK_MAX baris terakhir yang keluar.
+     * Saat scrollUp() dipanggil, baris teratas (scrollTop) di-push ke scrollback.
+     * User bisa akses via getScrollbackLines() untuk render di scroll view.
+     */
+    private val scrollbackMaxLines = 2000
+    private val scrollbackLines = ArrayDeque<Array<TerminalCell>>()
+    /** Jumlah baris yang user scroll ke atas (0 = di bottom/live). */
+    private var scrollbackOffset = 0
     /** Alternate screen buffer (untuk TUI apps). Alt screen buffer for TUI. */
     private var altScreen: Array<Array<TerminalCell>>? = null
 
@@ -232,6 +247,41 @@ class TerminalEmulator(private val themeHolder: ThemeHolder = ThemeHolder()) {
             rows = rows,
             cols = cols
         )
+    }
+
+    /**
+     * Phase 49 fix (E-1): Scrollback access methods.
+     * User scroll ke atas → tampilkan baris dari scrollback buffer.
+     */
+
+    /** Jumlah baris scrollback yang tersimpan. */
+    fun getScrollbackCount(): Int = synchronized(lock) { scrollbackLines.size }
+
+    /** Ambil baris scrollback untuk ditampilkan saat user scroll ke atas.
+     *  @param offset 0 = baris paling baru di scrollback (terakhir keluar dari layar) */
+    fun getScrollbackLine(offset: Int): Array<TerminalCell>? = synchronized(lock) {
+        if (offset < 0 || offset >= scrollbackLines.size) return null
+        scrollbackLines[scrollbackLines.size - 1 - offset]?.map { it.copy() }?.toTypedArray()
+    }
+
+    /** Ambil multiple baris scrollback untuk render batch.
+     *  @param startOffset offset mulai (0 = terbaru)
+     *  @param count jumlah baris yang diminta */
+    fun getScrollbackLines(startOffset: Int, count: Int): List<Array<TerminalCell>> = synchronized(lock) {
+        val result = mutableListOf<Array<TerminalCell>>()
+        for (i in 0 until count) {
+            val offset = startOffset + i
+            if (offset < 0 || offset >= scrollbackLines.size) break
+            val line = scrollbackLines[scrollbackLines.size - 1 - offset]
+            result.add(line.map { it.copy() }.toTypedArray())
+        }
+        result
+    }
+
+    /** Clear scrollback (mis. saat user ketik 'clear'). */
+    fun clearScrollback() = synchronized(lock) {
+        scrollbackLines.clear()
+        scrollbackOffset = 0
     }
 
     fun setCursor(row: Int, col: Int) {
@@ -417,17 +467,28 @@ class TerminalEmulator(private val themeHolder: ThemeHolder = ThemeHolder()) {
         }
     }
 
-    /** Scroll up sebanyak n baris dalam scrolling region. */
+    /** Scroll up sebanyak n baris dalam scrolling region.
+     *  Phase 49 fix (E-1): Baris yang keluar dari scrollTop disimpan ke scrollback. */
     private fun scrollUp(n: Int) {
         if (n <= 0) return
         val effective = minOf(n, scrollBottom - scrollTop + 1)
         for (i in 0 until effective) {
+            /* Phase 49 (E-1): Simpan baris teratas ke scrollback sebelum di-overwrite. */
+            if (altScreen == null) {  // hanya simpan ke scrollback di main screen, bukan alt
+                val topRow = screen[scrollTop].copyOf()  // copy baris (array of TerminalCell)
+                scrollbackLines.addLast(topRow)
+                while (scrollbackLines.size > scrollbackMaxLines) {
+                    scrollbackLines.removeFirst()
+                }
+            }
             for (r in scrollTop until scrollBottom) {
                 screen[r] = screen[r + 1]
             }
             screen[scrollBottom] = Array(cols) { blankCell() }
         }
         cursorRow = scrollBottom
+        /* Reset scrollback offset — user di bottom lagi (new output). */
+        scrollbackOffset = 0
     }
 
     /** Scroll down sebanyak n baris dalam scrolling region (untuk RI). */
