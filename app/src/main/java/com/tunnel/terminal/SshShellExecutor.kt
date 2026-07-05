@@ -6,6 +6,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.unit.sp
+import com.jcraft.jsch.ChannelSftp
 import com.jcraft.jsch.ChannelShell
 import com.jcraft.jsch.JSch
 import com.jcraft.jsch.Session
@@ -85,6 +86,8 @@ class SshShellExecutor(
     @Volatile
     private var readThread: Thread? = null
     private var channelOutputStream: OutputStream? = null
+    /** Phase 58: SFTP channel for file I/O (write_file/read_file via SSH). */
+    private var sftpChannel: ChannelSftp? = null
 
     override val id: Int = globalIdCounter.incrementAndGet()
 
@@ -392,6 +395,10 @@ class SshShellExecutor(
         if (!isAlive && session == null && channel == null && readThread == null) return
         isAlive = false
 
+        /* Phase 58: Disconnect SFTP channel too. */
+        try { sftpChannel?.disconnect() } catch (_: Exception) {}
+        sftpChannel = null
+
         try { channel?.disconnect() } catch (_: Exception) {}
         channel = null
 
@@ -404,6 +411,83 @@ class SshShellExecutor(
         try { session?.disconnect() } catch (_: Exception) {}
         session = null
         channelOutputStream = null
+    }
+
+    /**
+     * Phase 58: SFTP file operations untuk target SSH.
+     * Dipanggil oleh ToolExecutor (via SessionTargetResolver) saat tab SSH aktif.
+     */
+
+    /** Buka SFTP channel dari session yang sudah terhubung. */
+    private fun ensureSftpChannel(): ChannelSftp? {
+        sftpChannel?.let { if (it.isConnected) return it }
+        return try {
+            val sftp = session?.openChannel("sftp") as? ChannelSftp
+            sftp?.connect(10000)
+            sftpChannel = sftp
+            Log.i(tag, "SFTP channel opened")
+            sftp
+        } catch (e: Exception) {
+            Log.e(tag, "Gagal buka SFTP channel: ${e.message}")
+            null
+        }
+    }
+
+    /** Tulis file ke remote via SFTP. */
+    fun writeFileRemote(path: String, content: String): Boolean {
+        val sftp = ensureSftpChannel() ?: return false
+        return try {
+            // Pastikan parent directory exists
+            val parent = path.substringBeforeLast("/", "")
+            if (parent.isNotEmpty()) {
+                try { sftp.mkdir(parent) } catch (_: Exception) { /* mungkin sudah ada */ }
+            }
+            sftp.put(content.byteInputStream(Charsets.UTF_8), path)
+            Log.i(tag, "SFTP write: $path (${content.length} chars)")
+            true
+        } catch (e: Exception) {
+            Log.e(tag, "SFTP write gagal: ${e.message}")
+            false
+        }
+    }
+
+    /** Baca file dari remote via SFTP. */
+    fun readFileRemote(path: String): String? {
+        val sftp = ensureSftpChannel() ?: return null
+        return try {
+            val stream = sftp.get(path)
+            val text = stream.bufferedReader(Charsets.UTF_8).use { it.readText() }
+            Log.i(tag, "SFTP read: $path (${text.length} chars)")
+            text
+        } catch (e: Exception) {
+            Log.e(tag, "SFTP read gagal: ${e.message}")
+            null
+        }
+    }
+
+    /** Hapus file di remote via SFTP. */
+    fun deleteFileRemote(path: String): Boolean {
+        val sftp = ensureSftpChannel() ?: return false
+        return try {
+            sftp.rm(path)
+            Log.i(tag, "SFTP delete: $path")
+            true
+        } catch (e: Exception) {
+            Log.e(tag, "SFTP delete gagal: ${e.message}")
+            false
+        }
+    }
+
+    /** List direktori di remote via SFTP. */
+    fun listFilesRemote(dir: String): List<String>? {
+        val sftp = ensureSftpChannel() ?: return null
+        return try {
+            val entries = sftp.ls(dir)
+            entries.map { it.filename }
+        } catch (e: Exception) {
+            Log.e(tag, "SFTP ls gagal: ${e.message}")
+            null
+        }
     }
     companion object {
         private val globalIdCounter = java.util.concurrent.atomic.AtomicInteger(0)

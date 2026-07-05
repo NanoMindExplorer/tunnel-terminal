@@ -116,6 +116,8 @@ data class AiToolCall(
             - list_files: List direktori. Args: dir (opsional, default = workspace)
             - search_files: Cari file berisi pattern. Args: pattern, dir (opsional)
             - get_terminal_output: Ambil output terminal terakhir. Args: (none)
+            - plan_task: Set rencana tugas di awal tugas kompleks. Args: steps (array string, maks 20)
+            - update_task_status: Update status langkah rencana. Args: step_id (int), status (PENDING/IN_PROGRESS/DONE/FAILED)
 
             TOOLS DESTRUCTIVE (butuh permission user):
             - write_file: Tulis file (full overwrite). Args: path, content. Gunakan untuk file BARU atau saat mengganti seluruh isi file.
@@ -178,7 +180,11 @@ class ToolExecutor(
     /* Phase 50 fix (B-4): CheckpointManager untuk undo AI file edits. */
     private val checkpointManager: CheckpointManager? = null,
     /* Phase 57 fix (§4.1): SessionTargetResolver untuk resolve path berdasarkan sesi aktif. */
-    private var sessionTargetResolver: SessionTargetResolver? = null
+    private var sessionTargetResolver: SessionTargetResolver? = null,
+    /* Phase 58 fix (§4.6): TaskPlanManager untuk plan/act/observe/verify loop. */
+    private val taskPlanManager: TaskPlanManager? = null,
+    /* Phase 58 fix (§4.1-D): SshShellExecutor reference untuk SFTP file I/O. */
+    private var sshExecutor: SshShellExecutor? = null
 ) {
     private val tag = "ToolExecutor"
 
@@ -251,6 +257,11 @@ class ToolExecutor(
         sessionTargetResolver = resolver
     }
 
+    /** Phase 58 fix (§4.1-D): Update SshShellExecutor reference saat pindah tab SSH. */
+    fun setSshExecutor(executor: SshShellExecutor?) {
+        sshExecutor = executor
+    }
+
     /** Phase 57 fix (§4.2): edit_file — edit parsial ala Aider/Claude Code.
      * old_string HARUS match persis 1 kali di file — mencegah AI salah
      * mengganti bagian yang mirip tapi berbeda konteks. */
@@ -285,24 +296,37 @@ class ToolExecutor(
             when (call.tool) {
                 "read_file" -> {
                     val path = call.args["path"] ?: return "Error: path required"
-                    /* Phase 47 (Fix 1): Pakai resolvePath() — sandbox ke workspace. */
-                    val file = resolvePath(path)
-                    if (!file.exists()) return "Error: file not found: ${file.absolutePath}"
-                    if (!file.canRead()) return "Error: cannot read file (permission denied): ${file.absolutePath}"
-                    file.readText().take(5000)
+                    /* Phase 58 fix (§4.1-D): SFTP untuk tab SSH. */
+                    val sessionType = sessionTargetResolver?.let { it.javaClass.getDeclaredField("sessionType").apply { isAccessible = true }.get(it) as? String } ?: "local"
+                    if (sessionType == "ssh" && sshExecutor != null) {
+                        val text = sshExecutor!!.readFileRemote(path)
+                        if (text != null) text.take(5000) else "Error: cannot read remote file: $path"
+                    } else {
+                        val file = resolvePath(path)
+                        if (!file.exists()) return "Error: file not found: ${file.absolutePath}"
+                        if (!file.canRead()) return "Error: cannot read file (permission denied): ${file.absolutePath}"
+                        file.readText().take(5000)
+                    }
                 }
                 "list_files" -> {
-                    /* Phase 47 (Fix 1): Default ke workspaceRoot ("."), bukan filesDir. */
                     val dirRaw = call.args["dir"] ?: "."
-                    val file = if (dirRaw == ".") workspaceRoot else resolvePath(dirRaw)
-                    if (!file.exists() || !file.isDirectory) return "Error: not a directory: ${file.absolutePath}"
-                    file.listFiles()?.joinToString("\n") { f ->
-                        "${if (f.isDirectory) "d" else "-"} ${f.name}"
-                    } ?: "Error: cannot list directory"
+                    /* Phase 58 fix (§4.1-D): SFTP untuk tab SSH. */
+                    val sessionType = sessionTargetResolver?.let { it.javaClass.getDeclaredField("sessionType").apply { isAccessible = true }.get(it) as? String } ?: "local"
+                    if (sessionType == "ssh" && sshExecutor != null) {
+                        val files = sshExecutor!!.listFilesRemote(dirRaw)
+                        if (files != null) files.joinToString("\n") else "Error: cannot list remote directory: $dirRaw"
+                    } else {
+                        val file = if (dirRaw == ".") workspaceRoot else resolvePath(dirRaw)
+                        if (!file.exists() || !file.isDirectory) return "Error: not a directory: ${file.absolutePath}"
+                        file.listFiles()?.joinToString("\n") { f ->
+                            "${if (f.isDirectory) "d" else "-"} ${f.name}"
+                        } ?: "Error: cannot list directory"
+                    }
                 }
                 "search_files" -> {
                     val pattern = call.args["pattern"] ?: return "Error: pattern required"
                     val dirRaw = call.args["dir"] ?: "."
+                    /* Phase 58: search_files tetap lokal (SFTP ls tidak support regex search). */
                     val file = if (dirRaw == ".") workspaceRoot else resolvePath(dirRaw)
                     val regex = Regex(pattern, RegexOption.IGNORE_CASE)
                     val results = mutableListOf<String>()
@@ -314,6 +338,19 @@ class ToolExecutor(
                     if (results.isEmpty()) "No files found matching: $pattern"
                     else results.joinToString("\n")
                 }
+                "plan_task" -> {
+                    /* Phase 58 fix (§4.6): Set rencana tugas. */
+                    val stepsStr = call.args["steps"] ?: return "Error: steps required (JSON array string)"
+                    val steps = try { org.json.JSONArray(stepsStr).map { it.toString() } }
+                        catch (e: Exception) { return "Error: steps must be JSON array: ${e.message}" }
+                    taskPlanManager?.setPlan(steps) ?: "Error: TaskPlanManager not available"
+                }
+                "update_task_status" -> {
+                    /* Phase 58 fix (§4.6): Update status langkah. */
+                    val stepId = call.args["step_id"]?.toIntOrNull() ?: return "Error: step_id required (int)"
+                    val status = call.args["status"] ?: return "Error: status required (PENDING/IN_PROGRESS/DONE/FAILED)"
+                    taskPlanManager?.markStep(stepId, status) ?: "Error: TaskPlanManager not available"
+                }
                 "get_terminal_output" -> {
                     /* Output terminal akan di-inject oleh caller. */
                     "Use terminal context from system message."
@@ -321,22 +358,32 @@ class ToolExecutor(
                 "write_file" -> {
                     val path = call.args["path"] ?: return "Error: path required"
                     val content = call.args["content"] ?: return "Error: content required"
-                    /* Phase 47 (Fix 1): Pakai resolvePath() — sandbox ke workspace. */
-                    val file = resolvePath(path)
-                    /* Phase 50 fix (B-4): Save checkpoint sebelum write — untuk undo. */
-                    checkpointManager?.saveCheckpointBeforeWrite(file.absolutePath)
-                    file.parentFile?.mkdirs()
-                    file.writeText(content)
-                    "OK: wrote ${content.length} chars to ${file.absolutePath}"
+                    /* Phase 58 fix (§4.1-D): SFTP untuk tab SSH. */
+                    val sessionType = sessionTargetResolver?.let { it.javaClass.getDeclaredField("sessionType").apply { isAccessible = true }.get(it) as? String } ?: "local"
+                    if (sessionType == "ssh" && sshExecutor != null) {
+                        if (sshExecutor!!.writeFileRemote(path, content)) "OK: wrote ${content.length} chars to $path (remote)"
+                        else "Error: failed to write remote file: $path"
+                    } else {
+                        val file = resolvePath(path)
+                        checkpointManager?.saveCheckpointBeforeWrite(file.absolutePath)
+                        file.parentFile?.mkdirs()
+                        file.writeText(content)
+                        "OK: wrote ${content.length} chars to ${file.absolutePath}"
+                    }
                 }
                 "delete_file" -> {
                     val path = call.args["path"] ?: return "Error: path required"
-                    /* Phase 47 (Fix 1): Pakai resolvePath() — sandbox ke workspace. */
-                    val file = resolvePath(path)
-                    if (!file.exists()) return "Error: file not found: ${file.absolutePath}"
-                    /* BUG-37 fix: Cek return value dari delete(). */
-                    if (file.delete()) "OK: deleted ${file.absolutePath}"
-                    else "Error: failed to delete ${file.absolutePath} (mungkin direktori tidak kosong atau read-only)"
+                    /* Phase 58 fix (§4.1-D): SFTP untuk tab SSH. */
+                    val sessionType = sessionTargetResolver?.let { it.javaClass.getDeclaredField("sessionType").apply { isAccessible = true }.get(it) as? String } ?: "local"
+                    if (sessionType == "ssh" && sshExecutor != null) {
+                        if (sshExecutor!!.deleteFileRemote(path)) "OK: deleted $path (remote)"
+                        else "Error: failed to delete remote file: $path"
+                    } else {
+                        val file = resolvePath(path)
+                        if (!file.exists()) return "Error: file not found: ${file.absolutePath}"
+                        if (file.delete()) "OK: deleted ${file.absolutePath}"
+                        else "Error: failed to delete ${file.absolutePath}"
+                    }
                 }
                 "run_command" -> {
                     /* Command akan di-execute oleh caller via ShellExecutor. */

@@ -118,6 +118,8 @@ class MainActivity : ComponentActivity() {
     private lateinit var projectContext: ProjectContext
     /** Phase 50 fix (B-4): Checkpoint manager for AI file edit undo. */
     private lateinit var checkpointManager: CheckpointManager
+    /** Phase 58 fix (§4.6): Task plan manager for plan/act/observe/verify loop. */
+    private lateinit var taskPlanManager: TaskPlanManager
     /** Phase 47: Agent event log (real-time). */
     private val agentEvents = mutableStateListOf<AgentTaskRunner.AgentEvent>()
     /** Phase 47: Is Agent task running? */
@@ -258,7 +260,9 @@ class MainActivity : ComponentActivity() {
         workspaceSessions.addAll(workspaceManager.sessions)
         /* Phase 50 fix (B-4): Init CheckpointManager before ToolExecutor. */
         checkpointManager = CheckpointManager(this)
-        toolExecutor = ToolExecutor(this, storageManager, checkpointManager)
+        /* Phase 58 fix (§4.6): Init TaskPlanManager. */
+        taskPlanManager = TaskPlanManager()
+        toolExecutor = ToolExecutor(this, storageManager, checkpointManager, null, taskPlanManager)
         permissionManager = PermissionManager(this)
         contextManager = ContextManager(this)
         mcpManager = McpManager(this)
@@ -1897,6 +1901,12 @@ class MainActivity : ComponentActivity() {
                                     rootfsDir = if (activeExec.sessionType == "ubuntu" && ::prootBootstrap.isInitialized) prootBootstrap.rootfsDir else null
                                 )
                                 toolExecutor.setSessionTargetResolver(resolver)
+                                /* Phase 58 fix (§4.1-D): Set SshShellExecutor reference untuk SFTP. */
+                                if (activeExec is SshShellExecutor) {
+                                    toolExecutor.setSshExecutor(activeExec)
+                                } else {
+                                    toolExecutor.setSshExecutor(null)
+                                }
                             }
                             /* Phase 19.5: currentCommandBuffer & historyIndex sekarang per-tab
                              * (disimpan di ShellExecutor), tidak perlu reset di sini. */
@@ -2472,7 +2482,9 @@ class MainActivity : ComponentActivity() {
                 activeExecutor?.sessionType ?: "local",
                 activeExecutor?.environmentDescription ?: "",
                 /* Phase 50 fix (B-5): Inject project context (git, manifests, file tree). */
-                projectContext.buildContext(toolExecutor.workspaceRootFile())
+                projectContext.buildContext(toolExecutor.workspaceRootFile()),
+                /* Phase 58 fix (§4.6): Inject task plan (imun dari cap 20 pesan). */
+                taskPlanManager.renderForSystemPrompt()
             ).collect { delta ->
                 if (abortedWithError != null) return@collect  /* skip further chunks */
                 if (firstChunk) {

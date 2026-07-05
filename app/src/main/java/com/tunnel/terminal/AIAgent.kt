@@ -72,7 +72,8 @@ class AIAgent {
         terminalContext: String,
         sessionType: String = "local",
         environmentDescription: String = "",
-        projectContext: String = ""
+        projectContext: String = "",
+        taskPlan: String = ""
     ): Flow<String> = callbackFlow {
         if (!isConfigured(settings)) {
             trySend(configErrorMessage(settings))
@@ -86,7 +87,7 @@ class AIAgent {
             val requestBody = buildRequestBody(
                 settings, conversation, terminalContext, streaming = true,
                 sessionType = sessionType, environmentDescription = environmentDescription,
-                projectContext = projectContext
+                projectContext = projectContext, taskPlan = taskPlan
             )
             writeRequest(connection, requestBody)
 
@@ -195,7 +196,8 @@ class AIAgent {
         streaming: Boolean,
         sessionType: String = "local",
         environmentDescription: String = "",
-        projectContext: String = ""
+        projectContext: String = "",
+        taskPlan: String = ""
     ): String {
         /* Phase 40 fix (H2+H3): System prompt yang session-aware.
          * OLD BUGS:
@@ -349,13 +351,16 @@ class AIAgent {
              * supaya AI tahu struktur project tanpa user perlu @mention manual.
              * Append terminal context as additional system message if present. */
             val cleanContext = stripAnsi(terminalContext).take(1500)
-            if (cleanContext.isNotBlank() || environmentDescription.isNotBlank() || projectContext.isNotBlank()) {
+            if (cleanContext.isNotBlank() || environmentDescription.isNotBlank() || projectContext.isNotBlank() || taskPlan.isNotBlank()) {
                 val contextParts = mutableListOf<String>()
                 if (environmentDescription.isNotBlank()) {
                     contextParts.add("Lingkungan terminal aktif: $environmentDescription")
                 }
                 if (projectContext.isNotBlank()) {
                     contextParts.add(projectContext)
+                }
+                if (taskPlan.isNotBlank()) {
+                    contextParts.add(taskPlan)
                 }
                 if (cleanContext.isNotBlank()) {
                     contextParts.add("Konteks Terminal saat ini:\n$cleanContext")

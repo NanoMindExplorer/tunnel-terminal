@@ -20,8 +20,9 @@ android {
         // Phase 50: Project Context Awareness (B-5) + Checkpointing/Undo (B-4)
         // Phase 51: Automated tests (C-5) + BlockMode incremental parse (F-4)
         // Phase 52: Agent Mode audit fixes (Bug #1 approval dialog, Bug #2 success detection, Bug #3 Stop cancel)
-        versionCode = 36
-        versionName = "7.1.0-phase52-agent-audit-fixes"
+        // Phase 58: TaskPlanManager (plan/act/observe/verify) + SFTP for SSH file I/O
+        versionCode = 37
+        versionName = "7.2.0-phase58-taskplan-sftp"
 
         /* Phase 40 fix (M10): Restrict ke arm64-v8a saja — proot binary di assets
          * hanya arm64. Tanpa abiFilters, APK universal akan crash di device x86_64
