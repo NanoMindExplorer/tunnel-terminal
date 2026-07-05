@@ -132,12 +132,13 @@ class TerminalEmulator(private val themeHolder: ThemeHolder = ThemeHolder()) {
             /* Phase 48 fix (F-2): Resize KETIGA buffer (screen + altScreen + mainScreen)
              * sekaligus dalam satu synchronized block.
              *
-             * OLD BUG: resize() hanya resize `screen` (aktif). Saat user di vim (alt-screen
-             * aktif) lalu resize, begitu :q keluar, mainScreen yang di-restore punya dimensi
-             * lama → konten rusak/geser tepat saat keluar dari TUI app.
-             *
-             * FIX: resizeAllBuffers() helper yang pad/crop dari pojok kiri-atas untuk
-             * semua buffer yang ada (aktif + dorman). */
+             * Phase 54 fix: Saat mengecil (keyboard muncul), pertahankan baris PALING
+             * BAWAH (tempat kursor & konten aktif), buang dari ATAS (histori lama).
+             * Sebelumnya kebalik: buang bagian bawah yang justru sedang dipakai user. */
+
+            /* FIX: hitung offset SEBELUM rows berubah, dipakai untuk geser kursor. */
+            val rowOffset = if (newRows < rows) rows - newRows else 0
+
             screen = resizeBuffer(screen, newRows, newCols)
             altScreen = altScreen?.let { resizeBuffer(it, newRows, newCols) }
             mainScreen = mainScreen?.let { resizeBuffer(it, newRows, newCols) }
@@ -149,20 +150,47 @@ class TerminalEmulator(private val themeHolder: ThemeHolder = ThemeHolder()) {
             scrollTop = 0
             scrollBottom = rows - 1
 
-            if (cursorRow >= rows) cursorRow = rows - 1
+            /* FIX: geser kursor dengan offset yang sama, BUKAN cuma clamp ke rows-1.
+             * Clamp lama menaruh kursor di baris yang salah — isinya bukan
+             * lanjutan dari yang sedang diketik. */
+            cursorRow = (cursorRow - rowOffset).coerceIn(0, rows - 1)
             if (cursorCol >= cols) cursorCol = cols - 1
+
+            /* FIX sekunder: savedCursorRow juga perlu digeser — kalau tidak, keluar
+             * dari vim/TUI app setelah resize mengecil akan mengembalikan kursor
+             * ke posisi yang sudah tidak sesuai dengan mainScreen yang baru. */
+            if (rowOffset != 0) {
+                savedCursorRow = (savedCursorRow - rowOffset).coerceIn(0, rows - 1)
+            }
         }
     }
 
     /**
-     * Phase 48 fix (F-2): Resize buffer dengan pad/crop dari pojok kiri-atas.
-     * Dipakai untuk resize screen, altScreen, dan mainScreen sekaligus.
+     * Phase 48 fix (F-2): Resize buffer dengan pad/crop.
+     * Phase 54 fix: Saat mengecil, pertahankan baris PALING BAWAH (baris terbaru),
+     * buang dari ATAS (histori terlama). Sebelumnya kebalik.
      */
     private fun resizeBuffer(buf: Array<Array<TerminalCell>>, newRows: Int, newCols: Int): Array<Array<TerminalCell>> {
         val newBuf = Array(newRows) { Array(newCols) { blankCell() } }
-        for (r in 0 until minOf(buf.size, newRows)) {
-            for (c in 0 until minOf(buf[r].size, newCols)) {
-                newBuf[r][c] = buf[r][c]
+        if (newRows >= buf.size) {
+            /* Membesar (atau sama): baris lama tetap di posisi yang sama,
+             * baris baru yang kosong ditambah di bawah. Perilaku lama, tidak berubah. */
+            for (r in buf.indices) {
+                for (c in 0 until minOf(buf[r].size, newCols)) {
+                    newBuf[r][c] = buf[r][c]
+                }
+            }
+        } else {
+            /* FIX: Mengecil — simpan newRows baris PALING BAWAH (baris terbaru,
+             * tempat kursor & konten yang sedang aktif), buang dari ATAS
+             * (histori terlama). Sebelumnya kebalik: buang bagian yang justru
+             * lagi dipakai user, simpan histori lama yang sudah tidak relevan. */
+            val rowOffset = buf.size - newRows
+            for (r in 0 until newRows) {
+                val srcRow = r + rowOffset
+                for (c in 0 until minOf(buf[srcRow].size, newCols)) {
+                    newBuf[r][c] = buf[srcRow][c]
+                }
             }
         }
         return newBuf
