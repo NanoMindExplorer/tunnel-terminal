@@ -42,3 +42,12 @@
 
 # Keep TerminalJni
 -keep class com.tunnel.terminal.TerminalJni { *; }
+
+# Phase 52 fix: Tink library (security-crypto) references Google HTTP Client + Joda Time
+# yang tidak di-bundle di APK. Safe to suppress — hanya dipakai untuk remote key fetching
+# yang tidak kita gunakan (kita pakai local Android Keystore).
+-dontwarn com.google.api.client.http.**
+-dontwarn com.google.api.client.json.**
+-dontwarn com.google.api.client.googleapis.**
+-dontwarn com.google.api.client.util.**
+-dontwarn org.joda.time.**
