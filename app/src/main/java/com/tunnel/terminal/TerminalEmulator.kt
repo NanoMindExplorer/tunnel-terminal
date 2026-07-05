@@ -114,13 +114,19 @@ class TerminalEmulator(private val themeHolder: ThemeHolder = ThemeHolder()) {
             if (newRows <= 0 || newCols <= 0) return
             if (newRows == rows && newCols == cols && newFontSize == fontSize) return
 
-            val newScreen = Array(newRows) { Array(newCols) { blankCell() } }
-            for (r in 0 until minOf(rows, newRows)) {
-                for (c in 0 until minOf(cols, newCols)) {
-                    newScreen[r][c] = screen[r][c]
-                }
-            }
-            screen = newScreen
+            /* Phase 48 fix (F-2): Resize KETIGA buffer (screen + altScreen + mainScreen)
+             * sekaligus dalam satu synchronized block.
+             *
+             * OLD BUG: resize() hanya resize `screen` (aktif). Saat user di vim (alt-screen
+             * aktif) lalu resize, begitu :q keluar, mainScreen yang di-restore punya dimensi
+             * lama → konten rusak/geser tepat saat keluar dari TUI app.
+             *
+             * FIX: resizeAllBuffers() helper yang pad/crop dari pojok kiri-atas untuk
+             * semua buffer yang ada (aktif + dorman). */
+            screen = resizeBuffer(screen, newRows, newCols)
+            altScreen = altScreen?.let { resizeBuffer(it, newRows, newCols) }
+            mainScreen = mainScreen?.let { resizeBuffer(it, newRows, newCols) }
+
             rows = newRows
             cols = newCols
             fontSize = newFontSize
@@ -131,6 +137,20 @@ class TerminalEmulator(private val themeHolder: ThemeHolder = ThemeHolder()) {
             if (cursorRow >= rows) cursorRow = rows - 1
             if (cursorCol >= cols) cursorCol = cols - 1
         }
+    }
+
+    /**
+     * Phase 48 fix (F-2): Resize buffer dengan pad/crop dari pojok kiri-atas.
+     * Dipakai untuk resize screen, altScreen, dan mainScreen sekaligus.
+     */
+    private fun resizeBuffer(buf: Array<Array<TerminalCell>>, newRows: Int, newCols: Int): Array<Array<TerminalCell>> {
+        val newBuf = Array(newRows) { Array(newCols) { blankCell() } }
+        for (r in 0 until minOf(buf.size, newRows)) {
+            for (c in 0 until minOf(buf[r].size, newCols)) {
+                newBuf[r][c] = buf[r][c]
+            }
+        }
+        return newBuf
     }
 
     /**
@@ -177,6 +197,42 @@ class TerminalEmulator(private val themeHolder: ThemeHolder = ThemeHolder()) {
      * Named snapshotRows/snapshotCols to avoid JVM signature clash with var rows getter. */
     fun snapshotRows(): Int = synchronized(lock) { rows }
     fun snapshotCols(): Int = synchronized(lock) { cols }
+
+    /**
+     * Phase 48 fix (F-1): Atomic render state — gabungkan screen+cursor+rows+cols
+     * dalam SATU synchronized block untuk konsistensi.
+     *
+     * OLD BUG: Compose membaca render state lewat 4 pemanggilan terpisah:
+     *   getScreenSnapshot()  — di-remember(screenDirty)
+     *   getCursorState()     — di-remember(screenDirty)
+     *   snapshotRows()       — TIDAK di-remember → nilai paling baru
+     *   snapshotCols()       — TIDAK di-remember → nilai paling baru
+     * Saat resize terjadi, renderRows/renderCols bisa jadi nilai baru sementara
+     * screenSnapshot masih array ukuran lama → index-out-of-range atau misalignment
+     * → "layar menghilang/bergeser".
+     *
+     * FIX: getRenderState() ambil keempatnya dalam satu transaksi atomik.
+     * Compose cukup satu panggilan: remember(screenDirty) { emulator.getRenderState() }.
+     */
+    data class RenderState(
+        val screen: Array<Array<TerminalCell>>,
+        val cursor: CursorState,
+        val rows: Int,
+        val cols: Int
+    )
+
+    fun getRenderState(): RenderState = synchronized(lock) {
+        RenderState(
+            screen = Array(rows) { r ->
+                Array(cols) { c ->
+                    screen[r][c].copy()
+                }
+            },
+            cursor = CursorState(cursorRow, cursorCol, isCursorVisible),
+            rows = rows,
+            cols = cols
+        )
+    }
 
     fun setCursor(row: Int, col: Int) {
         synchronized(lock) {

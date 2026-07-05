@@ -62,7 +62,21 @@ class ShellExecutor(
     private val _screenDirty = MutableStateFlow(0)
     override val screenDirty: StateFlow<Int> = _screenDirty.asStateFlow()
 
-    override fun triggerScreenUpdate() { _screenDirty.value++ }
+    /** Phase 48 fix (F-5): Throttle screenDirty ke ~30fps (33ms min interval).
+     * OLD BUG: triggerScreenUpdate() dipanggil di setiap chunk dari readLoop →
+     * output sangat cepat (yes, find /) memicu recomposition lebih cepat dari
+     * kemampuan render → glitch visual "bergeser".
+     * FIX: Batasi minimal 33ms antara trigger. Output tetap diproses ke emulator,
+     * hanya Compose recomposition yang di-throttle. */
+    @Volatile
+    private var lastScreenDirtyTime: Long = 0
+    override fun triggerScreenUpdate() {
+        val now = System.currentTimeMillis()
+        if (now - lastScreenDirtyTime >= 33) {  // ~30fps
+            lastScreenDirtyTime = now
+            _screenDirty.value++
+        }
+    }
 
     private val _lastCommandOutput = MutableStateFlow("")
     override val lastCommandOutput: StateFlow<String> = _lastCommandOutput.asStateFlow()

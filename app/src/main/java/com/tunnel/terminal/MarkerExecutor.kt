@@ -47,28 +47,41 @@ class MarkerExecutor {
         private const val TAG = "MarkerExecutor"
         private const val MARKER_PREFIX = "__TT_DONE_"
         private const val MARKER_SUFFIX = "__"
-        private val MARKER_REGEX = Regex("__TT_DONE_(\\d+)_(\\d+)__")
+        /** Phase 48 fix (A-5): Regex sekarang match <counter>_<hex4>_<exitcode>
+         * Format: __TT_DONE_<counter>_<hex4>_<exitcode>__ */
+        private val MARKER_REGEX = Regex("__TT_DONE_(\\d+)_[0-9a-f]{4}_(\\d+)__")
 
         /** Atomic counter untuk unique marker ID. */
         private val markerIdCounter = AtomicLong(0)
 
-        /** Generate unique marker ID. */
-        fun nextMarkerId(): Long = markerIdCounter.incrementAndGet()
+        /** Phase 48 fix (A-5): Random component supaya marker tidak predictable.
+         * Counter alone bisa collide dengan output command yang kebetulan mengandung
+         * string mirip marker. Tambah 4-byte random dari SecureRandom. */
+        private val secureRandom = java.security.SecureRandom()
+
+        /** Generate unique marker ID — counter + random component. */
+        fun nextMarkerId(): String {
+            val counter = markerIdCounter.incrementAndGet()
+            val random = secureRandom.nextInt(0xFFFF)
+            return "${counter}_${String.format("%04x", random)}"
+        }
 
         /**
          * Build command dengan marker appended.
          * Phase 40 fix (H6): Capture exit code SEBELUM echo, bukan di echo-nya.
          */
-        fun wrapCommand(command: String, markerId: Long): String {
+        fun wrapCommand(command: String, markerId: String): String {
             return "{ $command ; } ; ec=\$?; echo \"${MARKER_PREFIX}${markerId}_\${ec}${MARKER_SUFFIX}\""
         }
 
-        /** Parse marker dari output terminal. Returns MarkerResult jika ditemukan. */
+        /** Parse marker dari output terminal. Returns MarkerResult jika ditemukan.
+         *  Phase 48 fix (A-5): markerId sekarang String (counter + hex random).
+         *  parseMarker ekstrak counter dari markerId untuk kompatibilitas. */
         fun parseMarker(output: String): MarkerResult? {
             val match = MARKER_REGEX.find(output) ?: return null
-            val id = match.groupValues[1].toLongOrNull() ?: return null
+            val counter = match.groupValues[1].toLongOrNull() ?: return null
             val exitCode = match.groupValues[2].toIntOrNull() ?: return null
-            return MarkerResult(id = id, exitCode = exitCode, rawMarker = match.value)
+            return MarkerResult(id = counter, exitCode = exitCode, rawMarker = match.value)
         }
 
         /** Hapus marker dari output (untuk display yang clean). */
@@ -101,7 +114,9 @@ class MarkerExecutor {
         }
     }
 
-    /** Result dari marker parsing. */
+    /** Result dari marker parsing.
+     *  id = counter (Long), bukan full markerId string — untuk kompatibilitas.
+     *  Full markerId (counter + hex) hanya dipakai internal saat wrap/parse. */
     data class MarkerResult(
         val id: Long,
         val exitCode: Int,
@@ -165,8 +180,9 @@ class MarkerExecutor {
         maxTimeoutMs: Long = 30000,
         idleTimeoutMs: Long = 15000
     ): ExecutionOutcome = withContext(Dispatchers.IO) {
-        val markerId = nextMarkerId()
-        val wrappedCommand = wrapCommand(command, markerId)
+        val markerIdStr = nextMarkerId()
+        val markerIdCounter = markerIdStr.substringBefore("_").toLong()
+        val wrappedCommand = wrapCommand(command, markerIdStr)
         val startTime = System.currentTimeMillis()
 
         // Capture output sebelum command
@@ -190,7 +206,7 @@ class MarkerExecutor {
 
             // Cek marker
             val marker = parseMarker(newOutput)
-            if (marker != null && marker.id == markerId) {
+            if (marker != null && marker.id == markerIdCounter) {
                 val executionTimeMs = System.currentTimeMillis() - startTime
                 val markerPos = newOutput.indexOf(marker.rawMarker)
                 val cleanOutput = if (markerPos >= 0) {

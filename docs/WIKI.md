@@ -1,6 +1,6 @@
 # Tunnel Terminal — Wiki
 
-**Versi:** 6.3.0 (Phase 41 — Security & Privacy)
+**Versi:** 6.6.0 (Phase 47 — Agent Mode + Storage Sandbox)
 **Repo:** https://github.com/NanoMindExplorer/tunnel-terminal
 
 ---
@@ -432,7 +432,7 @@ data class CommandBlock(
 |---------|-------------|
 | `@file:/path/to/file` | File content (max 5000 chars) |
 | `@block:N` | Command block N output |
-| `@command:"cmd"` | Command note (stub — not executed in this version) |
+| `@command:"cmd"` | Execute command via MarkerExecutor + attach output (with exit code) as context (Phase 37+) |
 | `@terminal` | Current terminal output (max 3000 chars) |
 | `@snippet:name` | Saved snippet command |
 
@@ -615,11 +615,11 @@ Keep rules untuk:
 
 1. **No scrollback buffer** — baris yang keluar dari layar hilang permanen (raw mode)
 2. **PTY initial 80×24** — hardcoded, onSizeChanged fixes immediately after layout
-3. **@command: not executed** — stub, command output tidak di-capture secara real-time
-4. **SSH host key dialog** — TOFU pattern implemented tapi dialog UI belum (log warning only)
-5. **Agent Workflows UI builder** — workflows hanya bisa dibuat via code, tidak ada UI builder
+3. **@command: real implementation** (Phase 37+) — command dieksekusi via MarkerExecutor, output + exit code di-capture real-time
+4. **SSH host key dialog** — ✅ FIXED (Phase 41) — dialog blocking dengan fingerprint lama vs baru sekarang ada
+5. **Agent Workflows UI builder** — workflows hanya bisa dibuat via code, tidak ada UI builder. Tapi Agent Mode (Phase 47) adalah alternatif yang lebih fleksibel
 6. **MCP server management UI** — add/remove servers via code only, tidak ada dialog UI
-7. **EncryptedSharedPreferences** — API key masih disimpan plaintext di SharedPreferences (allowBackup=false mitigates)
+7. **EncryptedSharedPreferences** — ✅ FIXED (Phase 41) — API key sekarang dienkripsi via EncryptedSharedPreferences (AES256-GCM)
 
 ---
 

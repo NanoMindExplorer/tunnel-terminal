@@ -238,9 +238,9 @@ fun TerminalScreenView(
             scrollState.scrollTo(scrollState.maxValue)
         }
     }
-    /* Phase 32: Auto-scroll saat cursor bergerak (user mengetik dengan keyboard fisik). */
-    val cursorState = remember(screenDirty) { emulator.getCursorState() }
-    LaunchedEffect(cursorState.row) {
+    /* Phase 32: Auto-scroll saat cursor bergerak (user mengetik dengan keyboard fisik).
+     * Phase 48 fix (F-1): cursorState sekarang dari renderState atomic snapshot (line ~275). */
+    LaunchedEffect(screenDirty) {
         if (scrollState.maxValue > 0) {
             scrollState.scrollTo(scrollState.maxValue)
         }
@@ -266,10 +266,15 @@ fun TerminalScreenView(
     var selectionEnd by remember { mutableStateOf<Pair<Int, Int>?>(null) }
     var isSelecting by remember { mutableStateOf(false) }
     val clipboardManager = androidx.compose.ui.platform.LocalClipboardManager.current
-    /* Snapshot + dims juga before Box (used in pointerInput modifiers). */
-    val screenSnapshot = remember(screenDirty) { emulator.getScreenSnapshot() }
-    val renderRows = emulator.snapshotRows()
-    val renderCols = emulator.snapshotCols()
+    /* Phase 48 fix (F-1): Atomic render state — screen+cursor+rows+cols dalam satu snapshot.
+     * OLD BUG: 4 pemanggilan terpisah → renderRows/renderCols bisa beda dari screenSnapshot
+     * saat resize → "layar menghilang/bergeser".
+     * FIX: Satu panggilan getRenderState() dalam satu synchronized block. */
+    val renderState = remember(screenDirty) { emulator.getRenderState() }
+    val screenSnapshot = renderState.screen
+    val cursorState = renderState.cursor
+    val renderRows = renderState.rows
+    val renderCols = renderState.cols
 
     Box(
         modifier = Modifier
