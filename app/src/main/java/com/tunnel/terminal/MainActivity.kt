@@ -1573,17 +1573,10 @@ class MainActivity : ComponentActivity() {
             }
 
             fun handleExtraKey(key: String) {
-                /* Phase 34 (A4): PASTE — ambil dari clipboard, kirim ke PTY. */
+                /* Phase 34 (A4) + Phase 53: PASTE — extract ke pasteFromClipboard() supaya
+                 * bisa dipakai ulang oleh floating toolbar. */
                 if (key == "PASTE") {
-                    val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
-                    val clipText = clipboard.primaryClip?.getItemAt(0)?.coerceToText(this@MainActivity)?.toString() ?: ""
-                    if (clipText.isNotEmpty()) {
-                        activeExecutor.writeRaw(clipText)
-                        activeExecutor.currentCommandBuffer += clipText.replace("\n", "")
-                        Toast.makeText(this@MainActivity, "Pasted ${clipText.length} chars", Toast.LENGTH_SHORT).show()
-                    } else {
-                        Toast.makeText(this@MainActivity, "Clipboard kosong", Toast.LENGTH_SHORT).show()
-                    }
+                    pasteFromClipboard(activeExecutor)
                     return
                 }
                 val ansiCode: String = when (key) {
@@ -2180,7 +2173,9 @@ class MainActivity : ComponentActivity() {
                             },
                             /* Phase 24: External fontSize state untuk persist pinch-to-zoom. */
                             fontSizeState = terminalFontSize,
-                            onFontSizeChange = { terminalFontSize = it }
+                            onFontSizeChange = { terminalFontSize = it },
+                            /* Phase 53: Paste callback for floating selection toolbar. */
+                            onPasteRequested = { pasteFromClipboard(activeExecutor) }
                         )
                     }
                     } /* end else (normal mode) */
@@ -2215,6 +2210,19 @@ class MainActivity : ComponentActivity() {
                     contentColor = Color.White
                 ) { Text("🛠", fontSize = 20.sp) }
             }
+        }
+    }
+
+    /** Phase 53: Extract paste logic supaya bisa dipakai ulang oleh floating toolbar. */
+    private fun pasteFromClipboard(executor: TerminalSession) {
+        val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+        val clipText = clipboard.primaryClip?.getItemAt(0)?.coerceToText(this)?.toString() ?: ""
+        if (clipText.isNotEmpty()) {
+            executor.writeRaw(clipText)
+            executor.currentCommandBuffer += clipText.replace("\n", "")
+            Toast.makeText(this, "Pasted ${clipText.length} chars", Toast.LENGTH_SHORT).show()
+        } else {
+            Toast.makeText(this, "Clipboard kosong", Toast.LENGTH_SHORT).show()
         }
     }
 

@@ -218,7 +218,9 @@ fun TerminalScreenView(
     onScroll: (Float) -> Unit = {},
     /* Phase 24: External fontSize control (untuk persist + split pane sync). */
     fontSizeState: Float = 12f,
-    onFontSizeChange: (Float) -> Unit = {}
+    onFontSizeChange: (Float) -> Unit = {},
+    /* Phase 53: Paste callback for floating toolbar. */
+    onPasteRequested: () -> Unit = {}
 ) {
     /* Phase 24: fontSize dari external state (persist antar recompose + tab switch). */
     val fontSize = fontSizeState
@@ -266,6 +268,9 @@ fun TerminalScreenView(
     var selectionEnd by remember { mutableStateOf<Pair<Int, Int>?>(null) }
     var isSelecting by remember { mutableStateOf(false) }
     val clipboardManager = androidx.compose.ui.platform.LocalClipboardManager.current
+    /* Phase 53: Text toolbar for COPY/PASTE floating menu. */
+    val textToolbar = androidx.compose.ui.platform.LocalTextToolbar.current
+    val context = androidx.compose.ui.platform.LocalContext.current
     /* Phase 48 fix (F-1): Atomic render state — screen+cursor+rows+cols dalam satu snapshot.
      * OLD BUG: 4 pemanggilan terpisah → renderRows/renderCols bisa beda dari screenSnapshot
      * saat resize → "layar menghilang/bergeser".
@@ -275,6 +280,53 @@ fun TerminalScreenView(
     val cursorState = renderState.cursor
     val renderRows = renderState.rows
     val renderCols = renderState.cols
+
+    /* Phase 53: Selection toolbar helpers. */
+    fun selectionBoundsToRect(start: Pair<Int, Int>, end: Pair<Int, Int>): androidx.compose.ui.geometry.Rect {
+        val charW = with(density) { fontSize.sp.toPx() * 0.6f }
+        val charH = with(density) { fontSize.sp.toPx() * 1.2f }
+        val (sRow, sCol) = if (start.first < end.first || (start.first == end.first && start.second <= end.second)) start else end
+        val (eRow, eCol) = if (start.first < end.first || (start.first == end.first && start.second <= end.second)) end else start
+        val left = sCol * charW
+        val top = sRow * charH
+        val right = (eCol + 1) * charW
+        val bottom = (eRow + 1) * charH
+        return androidx.compose.ui.geometry.Rect(left, top, right, bottom)
+    }
+
+    fun showSelectionToolbar() {
+        val start = selectionStart ?: return
+        val end = selectionEnd ?: return
+        val rect = selectionBoundsToRect(start, end)
+        textToolbar.showMenu(
+            rect = rect,
+            onCopyRequested = {
+                val text = getSelectedText(screenSnapshot, selectionStart, selectionEnd, renderCols)
+                if (text.isNotEmpty()) {
+                    clipboardManager.setText(AnnotatedString(text))
+                    android.widget.Toast.makeText(context, "Copied ${text.length} chars", android.widget.Toast.LENGTH_SHORT).show()
+                }
+                textToolbar.hide()
+                isSelecting = false
+                selectionStart = null
+                selectionEnd = null
+            },
+            onPasteRequested = {
+                onPasteRequested()
+                textToolbar.hide()
+                isSelecting = false
+                selectionStart = null
+                selectionEnd = null
+            }
+        )
+    }
+
+    fun hideSelectionToolbar() {
+        textToolbar.hide()
+        isSelecting = false
+        selectionStart = null
+        selectionEnd = null
+    }
 
     Box(
         modifier = Modifier
@@ -318,10 +370,13 @@ fun TerminalScreenView(
                     val touchSlop = with(density) { 8.dp.toPx() }
                     val longPressTimeout = 500L
 
-                    /* Helper: convert pixel position → (row, col) */
+                    /* Helper: convert pixel position → (row, col)
+                     * Phase 53 fix: Use with(density) { fontSize.sp.toPx() } for fontScale support. */
                     fun posToCell(pos: androidx.compose.ui.geometry.Offset): Pair<Int, Int> {
-                        val col = (pos.x / (fontSize * 0.6f * density.density)).toInt().coerceIn(0, renderCols - 1)
-                        val row = (pos.y / (fontSize * 1.2f * density.density)).toInt().coerceIn(0, renderRows - 1)
+                        val charW = with(density) { fontSize.sp.toPx() * 0.6f }
+                        val charH = with(density) { fontSize.sp.toPx() * 1.2f }
+                        val col = (pos.x / charW).toInt().coerceIn(0, renderCols - 1)
+                        val row = (pos.y / charH).toInt().coerceIn(0, renderRows - 1)
                         return Pair(row, col)
                     }
 
@@ -336,15 +391,17 @@ fun TerminalScreenView(
                             /* Finger lifted → gesture selesai */
                             !change.pressed -> {
                                 if (selectionStarted) {
-                                    /* Selection complete → copy to clipboard */
-                                    val text = getSelectedText(screenSnapshot, selectionStart, selectionEnd, renderCols)
-                                    if (text.isNotEmpty()) {
-                                        clipboardManager.setText(AnnotatedString(text))
-                                    }
-                                    isSelecting = false
+                                    /* Phase 53: JANGAN auto-copy — biarkan seleksi persisten,
+                                     * munculkan toolbar COPY/PASTE. */
+                                    showSelectionToolbar()
                                 } else if (!isLongPress && distance < touchSlop) {
-                                    /* Tap → focus keyboard */
-                                    onTap()
+                                    if (isSelecting) {
+                                        /* Tap di luar seleksi yang sedang aktif → batalkan. */
+                                        hideSelectionToolbar()
+                                    } else {
+                                        /* Tap → focus keyboard */
+                                        onTap()
+                                    }
                                 }
                                 change.consume()
                                 break
@@ -489,11 +546,15 @@ private fun getSelectedText(
         if (row >= screen.size) break
         val rowStart = if (row == startRow) startCol else 0
         val rowEnd = if (row == endRow) endCol else cols - 1
+        val lineBuilder = StringBuilder()
         for (col in rowStart..rowEnd) {
             if (col < screen[row].size) {
-                sb.append(screen[row][col].char)
+                lineBuilder.append(screen[row][col].char)
             }
         }
+        /* Phase 53 fix: trimEnd whitespace — terminal cells are space-padded,
+         * copy should not include trailing spaces (like Termux does). */
+        sb.append(lineBuilder.toString().trimEnd())
         if (row < endRow) sb.append('\n')
     }
     return sb.toString()
