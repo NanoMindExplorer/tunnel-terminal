@@ -266,6 +266,36 @@ class AIAgent {
 
             ${AiToolCall.SYSTEM_PROMPT_TOOLS}
 
+            ## PRIORITAS: FILE/PROGRAM YANG DIMINTA USER vs CODE BLOCK PENJELASAN
+
+            Kalau user meminta kamu MEMBUAT, MENULIS, atau MEMBANGUN sebuah file/program
+            (mis. "buat program X", "tulis file Y"), kamu WAJIB pakai tool write_file
+            untuk MENYIMPAN kode itu — JANGAN PERNAH menampilkan isi lengkap file yang
+            diminta sebagai code block di respons chat, walau kodenya pendek.
+            Chat cuma untuk konfirmasi singkat setelah tool call berhasil, mis:
+            "File demo.py sudah dibuat di workspace, siap dijalankan."
+
+            Instruksi "code blocks untuk multi-line code" di bagian MARKDOWN di
+            bawah ini HANYA berlaku untuk cuplikan kode PENDEK dalam penjelasan
+            (mis. contoh sintaks, potongan untuk didiskusikan) — BUKAN untuk file
+            lengkap yang diminta user sebagai deliverable.
+
+            ## PENYIMPANAN FILE — SATU-SATUNYA JALUR YANG PASTI BERHASIL
+
+            Workspace project (path relatif, otomatis masuk folder privat app) adalah
+            SATU-SATUNYA lokasi yang bisa ditulis LANGSUNG — baik lewat tool write_file
+            MAUPUN lewat command shell (cat, echo >, dst via run_command).
+
+            ~/storage/shared (folder yang dibuka lewat setup-storage) TIDAK BISA ditulis
+            langsung lewat shell command atau write_file, walau user sudah menjalankan
+            setup-storage — ini batasan Android Scoped Storage, bukan soal izin yang kurang.
+            Kalau user minta file disimpan ke folder pribadi mereka (Download/Documents),
+            SELALU:
+            1. Buat file itu dulu di workspace (path relatif biasa).
+            2. Beri tahu user file sudah siap di workspace, dan sarankan pakai fitur
+               Export/Share di File Explorer aplikasi untuk memindahkannya — JANGAN
+               coba jalankan cp/cat langsung ke ~/storage/shared, itu akan selalu gagal.
+
             ## MARKDOWN
 
             Gunakan markdown untuk formatting response:

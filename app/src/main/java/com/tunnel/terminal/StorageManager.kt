@@ -115,7 +115,11 @@ class StorageManager(private val context: Context) {
                     try {
                         android.system.Os.symlink(realSdcard.absolutePath, sharedLinkFile.absolutePath)
                         return "OK: ~/storage/shared -> ${realSdcard.absolutePath}\n" +
-                               "Anda bisa cd ~/storage/shared untuk akses file manager."
+                               "CATATAN: Path ini bisa di-'ls' tapi TIDAK BISA ditulis langsung lewat " +
+                               "command shell (cat, touch, write_file) karena batasan Android Scoped " +
+                               "Storage. Untuk menyimpan file ke folder ini, gunakan fitur Export/Share " +
+                               "di File Explorer aplikasi, atau simpan dulu di workspace project lalu " +
+                               "export dari sana."
                     } catch (e: Exception) {
                         Log.w(TAG, "symlink gagal, fallback ke marker: ${e.message}")
                     }
@@ -138,12 +142,16 @@ class StorageManager(private val context: Context) {
                 Folder ini adalah jembatan ke URI yang Anda pilih via SAF picker.
                 URI Persisten: $uri
 
-                Untuk akses file dari shell Tunnel Terminal:
-                - Gunakan path ~/storage/shared/<nama-file> untuk file yang Anda buat di sini
-                - File yang Anda buat lewat UI File Manager di folder yang dipilih akan
-                  otomatis muncul di sini (karena SAF URI mengarah ke folder yang sama)
+                CATATAN PENTING: Folder ini adalah storage PRIVAT aplikasi Tunnel Terminal.
+                File yang dibuat di sini TIDAK otomatis muncul di folder yang Anda pilih
+                via SAF picker — tidak ada sinkronisasi otomatis.
 
-                Catatan: Pada Android 11+, /sdcard tidak bisa diakses langsung lewat path
+                Untuk menyimpan file ke folder pribadi Anda (Download/Documents/dst):
+                1. Buat/edit file di workspace project (path relatif di terminal).
+                2. Buka File Explorer di aplikasi → pilih file → Export/Share.
+                3. Pilih lokasi tujuan (folder yang sudah di-grant via setup-storage).
+
+                Pada Android 11+, /sdcard tidak bisa diakses langsung lewat path
                 tanpa MANAGE_EXTERNAL_STORAGE. Tunnel Terminal menggunakan SAF (lebih aman)
                 sehingga Anda tetap bisa berbagi file dengan aplikasi lain tanpa izin luas.
 
@@ -152,7 +160,8 @@ class StorageManager(private val context: Context) {
             )
             return "OK: Bridge folder dibuat di ~/storage/shared/\n" +
                    "URI: $uri\n" +
-                   "Buka ~/storage/shared/README_SAF.txt untuk detail."
+                   "CATATAN: Folder ini adalah storage privat app, bukan folder SAF asli.\n" +
+                   "Untuk export file ke folder pribadi Anda, gunakan File Explorer → Export."
         } catch (e: Exception) {
             return "Gagal membuat bridge folder: ${e.message}"
         }
