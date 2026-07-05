@@ -29,7 +29,7 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
         with:
-          packages: 'ndk;25.1.8937393 cmake;3.22.1'
+          packages: 'ndk;25.1.8937393 cmake;3.22.1 build-tools;34.0.0'
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v3
@@ -81,7 +81,7 @@ jobs:
           keyStorePassword: ${{ secrets.KEYSTORE_PASSWORD }}
           keyPassword: ${{ secrets.KEY_PASSWORD }}
         env:
-          BUILD_TOOLS_VERSION: "33.0.1"
+          BUILD_TOOLS_VERSION: "34.0.0"
 
       - name: Rename APK
         run: |
