@@ -64,8 +64,18 @@ class AgentTaskRunner(
 
     /** Ringkasan kompak per langkah — dikirim balik ke AI di iterasi berikutnya.
      * SENGAJA tidak menyimpan isi file/output penuh supaya context tidak
-     * membengkak di task panjang (30+ iterasi). */
-    private data class StepRecord(val action: String, val outcome: String)
+     * membengkak di task panjang (30+ iterasi).
+     * Phase 52 fix (Bug #2): Tambah success + tool field supaya verifyCompletion
+     * bisa cek exit code asli, bukan string-match yang salah. */
+    private data class StepRecord(
+        val action: String,
+        val outcome: String,
+        val success: Boolean,
+        val tool: String
+    )
+
+    /** Phase 52 fix (Bug #2): Result dari executeViaMarker — text + success flag. */
+    private data class ExecResult(val text: String, val success: Boolean)
 
     /** Pola command berisiko yang tetap butuh approval manual walau mode otonom. */
     private val highRiskPatterns = listOf(
@@ -116,7 +126,8 @@ class AgentTaskRunner(
         // Setup: cd ke workspace supaya command yang AI jalankan pakai cwd yang benar
         try {
             session.writeRaw("cd \"$workspacePath\"\n")
-            Thread.sleep(100)
+            /* Phase 52 fix (Bug #3): delay() bukan Thread.sleep — kooperatif terhadap cancellation. */
+            kotlinx.coroutines.delay(100)
         } catch (e: Exception) {
             Log.w(TAG, "Gagal cd ke workspace: ${e.message}")
         }
@@ -159,7 +170,7 @@ class AgentTaskRunner(
                     events(AgentEvent.Done(summary))
                     return
                 } else {
-                    history.add(StepRecord("verifikasi selesai", "GAGAL — masih ada masalah, lanjutkan perbaikan"))
+                    history.add(StepRecord("verifikasi selesai", "GAGAL — masih ada masalah, lanjutkan perbaikan", false, "verify"))
                     events(AgentEvent.Status("⚠ Verifikasi gagal — AI diminta lanjut memperbaiki"))
                     continue
                 }
@@ -177,7 +188,7 @@ class AgentTaskRunner(
             if (calls.isEmpty()) {
                 // AI tidak memberi aksi maupun sinyal selesai — kemungkinan stuck
                 events(AgentEvent.Status("AI tidak memberi aksi jelas. Response: ${response.take(300)}"))
-                history.add(StepRecord("iterasi $iteration", "tidak ada aksi — response: ${response.take(150)}"))
+                history.add(StepRecord("iterasi $iteration", "tidak ada aksi — response: ${response.take(150)}", false, "none"))
 
                 // Kalau 3 iterasi berturut-turut tidak ada aksi, stop
                 val recentNoAction = history.takeLast(3).all { it.outcome.startsWith("tidak ada aksi") }
@@ -201,23 +212,30 @@ class AgentTaskRunner(
                     events(AgentEvent.NeedsApproval(call, riskReason))
                     val approved = approve(call, riskReason)
                     if (!approved) {
-                        history.add(StepRecord(call.displayText, "DITOLAK user: $riskReason"))
+                        /* Phase 52 fix (Bug #2): StepRecord sekarang punya success + tool fields. */
+                        history.add(StepRecord(call.displayText, "DITOLAK user: $riskReason", false, call.tool))
                         events(AgentEvent.ToolResult(call.tool, call.displayText, "Ditolak user: $riskReason", false))
                         continue
                     }
                     events(AgentEvent.Status("✓ Approved: ${call.displayText}"))
                 }
 
-                // Eksekusi
-                val result = if (call.tool == "run_command") {
-                    executeViaMarker(call, session)
+                /* Phase 52 fix (Bug #2): Eksekusi dengan success detection yang benar.
+                 * OLD BUG: success = !result.startsWith("Error") — tapi formatResultForAI()
+                 * selalu mulai dengan "Command: ", bukan "Error: ". Jadi success selalu true
+                 * bahkan untuk command yang gagal (exit code non-zero).
+                 * FIX: Untuk run_command, pakai CommandResult.isSuccess (exit code asli).
+                 * Untuk tool lain, tetap pakai string-match (mereka memang mulai dengan "Error:" kalau gagal). */
+                val (resultText, success) = if (call.tool == "run_command") {
+                    val execResult = executeViaMarker(call, session)
+                    execResult.text to execResult.success
                 } else {
-                    toolExecutor.execute(call)
+                    val text = toolExecutor.execute(call)
+                    text to (!text.startsWith("Error") && !text.startsWith("Ditolak"))
                 }
 
-                val success = !result.startsWith("Error") && !result.startsWith("Ditolak")
-                history.add(StepRecord(call.displayText, result.take(300)))
-                events(AgentEvent.ToolResult(call.tool, call.displayText, result.take(200), success))
+                history.add(StepRecord(call.displayText, resultText.take(300), success, call.tool))
+                events(AgentEvent.ToolResult(call.tool, call.displayText, resultText.take(200), success))
             }
 
             yield() // beri chance coroutine untuk di-cancel
@@ -266,18 +284,27 @@ class AgentTaskRunner(
         return null
     }
 
-    /** Eksekusi run_command via MarkerExecutor dengan ExecutionOutcome handling. */
-    private suspend fun executeViaMarker(call: AiToolCall, session: TerminalSession): String {
-        val cmd = call.args["cmd"] ?: return "Error: cmd required"
+    /** Eksekusi run_command via MarkerExecutor dengan ExecutionOutcome handling.
+     *  Phase 52 fix (Bug #2): Return ExecResult (text + success), bukan String.
+     *  Success datang dari CommandResult.isSuccess (exit code asli), bukan string-match. */
+    private suspend fun executeViaMarker(call: AiToolCall, session: TerminalSession): ExecResult {
+        val cmd = call.args["cmd"] ?: return ExecResult("Error: cmd required", false)
         return try {
             val outcome = markerExecutor.executeWithMarker(
                 session, cmd,
                 maxTimeoutMs = 300000,  // 5 menit — apt install bisa lama
                 idleTimeoutMs = 15000   // 15s idle = curiga nunggu input
             )
-            markerExecutor.formatOutcomeForAI(outcome)
+            val text = markerExecutor.formatOutcomeForAI(outcome)
+            /* Phase 52 fix (Bug #2): Success dari CommandResult.isSuccess (exit code asli).
+             * PossiblyWaitingForInput dan TimedOut selalu dianggap gagal. */
+            val success = when (outcome) {
+                is MarkerExecutor.ExecutionOutcome.Completed -> outcome.result.isSuccess
+                else -> false  // PossiblyWaitingForInput / TimedOut = gagal
+            }
+            ExecResult(text, success)
         } catch (e: Exception) {
-            "Error executing command: ${e.message}"
+            ExecResult("Error executing command: ${e.message}", false)
         }
     }
 
@@ -285,26 +312,33 @@ class AgentTaskRunner(
      * Verifikasi independen setelah AI klaim selesai.
      * Jangan percaya klaim AI begitu saja — cek apakah benar-benar selesai.
      *
-     * Implementasi saat ini: cek exit code command terakhir yang dijalankan AI adalah 0.
-     * Bisa di-extend per jenis project (mis. untuk web server, curl endpoint;
-     * untuk CLI, jalankan --help dan cek exit 0).
+     * Phase 52 fix (Bug #2): Pakai success flag dari StepRecord (exit code asli),
+     * bukan string-match yang salah (startsWith("Error") selalu false untuk run_command).
+     *
+     * Heuristik: cek run_command terakhir — kalau gagal, task belum selesai.
+     * Kalau tidak ada run_command sama sekali, AI belum benar-benar menguji apa pun.
      */
     private suspend fun verifyCompletion(
         session: TerminalSession,
         goal: String,
         history: List<StepRecord>
     ): Boolean {
-        // Heuristik sederhana: kalau 3 step terakhir semua sukses, anggap verified.
-        // Bisa di-extend dengan logic spesifik-goal nanti.
+        /* Phase 52 fix (Bug #2): Cek run_command terakhir — kalau gagal, belum selesai.
+         * Kalau tidak ada run_command sama sekali, AI belum menguji apa pun → tidak verified. */
+        val lastRunCommand = history.lastOrNull { it.tool == "run_command" }
+        if (lastRunCommand == null) {
+            // AI klaim selesai tapi belum pernah menjalankan/menguji apa pun
+            return false
+        }
+        // run_command terakhir harus sukses (exit code 0)
+        if (!lastRunCommand.success) return false
+
+        // Tambahan: minimal 60% step terakhir sukses (jaga-jaga untuk multi-step)
         val recent = history.takeLast(5)
         if (recent.isEmpty()) return false
-
-        val successCount = recent.count { !it.outcome.startsWith("Error") && !it.outcome.startsWith("DITOLAK") }
+        val successCount = recent.count { it.success }
         val successRate = successCount.toDouble() / recent.size
-
-        // Minimal 60% step terakhir sukses, dan tidak ada "GAGAL" di verifikasi sebelumnya
-        val hasRecentFailure = recent.any { it.outcome.contains("GAGAL", ignoreCase = true) }
-        return successRate >= 0.6 && !hasRecentFailure
+        return successRate >= 0.6
     }
 
     /** Build prompt untuk AI di setiap iterasi. */

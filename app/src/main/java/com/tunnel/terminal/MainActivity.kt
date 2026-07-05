@@ -17,6 +17,9 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -119,6 +122,11 @@ class MainActivity : ComponentActivity() {
     private val agentEvents = mutableStateListOf<AgentTaskRunner.AgentEvent>()
     /** Phase 47: Is Agent task running? */
     private var agentRunning by mutableStateOf(false)
+    /** Phase 52 fix (Bug #1): State untuk approval dialog (CompletableDeferred bridge). */
+    private var pendingAgentApproval by mutableStateOf<Pair<AiToolCall, String>?>(null)
+    private var agentApprovalDeferred: kotlinx.coroutines.CompletableDeferred<Boolean>? = null
+    /** Phase 52 fix (Bug #3): Job reference untuk Stop via cancel(). */
+    private var agentJob: kotlinx.coroutines.Job? = null
     /** Phase 41 fix (CRIT-02): State untuk SSH host key change dialog (blocking).
      *  Non-null = dialog sedang visible, user harus pilih approve/reject. */
     private val _sshHostKeyDialogState = mutableStateOf<SshHostKeyDialogState?>(null)
@@ -594,12 +602,9 @@ class MainActivity : ComponentActivity() {
 
         // Pilih session — Ubuntu kalau diminta dan ada, fallback ke active session
         val session = if (useUbuntu) {
-            // Cari tab Ubuntu yang sudah aktif, atau buat baru
             shellExecutors.find { it.sessionType == "ubuntu" && it.isAlive }
                 ?: run {
-                    // Kalau belum ada tab Ubuntu, buka tab baru
                     lifecycleScope.launch { createUbuntuTab() }
-                    // Tunggu sebentar supaya tab terbuka
                     Thread.sleep(2000)
                     shellExecutors.find { it.sessionType == "ubuntu" && it.isAlive }
                 }
@@ -615,7 +620,12 @@ class MainActivity : ComponentActivity() {
         agentEvents.clear()
         agentRunning = true
 
-        lifecycleScope.launch {
+        /* Phase 52 fix (Bug #1): Ganti hardcoded onApprove=true dengan CompletableDeferred
+         * yang menampilkan dialog blocking ke user. Risk assessment sekarang BENAR-BENAR
+         * berfungsi — command berisiko (rm -rf, curl|sh, sudo) butuh approval eksplisit.
+         * Phase 52 fix (Bug #3): Simpan Job supaya Stop bisa cancel() coroutine yang
+         * sedang menunggu respons AI — bukan cuma set flag yang dicek di iterasi berikutnya. */
+        agentJob = lifecycleScope.launch {
             try {
                 agentTaskRunner.run(
                     goal = goal,
@@ -623,16 +633,21 @@ class MainActivity : ComponentActivity() {
                     settings = aiSettings,
                     maxIterations = 40,
                     approve = { call, reason ->
-                        // Untuk simplicity, auto-approve di mode otonom.
-                        // TODO: Tampilkan dialog approval yang proper.
-                        // Untuk sekarang, log warning dan approve.
-                        Log.w("AgentTask", "Auto-approved risky action: $reason — call: ${call.displayText}")
-                        true
+                        /* Phase 52 fix (Bug #1): Bridge suspend function ke dialog Compose
+                         * pakai CompletableDeferred. Loop Agent BENAR-BENAR berhenti sampai
+                         * user pilih Approve/Deny. */
+                        val deferred = kotlinx.coroutines.CompletableDeferred<Boolean>()
+                        agentApprovalDeferred = deferred
+                        pendingAgentApproval = call to reason
+                        deferred.await()  // suspend di sini — loop berhenti sampai user pilih
                     },
                     events = { event ->
                         agentEvents.add(event)
                     }
                 )
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                /* Phase 52 fix (Bug #3): Job.cancel() memunculkan CancellationException. */
+                agentEvents.add(AgentTaskRunner.AgentEvent.StoppedForSafety("Dihentikan oleh user"))
             } catch (e: Exception) {
                 agentEvents.add(AgentTaskRunner.AgentEvent.StoppedForSafety("Exception: ${e.message}"))
             } finally {
@@ -1330,11 +1345,69 @@ class MainActivity : ComponentActivity() {
                 onPause = { agentTaskRunner.pause() },
                 onResume = { agentTaskRunner.resume() },
                 onStop = {
+                    /* Phase 52 fix (Bug #3): Job.cancel() menginterupsi coroutine di titik
+                     * suspend manapun — termasuk saat menunggu respons AI. */
+                    agentJob?.cancel()
                     agentTaskRunner.stop()
                     agentRunning = false
                 },
                 onApprove = { _, _ -> true },
                 onDismiss = { showAgentScreen = false }
+            )
+        }
+
+        /* Phase 52 fix (Bug #1): Approval dialog untuk aksi berisiko di Agent Mode.
+         * Muncul saat assessRisk() mendeteksi command berisiko (rm -rf, curl|sh, sudo, dst).
+         * User HARUS pilih Approve/Deny — tidak bisa dismiss tanpa pilihan eksplisit. */
+        pendingAgentApproval?.let { (call, reason) ->
+            AlertDialog(
+                onDismissRequest = { /* sengaja kosong — tidak boleh dismiss tanpa pilihan */ },
+                modifier = Modifier.background(currentTheme.uiBg),
+                title = {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("⚠️ ", color = Color(0xFFFF5252), fontSize = 18.sp)
+                        Text("Aksi Berisiko — Butuh Persetujuan",
+                            color = Color(0xFFFF5252), fontFamily = FontFamily.Monospace, fontSize = 13.sp)
+                    }
+                },
+                text = {
+                    Column(modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState())) {
+                        Text(reason, color = currentTheme.uiTextMuted, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text("Command lengkap:", color = currentTheme.uiTextMuted, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
+                        Surface(
+                            modifier = Modifier.fillMaxWidth(),
+                            color = Color(0x33FF5252),
+                            shape = RoundedCornerShape(4.dp)
+                        ) {
+                            Text(
+                                call.displayTextFull,
+                                color = Color(0xFFFFAB00),
+                                fontSize = 10.sp,
+                                fontFamily = FontFamily.Monospace,
+                                modifier = Modifier.padding(8.dp)
+                            )
+                        }
+                    }
+                },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            agentApprovalDeferred?.complete(true)
+                            pendingAgentApproval = null
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF5252))
+                    ) { Text("Approve", color = Color.White, fontFamily = FontFamily.Monospace, fontSize = 11.sp) }
+                },
+                dismissButton = {
+                    Button(
+                        onClick = {
+                            agentApprovalDeferred?.complete(false)
+                            pendingAgentApproval = null
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = currentTheme.uiSurface)
+                    ) { Text("Deny", color = currentTheme.uiText, fontFamily = FontFamily.Monospace, fontSize = 11.sp) }
+                }
             )
         }
 
