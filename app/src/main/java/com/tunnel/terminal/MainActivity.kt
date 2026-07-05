@@ -72,7 +72,7 @@ class MainActivity : ComponentActivity() {
      * untuk support SSH sessions alongside local PTY. */
     /* Phase 49 fix (F-3): shellExecutors + activeExecutorId di-hold di Application scope
      * supaya survive Activity recreate (rotasi, low-memory kill). Screen buffer tidak hilang. */
-    private val shellExecutors: androidx.compose.runtime.SnapshotStateList<TerminalSession>
+    private lateinit var shellExecutors: androidx.compose.runtime.SnapshotStateList<TerminalSession>
     private var activeExecutorId by mutableStateOf(0)
     private val aiAgent = AIAgent()
 

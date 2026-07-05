@@ -244,7 +244,7 @@ class MarkerExecutor {
 
         // Max timeout tercapai tanpa marker
         val partialOutput = stripMarker(computeNewOutput(outputBefore, outputAfter))
-        Log.w(TAG, "Timeout waiting for marker $markerId (cmd: $command, maxTimeout ${maxTimeoutMs}ms)")
+        Log.w(TAG, "Timeout waiting for marker $markerIdCounter (cmd: $command, maxTimeout ${maxTimeoutMs}ms)")
         ExecutionOutcome.TimedOut(partialOutput)
     }
 
