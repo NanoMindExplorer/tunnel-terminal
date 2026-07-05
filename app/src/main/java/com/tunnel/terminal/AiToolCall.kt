@@ -173,7 +173,9 @@ data class AiToolCall(
 class ToolExecutor(
     private val context: Context,
     /* Phase 47 (Bagian 1 Fix 1): StorageManager untuk cek granted SAF tree. */
-    private val storageManager: StorageManager? = null
+    private val storageManager: StorageManager? = null,
+    /* Phase 50 fix (B-4): CheckpointManager untuk undo AI file edits. */
+    private val checkpointManager: CheckpointManager? = null
 ) {
     private val tag = "ToolExecutor"
 
@@ -267,6 +269,8 @@ class ToolExecutor(
                     val content = call.args["content"] ?: return "Error: content required"
                     /* Phase 47 (Fix 1): Pakai resolvePath() — sandbox ke workspace. */
                     val file = resolvePath(path)
+                    /* Phase 50 fix (B-4): Save checkpoint sebelum write — untuk undo. */
+                    checkpointManager?.saveCheckpointBeforeWrite(file.absolutePath)
                     file.parentFile?.mkdirs()
                     file.writeText(content)
                     "OK: wrote ${content.length} chars to ${file.absolutePath}"

@@ -111,6 +111,10 @@ class MainActivity : ComponentActivity() {
     private var showMcpServerDialog by mutableStateOf(false)
     /** Phase 47: Agent task runner instance. */
     private lateinit var agentTaskRunner: AgentTaskRunner
+    /** Phase 50 fix (B-5): Project context for AI awareness. */
+    private lateinit var projectContext: ProjectContext
+    /** Phase 50 fix (B-4): Checkpoint manager for AI file edit undo. */
+    private lateinit var checkpointManager: CheckpointManager
     /** Phase 47: Agent event log (real-time). */
     private val agentEvents = mutableStateListOf<AgentTaskRunner.AgentEvent>()
     /** Phase 47: Is Agent task running? */
@@ -244,13 +248,17 @@ class MainActivity : ComponentActivity() {
         storageManager = StorageManager(this)
         workspaceManager = WorkspaceManager(this)
         workspaceSessions.addAll(workspaceManager.sessions)
-        toolExecutor = ToolExecutor(this, storageManager)
+        /* Phase 50 fix (B-4): Init CheckpointManager before ToolExecutor. */
+        checkpointManager = CheckpointManager(this)
+        toolExecutor = ToolExecutor(this, storageManager, checkpointManager)
         permissionManager = PermissionManager(this)
         contextManager = ContextManager(this)
         mcpManager = McpManager(this)
         agentWorkflowManager = AgentWorkflowManager(this)
         /* Phase 47 (Bagian 2): Init AgentTaskRunner. */
         agentTaskRunner = AgentTaskRunner(aiAgent, toolExecutor, permissionManager, markerExecutor)
+        /* Phase 50 fix (B-5): Init ProjectContext for AI awareness. */
+        projectContext = ProjectContext(this)
         voiceInputManager = VoiceInputManager(this)
         /* Phase 38 (proot/Ubuntu): Bootstrap instance untuk download/extract rootfs. */
         prootBootstrap = ProotBootstrap(this)
@@ -2370,7 +2378,9 @@ class MainActivity : ComponentActivity() {
             aiAgent.askAIStreaming(
                 aiSettings, chatMessages.toList(), fullContext,
                 activeExecutor?.sessionType ?: "local",
-                activeExecutor?.environmentDescription ?: ""
+                activeExecutor?.environmentDescription ?: "",
+                /* Phase 50 fix (B-5): Inject project context (git, manifests, file tree). */
+                projectContext.buildContext(toolExecutor.getWorkspaceRoot())
             ).collect { delta ->
                 if (abortedWithError != null) return@collect  /* skip further chunks */
                 if (firstChunk) {

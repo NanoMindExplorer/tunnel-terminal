@@ -1,0 +1,203 @@
+package com.tunnel.terminal
+
+import android.content.Context
+import android.util.Log
+import java.io.File
+
+/**
+ * ProjectContext — Deteksi konteks project untuk AI.
+ *
+ * Phase 50 fix (B-5): Project Context Awareness.
+ *
+ * OLD GAP: AI tidak otomatis tahu branch git aktif, dependency proyek, atau struktur
+ * file saat ini. User harus manual pakai @mentions satu per satu. Ini membatasi kualitas
+ * jawaban AI dibanding Cursor/Aider/Claude Code.
+ *
+ * FIX: Deteksi otomatis:
+ * - Git state (branch aktif, status modified/untracked)
+ * - Manifest files (package.json, build.gradle, Cargo.toml, pyproject.toml, dll.)
+ * - File tree 2 level (maks 200 entri)
+ * Inject sebagai system message dengan token budget ~2K.
+ *
+ * Dipanggil dari AIAgent.buildRequestBody() supaya AI dapat context project setiap request.
+ */
+class ProjectContext(private val context: Context) {
+    companion object {
+        private const val TAG = "ProjectContext"
+        private const val MAX_FILE_TREE_ENTRIES = 200
+        private const val MAX_CONTEXT_CHARS = 2000
+    }
+
+    /**
+     * Build project context string untuk AI system prompt.
+     * @param workspaceRoot Root direktori project (dari ToolExecutor.getWorkspaceRoot())
+     * @return Context string, atau empty string kalau tidak ada project yang terdeteksi
+     */
+    fun buildContext(workspaceRoot: File): String {
+        if (!workspaceRoot.exists() || !workspaceRoot.isDirectory) return ""
+
+        val sb = StringBuilder()
+        var hasContent = false
+
+        // 1. Git state
+        val gitInfo = detectGitState(workspaceRoot)
+        if (gitInfo.isNotBlank()) {
+            sb.append("=== Project Context ===\n")
+            sb.append(gitInfo)
+            hasContent = true
+        }
+
+        // 2. Manifest files (package.json, build.gradle, dll.)
+        val manifestInfo = detectManifests(workspaceRoot)
+        if (manifestInfo.isNotBlank()) {
+            if (!hasContent) sb.append("=== Project Context ===\n")
+            sb.append(manifestInfo)
+            hasContent = true
+        }
+
+        // 3. File tree (2 level, maks 200 entri)
+        val treeInfo = buildFileTree(workspaceRoot)
+        if (treeInfo.isNotBlank()) {
+            if (!hasContent) sb.append("=== Project Context ===\n")
+            sb.append(treeInfo)
+            hasContent = true
+        }
+
+        if (hasContent) {
+            sb.append("=== End Project Context ===\n")
+        }
+
+        val result = sb.toString().take(MAX_CONTEXT_CHARS)
+        if (result.length >= MAX_CONTEXT_CHARS) {
+            Log.i(TAG, "Project context truncated to ${MAX_CONTEXT_CHARS} chars")
+        }
+        return result
+    }
+
+    /** Deteksi git state: branch aktif + status singkat. */
+    private fun detectGitState(root: File): String {
+        val gitDir = File(root, ".git")
+        if (!gitDir.exists()) return ""
+
+        val sb = StringBuilder()
+        sb.append("Git: yes\n")
+
+        // Coba baca branch aktif dari HEAD
+        try {
+            val headFile = File(gitDir, "HEAD")
+            if (headFile.exists()) {
+                val headContent = headFile.readText().trim()
+                if (headContent.startsWith("ref: refs/heads/")) {
+                    val branch = headContent.removePrefix("ref: refs/heads/")
+                    sb.append("Branch: $branch\n")
+                } else if (headContent.length == 40) {
+                    sb.append("Detached HEAD: ${headContent.take(8)}\n")
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Gagal baca git HEAD: ${e.message}")
+        }
+
+        // Count modified/untracked files (best-effort via git status --porcelain)
+        try {
+            val process = ProcessBuilder("git", "status", "--porcelain")
+                .directory(root)
+                .redirectErrorStream(true)
+                .start()
+            val output = process.inputStream.bufferedReader().readText()
+            val exitCode = process.waitFor()
+            if (exitCode == 0 && output.isNotBlank()) {
+                val lines = output.trim().lines()
+                val modified = lines.count { it.startsWith(" M") || it.startsWith("M ") }
+                val untracked = lines.count { it.startsWith("??") }
+                val staged = lines.count { it.startsWith("A ") || it.startsWith("M  ") }
+                sb.append("Modified: $modified, Untracked: $untracked, Staged: $staged\n")
+            }
+        } catch (e: Exception) {
+            // git command tidak available — skip, bukan fatal
+        }
+
+        return sb.toString()
+    }
+
+    /** Deteksi manifest files dan ekstrak info singkat. */
+    private fun detectManifests(root: File): String {
+        val sb = StringBuilder()
+        val manifests = listOf(
+            "package.json" to "Node.js",
+            "build.gradle" to "Gradle/Java",
+            "build.gradle.kts" to "Gradle/Kotlin",
+            "Cargo.toml" to "Rust",
+            "pyproject.toml" to "Python",
+            "requirements.txt" to "Python",
+            "go.mod" to "Go",
+            "pom.xml" to "Maven/Java",
+            "CMakeLists.txt" to "C/C++",
+            "Makefile" to "Make"
+        )
+
+        for ((filename, projectType) in manifests) {
+            val file = File(root, filename)
+            if (file.exists() && file.canRead()) {
+                sb.append("Project type: $projectType ($filename)\n")
+                // Ekstrak nama/versi untuk package.json
+                if (filename == "package.json") {
+                    try {
+                        val content = file.readText()
+                        val nameMatch = Regex("\"name\"\\s*:\\s*\"([^\"]+)\"").find(content)
+                        val versionMatch = Regex("\"version\"\\s*:\\s*\"([^\"]+)\"").find(content)
+                        nameMatch?.let { sb.append("  Name: ${it.groupValues[1]}\n") }
+                        versionMatch?.let { sb.append("  Version: ${it.groupValues[1]}\n") }
+                    } catch (_: Exception) {}
+                }
+                break  // hanya ambil manifest pertama yang ditemukan
+            }
+        }
+
+        return sb.toString()
+    }
+
+    /** Build file tree 2 level (maks 200 entri). */
+    private fun buildFileTree(root: File): String {
+        val sb = StringBuilder()
+        sb.append("File tree (top 2 levels):\n")
+
+        var entryCount = 0
+        try {
+            val topFiles = root.listFiles()?.sortedBy { it.name } ?: return ""
+            for (f in topFiles) {
+                if (entryCount >= MAX_FILE_TREE_ENTRIES) {
+                    sb.append("  ... (truncated, ${MAX_FILE_TREE_ENTRIES} entries max)\n")
+                    break
+                }
+                val prefix = if (f.isDirectory) "📁" else "📄"
+                sb.append("  $prefix ${f.name}\n")
+                entryCount++
+
+                // Level 2 untuk direktori
+                if (f.isDirectory && entryCount < MAX_FILE_TREE_ENTRIES) {
+                    try {
+                        val subFiles = f.listFiles()?.sortedBy { it.name }?.take(20) ?: emptyList()
+                        for (sf in subFiles) {
+                            if (entryCount >= MAX_FILE_TREE_ENTRIES) break
+                            val sPrefix = if (sf.isDirectory) "📁" else "📄"
+                            sb.append("    $sPrefix ${sf.name}\n")
+                            entryCount++
+                        }
+                        val total = f.listFiles()?.size ?: 0
+                        if (total > 20) {
+                            sb.append("    ... (+${total - 20} more)\n")
+                        }
+                    } catch (e: Exception) {
+                        // Permission denied atau lainnya — skip
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Gagal build file tree: ${e.message}")
+            return ""
+        }
+
+        return sb.toString()
+    }
+}

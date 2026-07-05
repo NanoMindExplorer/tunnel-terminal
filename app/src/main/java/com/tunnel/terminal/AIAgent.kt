@@ -71,7 +71,8 @@ class AIAgent {
         conversation: List<ChatMessage>,
         terminalContext: String,
         sessionType: String = "local",
-        environmentDescription: String = ""
+        environmentDescription: String = "",
+        projectContext: String = ""
     ): Flow<String> = callbackFlow {
         if (!isConfigured(settings)) {
             trySend(configErrorMessage(settings))
@@ -84,7 +85,8 @@ class AIAgent {
             connection = openConnection(settings, streaming = true)
             val requestBody = buildRequestBody(
                 settings, conversation, terminalContext, streaming = true,
-                sessionType = sessionType, environmentDescription = environmentDescription
+                sessionType = sessionType, environmentDescription = environmentDescription,
+                projectContext = projectContext
             )
             writeRequest(connection, requestBody)
 
@@ -192,7 +194,8 @@ class AIAgent {
         terminalContext: String,
         streaming: Boolean,
         sessionType: String = "local",
-        environmentDescription: String = ""
+        environmentDescription: String = "",
+        projectContext: String = ""
     ): String {
         /* Phase 40 fix (H2+H3): System prompt yang session-aware.
          * OLD BUGS:
@@ -312,12 +315,17 @@ class AIAgent {
             /* Tambahkan terminal context sebagai pesan system tambahan jika ada.
              * Phase 46 (Pilar 2): Sertakan environmentDescription di baris paling atas
              * sebelum output terminal, supaya AI tahu persis lingkungan aktif.
+             * Phase 50 fix (B-5): Sertakan projectContext (git state, manifests, file tree)
+             * supaya AI tahu struktur project tanpa user perlu @mention manual.
              * Append terminal context as additional system message if present. */
             val cleanContext = stripAnsi(terminalContext).take(1500)
-            if (cleanContext.isNotBlank() || environmentDescription.isNotBlank()) {
+            if (cleanContext.isNotBlank() || environmentDescription.isNotBlank() || projectContext.isNotBlank()) {
                 val contextParts = mutableListOf<String>()
                 if (environmentDescription.isNotBlank()) {
                     contextParts.add("Lingkungan terminal aktif: $environmentDescription")
+                }
+                if (projectContext.isNotBlank()) {
+                    contextParts.add(projectContext)
                 }
                 if (cleanContext.isNotBlank()) {
                     contextParts.add("Konteks Terminal saat ini:\n$cleanContext")
