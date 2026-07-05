@@ -116,7 +116,7 @@ class AgentTaskRunner(
     ) {
         val history = mutableListOf<StepRecord>()
         var iteration = 0
-        val workspacePath = toolExecutor.getWorkspaceRoot().absolutePath
+        val workspacePath = toolExecutor.workspaceRootFile().absolutePath
 
         events(AgentEvent.Status("Memulai Agent task: $goal"))
         events(AgentEvent.Status("Environment: ${session.environmentDescription}"))
