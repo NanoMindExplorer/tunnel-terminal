@@ -1887,6 +1887,17 @@ class MainActivity : ComponentActivity() {
                             /* Phase 43 fix (HIGH-05): Update session aktif di PermissionManager
                              * supaya permission "Always Allow" di-scope per-tab. */
                             permissionManager.setActiveSession(it)
+                            /* Phase 57 fix (§4.1): Update SessionTargetResolver saat pindah tab
+                             * supaya write_file/read_file tahu target yang benar (Local/Ubuntu/SSH). */
+                            val activeExec = shellExecutors.find { exec -> exec.id == it }
+                            if (activeExec != null) {
+                                val resolver = SessionTargetResolver(
+                                    sessionType = activeExec.sessionType,
+                                    workspaceRoot = toolExecutor.workspaceRootFile(),
+                                    rootfsDir = if (activeExec.sessionType == "ubuntu" && ::prootBootstrap.isInitialized) prootBootstrap.rootfsDir else null
+                                )
+                                toolExecutor.setSessionTargetResolver(resolver)
+                            }
                             /* Phase 19.5: currentCommandBuffer & historyIndex sekarang per-tab
                              * (disimpan di ShellExecutor), tidak perlu reset di sini. */
                         },

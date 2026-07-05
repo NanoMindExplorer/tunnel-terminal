@@ -62,7 +62,7 @@ data class AiToolCall(
 
     companion object {
         val READ_ONLY_TOOLS = setOf("read_file", "list_files", "search_files", "get_terminal_output")
-        val DESTRUCTIVE_TOOLS = setOf("write_file", "delete_file", "run_command")
+        val DESTRUCTIVE_TOOLS = setOf("write_file", "edit_file", "delete_file", "run_command")
 
         /** Parse tool call dari AI response.
          * Format: <tool_call>{"tool":"read_file","args":{"path":"/foo"}}</tool_call>
@@ -118,7 +118,8 @@ data class AiToolCall(
             - get_terminal_output: Ambil output terminal terakhir. Args: (none)
 
             TOOLS DESTRUCTIVE (butuh permission user):
-            - write_file: Tulis file. Args: path, content
+            - write_file: Tulis file (full overwrite). Args: path, content. Gunakan untuk file BARU atau saat mengganti seluruh isi file.
+            - edit_file: Edit parsial file (cari & ganti). Args: path, old_string, new_string. Gunakan untuk mengubah bagian file yang SUDAH ADA — old_string HARUS match persis 1 kali. Jauh lebih hemat token daripada write_file untuk file besar.
             - delete_file: Hapus file. Args: path
             - run_command: Jalankan command di terminal. Args: cmd
 
@@ -175,7 +176,9 @@ class ToolExecutor(
     /* Phase 47 (Bagian 1 Fix 1): StorageManager untuk cek granted SAF tree. */
     private val storageManager: StorageManager? = null,
     /* Phase 50 fix (B-4): CheckpointManager untuk undo AI file edits. */
-    private val checkpointManager: CheckpointManager? = null
+    private val checkpointManager: CheckpointManager? = null,
+    /* Phase 57 fix (§4.1): SessionTargetResolver untuk resolve path berdasarkan sesi aktif. */
+    private var sessionTargetResolver: SessionTargetResolver? = null
 ) {
     private val tag = "ToolExecutor"
 
@@ -196,6 +199,29 @@ class ToolExecutor(
      * - Selain itu → SecurityException dengan pesan jelas
      */
     private fun resolvePath(rawPath: String): File {
+        /* Phase 57 fix (§4.1): Pakai SessionTargetResolver kalau ada (untuk support Ubuntu).
+         * Fallback ke resolvePath lama kalau resolver belum di-set (backward compat). */
+        val resolver = sessionTargetResolver
+        if (resolver != null) {
+            val file = resolver.resolvePhysicalPath(rawPath)
+            val canonical = try { file.canonicalFile } catch (e: Exception) { file }
+
+            /* Sandbox check: izinkan kalau di dalam workspace, rootfs Ubuntu, atau SAF tree. */
+            if (!resolver.isPathAllowed(canonical)) {
+                val insideGrantedStorage = storageManager?.isPathWithinGrantedTree(canonical) ?: false
+                if (!insideGrantedStorage) {
+                    throw SecurityException(
+                        "Path '$rawPath' di luar workspace project dan di luar folder yang " +
+                        "sudah diizinkan lewat setup-storage. Gunakan path relatif (otomatis " +
+                        "masuk workspace: ${workspaceRoot.absolutePath}), atau minta user " +
+                        "jalankan setup-storage dulu kalau memang perlu akses ke folder lain."
+                    )
+                }
+            }
+            return canonical
+        }
+
+        /* Fallback: perilaku lama (workspace lokal Android). */
         val candidate = if (rawPath.startsWith("/")) File(rawPath) else File(workspaceRoot, rawPath)
         val canonical = try { candidate.canonicalFile } catch (e: Exception) { candidate }
 
@@ -219,6 +245,34 @@ class ToolExecutor(
 
     /** Phase 47 (Fix 1): Expose workspaceRoot untuk AgentTaskRunner. */
     fun workspaceRootFile(): File = workspaceRoot
+
+    /** Phase 57 fix (§4.1): Update SessionTargetResolver saat user pindah tab. */
+    fun setSessionTargetResolver(resolver: SessionTargetResolver?) {
+        sessionTargetResolver = resolver
+    }
+
+    /** Phase 57 fix (§4.2): edit_file — edit parsial ala Aider/Claude Code.
+     * old_string HARUS match persis 1 kali di file — mencegah AI salah
+     * mengganti bagian yang mirip tapi berbeda konteks. */
+    private fun executeEditFile(path: String, oldString: String, newString: String): String {
+        val file = resolvePath(path)
+        if (!file.exists()) return "Error: file not found: ${file.absolutePath}"
+        val original = try { file.readText() } catch (e: Exception) {
+            return "Error: cannot read file: ${e.message}"
+        }
+        val occurrences = original.split(oldString).size - 1
+        return when {
+            occurrences == 0 -> "Error: old_string tidak ditemukan persis di ${file.absolutePath}. Baca ulang file dulu sebelum edit."
+            occurrences > 1 -> "Error: old_string muncul $occurrences kali — perlu lebih spesifik (sertakan lebih banyak baris konteks)."
+            else -> {
+                /* Phase 50 fix (B-4): Save checkpoint sebelum edit. */
+                checkpointManager?.saveCheckpointBeforeWrite(file.absolutePath)
+                val updated = original.replaceFirst(oldString, newString)
+                file.writeText(updated)
+                "OK: edited ${file.absolutePath} (replaced 1 occurrence)"
+            }
+        }
+    }
 
     /**
      * Eksekusi tool call. Returns result string.
@@ -287,6 +341,13 @@ class ToolExecutor(
                 "run_command" -> {
                     /* Command akan di-execute oleh caller via ShellExecutor. */
                     "Command forwarded to terminal. Check output in terminal view."
+                }
+                "edit_file" -> {
+                    /* Phase 57 fix (§4.2): edit_file — edit parsial ala Aider/Claude Code. */
+                    val path = call.args["path"] ?: return "Error: path required"
+                    val oldString = call.args["old_string"] ?: return "Error: old_string required"
+                    val newString = call.args["new_string"] ?: return "Error: new_string required"
+                    executeEditFile(path, oldString, newString)
                 }
                 else -> "Error: unknown tool: ${call.tool}"
             }
