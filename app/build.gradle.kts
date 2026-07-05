@@ -18,8 +18,9 @@ android {
         // Phase 48: Rendering fixes (F-1 atomic snapshot, F-2 alt-screen resize, F-5 throttle) + A-5 random marker + C-1 .gradle cleanup + D-1/D-2 WIKI update
         // Phase 49: Scrollback buffer (E-1) + Screen persistence via Application (F-3) + MCP server management UI (D-4)
         // Phase 50: Project Context Awareness (B-5) + Checkpointing/Undo (B-4)
-        versionCode = 34
-        versionName = "6.9.0-phase50-project-context-checkpoint"
+        // Phase 51: Automated tests (C-5) + BlockMode incremental parse (F-4)
+        versionCode = 35
+        versionName = "7.0.0-phase51-automated-tests"
 
         /* Phase 40 fix (M10): Restrict ke arm64-v8a saja — proot binary di assets
          * hanya arm64. Tanpa abiFilters, APK universal akan crash di device x86_64
@@ -119,4 +120,20 @@ dependencies {
 
     // BUG-21 fix: Update JSch dari 0.2.17 ke 0.2.21 (versi terbaru mwiede fork)
     implementation("com.github.mwiede:jsch:0.2.21")
+
+    // Phase 51 fix (C-5): Automated tests — JUnit + Coroutines test
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.7.3")
+    testImplementation("org.json:json:20240303")
+    testImplementation("androidx.test:core:1.5.0")
+    testImplementation("org.robolectric:robolectric:4.11.1")
+}
+
+// Phase 51 fix (C-5): Allow Robolectric to run unit tests that need Android framework classes
+android {
+    testOptions {
+        unitTests {
+            isIncludeAndroidResources = true
+        }
+    }
 }

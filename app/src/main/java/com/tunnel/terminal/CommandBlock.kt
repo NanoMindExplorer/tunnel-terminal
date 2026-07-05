@@ -92,29 +92,57 @@ class BlockManager {
     private var currentBlock: CommandBlock? = null
 
     /**
+     * Phase 51 fix (F-4): Track jumlah prompt yang sudah di-parse supaya
+     * parseFromOutput bisa incremental — hanya parse prompt baru, bukan
+     * re-parse semua histori dari nol setiap toggle.
+     *
+     * OLD BUG: parseFromOutput re-parse semua histori setiap toggle →
+     * potensi divergen dari buffer raw (karakter mirip prompt, ANSI yang
+     * belum sepenuhnya di-strip, dst). Plus performance issue untuk output panjang.
+     */
+    private var lastParsedPromptCount = 0
+    private var lastParsedRawLength = 0
+
+    /**
      * Parse raw terminal output menjadi blocks.
      * Dipanggil saat user toggle ke block mode.
      *
-     * Parse raw terminal output into blocks.
+     * Phase 51 fix (F-4): Sekarang incremental — kalau rawOutput sudah pernah
+     * di-parse (lastParsedRawLength > 0), hanya parse prompt baru yang muncul
+     * setelah posisi terakhir yang di-parse. Hindari re-parse semua histori.
      */
     fun parseFromOutput(rawOutput: String) {
-        _blocks.clear()
-        currentBlock = null
+        // Kalau ini parse pertama kali, atau rawOutput lebih pendek dari sebelumnya
+        // (mis. user clear screen), lakukan full parse
+        if (lastParsedRawLength == 0 || rawOutput.length < lastParsedRawLength) {
+            _blocks.clear()
+            currentBlock = null
+            lastParsedPromptCount = 0
+        }
 
         val matches = promptRegex.findAll(rawOutput).toList()
         if (matches.isEmpty()) {
-            /* No prompts found — single block with all output. */
-            if (rawOutput.isNotBlank()) {
+            /* No prompts found — single block with all output (hanya kalau belum ada blocks). */
+            if (rawOutput.isNotBlank() && _blocks.isEmpty()) {
                 _blocks.add(CommandBlock(
                     command = "(output)",
                     output = rawOutput.trim(),
                     status = CommandBlock.BlockStatus.SUCCESS
                 ))
             }
+            lastParsedRawLength = rawOutput.length
             return
         }
 
-        for (i in matches.indices) {
+        // Phase 51 fix (F-4): Hanya parse prompt yang belum di-parse
+        val startIdx = lastParsedPromptCount
+        if (startIdx >= matches.size) {
+            // Tidak ada prompt baru — update output block terakhir saja
+            lastParsedRawLength = rawOutput.length
+            return
+        }
+
+        for (i in startIdx until matches.size) {
             val promptMatch = matches[i]
             val promptEnd = promptMatch.range.last + 1
             val nextPromptStart = if (i + 1 < matches.size) matches[i + 1].range.first else rawOutput.length
@@ -143,6 +171,9 @@ class BlockManager {
                 ))
             }
         }
+
+        lastParsedPromptCount = matches.size
+        lastParsedRawLength = rawOutput.length
     }
 
     /** Add new block (saat user run command di block mode). */
@@ -165,6 +196,9 @@ class BlockManager {
     fun clear() {
         _blocks.clear()
         currentBlock = null
+        /* Phase 51 fix (F-4): Reset incremental parse tracker. */
+        lastParsedPromptCount = 0
+        lastParsedRawLength = 0
     }
 
     /** Toggle collapse block. */
