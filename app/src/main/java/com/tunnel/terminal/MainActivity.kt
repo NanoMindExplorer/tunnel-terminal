@@ -831,7 +831,8 @@ class MainActivity : ComponentActivity() {
             temperature = temperature,
             maxTokens = prefs.getInt("maxTokens", 2000),
             requestTimeoutMs = prefs.getInt("requestTimeoutMs", 30000),
-            supportsVision = prefs.getBoolean("supportsVision", false)
+            supportsVision = prefs.getBoolean("supportsVision", false),
+            supportsToolCalling = prefs.getBoolean("supportsToolCalling", false)
         )
     }
 
@@ -846,6 +847,7 @@ class MainActivity : ComponentActivity() {
         prefs.putInt("maxTokens", newSettings.maxTokens)
         prefs.putInt("requestTimeoutMs", newSettings.requestTimeoutMs)
         prefs.putBoolean("supportsVision", newSettings.supportsVision)
+        prefs.putBoolean("supportsToolCalling", newSettings.supportsToolCalling)
         prefs.apply()
 
         val securePrefs = SecureStorage.getAIPrefs(this).edit()

@@ -53,6 +53,99 @@ class AIAgent {
     private val tag = "AIAgent"
 
     /**
+     * Phase 59 fix (B-1): Tool schema untuk native API tool_calling.
+     * Dikirim sebagai `tools` array di request body. Hanya dipakai kalau
+     * settings.supportsToolCalling = true.
+     *
+     * Schema ini mendeskripsikan semua tool yang tersedia dengan parameter
+     * yang benar (JSON Schema) — API provider akan menjamin format respons
+     * sesuai schema, tidak perlu regex parsing.
+     */
+    private val TOOL_SCHEMA = org.json.JSONArray().apply {
+        // read_file
+        put(org.json.JSONObject().put("type", "function").put("function", org.json.JSONObject()
+            .put("name", "read_file").put("description", "Baca isi file. Path relatif otomatis masuk workspace.")
+            .put("parameters", org.json.JSONObject()
+                .put("type", "object")
+                .put("properties", org.json.JSONObject().put("path", org.json.JSONObject().put("type", "string").put("description", "Path file")))
+                .put("required", org.json.JSONArray().put("path"))
+            )
+        ))
+        // write_file
+        put(org.json.JSONObject().put("type", "function").put("function", org.json.JSONObject()
+            .put("name", "write_file").put("description", "Tulis file (full overwrite). Gunakan untuk file BARU.")
+            .put("parameters", org.json.JSONObject()
+                .put("type", "object")
+                .put("properties", org.json.JSONObject()
+                    .put("path", org.json.JSONObject().put("type", "string").put("description", "Path file"))
+                    .put("content", org.json.JSONObject().put("type", "string").put("description", "Isi file lengkap"))
+                )
+                .put("required", org.json.JSONArray().put("path").put("content"))
+            )
+        ))
+        // edit_file
+        put(org.json.JSONObject().put("type", "function").put("function", org.json.JSONObject()
+            .put("name", "edit_file").put("description", "Edit parsial file (cari & ganti). old_string harus match persis 1 kali.")
+            .put("parameters", org.json.JSONObject()
+                .put("type", "object")
+                .put("properties", org.json.JSONObject()
+                    .put("path", org.json.JSONObject().put("type", "string"))
+                    .put("old_string", org.json.JSONObject().put("type", "string").put("description", "Teks yang akan diganti (harus match persis 1 kali)"))
+                    .put("new_string", org.json.JSONObject().put("type", "string").put("description", "Teks pengganti"))
+                )
+                .put("required", org.json.JSONArray().put("path").put("old_string").put("new_string"))
+            )
+        ))
+        // delete_file
+        put(org.json.JSONObject().put("type", "function").put("function", org.json.JSONObject()
+            .put("name", "delete_file").put("description", "Hapus file.")
+            .put("parameters", org.json.JSONObject()
+                .put("type", "object")
+                .put("properties", org.json.JSONObject().put("path", org.json.JSONObject().put("type", "string")))
+                .put("required", org.json.JSONArray().put("path"))
+            )
+        ))
+        // list_files
+        put(org.json.JSONObject().put("type", "function").put("function", org.json.JSONObject()
+            .put("name", "list_files").put("description", "List direktori. Default: workspace root.")
+            .put("parameters", org.json.JSONObject()
+                .put("type", "object")
+                .put("properties", org.json.JSONObject().put("dir", org.json.JSONObject().put("type", "string").put("description", "Direktori (opsional, default = workspace)")))
+            )
+        ))
+        // run_command
+        put(org.json.JSONObject().put("type", "function").put("function", org.json.JSONObject()
+            .put("name", "run_command").put("description", "Jalankan command di terminal aktif.")
+            .put("parameters", org.json.JSONObject()
+                .put("type", "object")
+                .put("properties", org.json.JSONObject().put("cmd", org.json.JSONObject().put("type", "string").put("description", "Command shell"))
+                .put("required", org.json.JSONArray().put("cmd"))
+            )
+        ))
+        // plan_task
+        put(org.json.JSONObject().put("type", "function").put("function", org.json.JSONObject()
+            .put("name", "plan_task").put("description", "Set rencana tugas di awal tugas kompleks.")
+            .put("parameters", org.json.JSONObject()
+                .put("type", "object")
+                .put("properties", org.json.JSONObject().put("steps", org.json.JSONObject().put("type", "array").put("items", org.json.JSONObject().put("type", "string")).put("description", "Array langkah rencana")))
+                .put("required", org.json.JSONArray().put("steps"))
+            )
+        ))
+        // update_task_status
+        put(org.json.JSONObject().put("type", "function").put("function", org.json.JSONObject()
+            .put("name", "update_task_status").put("description", "Update status langkah rencana.")
+            .put("parameters", org.json.JSONObject()
+                .put("type", "object")
+                .put("properties", org.json.JSONObject()
+                    .put("step_id", org.json.JSONObject().put("type", "integer"))
+                    .put("status", org.json.JSONObject().put("type", "string").put("enum", org.json.JSONArray().put("PENDING").put("IN_PROGRESS").put("DONE").put("FAILED")))
+                )
+                .put("required", org.json.JSONArray().put("step_id").put("status"))
+            )
+        ))
+    }
+
+    /**
      * Kirim prompt ke AI dengan STREAMING via Server-Sent Events.
      * Send prompt with SSE streaming. Returns Flow that emits content deltas.
      *
@@ -106,6 +199,13 @@ class AIAgent {
              * Parse SSE stream line by line. */
             val reader = BufferedReader(InputStreamReader(inputStream, Charsets.UTF_8))
             var line: String?
+
+            /* Phase 59 fix (B-1): Accumulator untuk native tool_calls deltas.
+             * API mengirim tool_calls dalam chunks — index, id, name (first chunk),
+             * arguments (accumulated across chunks). Kumpulkan semua, lalu di akhir
+             * stream convert ke <tool_call> tags supaya compatible dengan parser lama. */
+            val toolCallAccumulator = mutableMapOf<Int, org.json.JSONObject>()
+
             while (reader.readLine().also { line = it } != null) {
                 if (!isActive) break  // consumer cancelled
 
@@ -120,12 +220,35 @@ class AIAgent {
                     val json = JSONObject(data)
                     val choices = json.optJSONArray("choices") ?: continue
                     if (choices.length() == 0) continue
-                    val delta = choices.getJSONObject(0)
-                        .optJSONObject("delta")
-                        ?.optString("content")
-                        ?: ""
-                    if (delta.isNotEmpty()) {
-                        trySend(delta)
+                    val choiceObj = choices.getJSONObject(0)
+                    val delta = choiceObj.optJSONObject("delta")
+
+                    // Phase 59: Cek native tool_calls di delta
+                    val toolCalls = delta?.optJSONArray("tool_calls")
+                    if (toolCalls != null) {
+                        for (i in 0 until toolCalls.length()) {
+                            val tc = toolCalls.getJSONObject(i)
+                            val idx = tc.optInt("index", 0)
+                            val existing = toolCallAccumulator[idx] ?: org.json.JSONObject()
+                            // First chunk has id + function.name
+                            tc.optString("id", "").takeIf { it.isNotEmpty() }?.let { existing.put("id", it) }
+                            tc.optJSONObject("function")?.let { fn ->
+                                fn.optString("name", "").takeIf { it.isNotEmpty() }?.let {
+                                    existing.put("name", it)
+                                }
+                                // Arguments are accumulated across chunks
+                                val prevArgs = existing.optString("arguments", "")
+                                val newArgs = fn.optString("arguments", "")
+                                existing.put("arguments", prevArgs + newArgs)
+                            }
+                            toolCallAccumulator[idx] = existing
+                        }
+                    }
+
+                    // Text content (normal streaming)
+                    val content = delta?.optString("content") ?: ""
+                    if (content.isNotEmpty()) {
+                        trySend(content)
                     }
                 } catch (e: Exception) {
                     /* Partial JSON atau format lain - skip, jangan crash stream. */
@@ -133,6 +256,37 @@ class AIAgent {
                 }
             }
             reader.close()
+
+            /* Phase 59 fix (B-1): Setelah stream selesai, kalau ada tool_calls
+             * yang terakumulasi, convert ke <tool_call> tags dan emit sebagai text.
+             * Ini "bridge" approach — native tool_calls di-convert ke format yang
+             * sudah bisa di-parse oleh AiToolCall.parseFromResponse().
+             *
+             * Keuntungan: arguments sudah di-decode oleh API provider sebagai JSON
+             * yang valid — TIDAK ADA risiko escaping/parsing error seperti text-tag. */
+            if (toolCallAccumulator.isNotEmpty()) {
+                val sb = StringBuilder()
+                for ((_, tc) in toolCallAccumulator.toSortedMap()) {
+                    val name = tc.optString("name", "")
+                    val argsStr = tc.optString("arguments", "{}")
+                    // Parse arguments JSON, lalu rebuild sebagai tool_call tag
+                    try {
+                        val argsJson = org.json.JSONObject(argsStr)
+                        val toolCallJson = org.json.JSONObject()
+                            .put("tool", name)
+                            .put("args", argsJson)
+                        sb.append("<tool_call>").append(toolCallJson.toString()).append("</tool_call>\n")
+                    } catch (e: Exception) {
+                        Log.w(tag, "Gagal parse accumulated tool_call args: ${e.message}")
+                        // Fallback: emit as-is
+                        sb.append("<tool_call>{\"tool\":\"$name\",\"args\":$argsStr}</tool_call>\n")
+                    }
+                }
+                if (sb.isNotEmpty()) {
+                    trySend(sb.toString())
+                    Log.i(tag, "Native tool_calls converted to text-tag: ${toolCallAccumulator.size} calls")
+                }
+            }
         } catch (e: java.net.SocketTimeoutException) {
             trySend("Timeout (${settings.requestTimeoutMs}ms). Provider lambat atau unreachable.")
         } catch (e: java.net.UnknownHostException) {
@@ -369,13 +523,22 @@ class AIAgent {
             }
         }
 
-        return JSONObject()
+        val requestBody = JSONObject()
             .put("model", settings.modelName)
             .put("messages", messagesArray)
             .put("temperature", settings.temperature)
             .put("max_tokens", settings.maxTokens)
             .put("stream", streaming)
-            .toString()
+
+        /* Phase 59 fix (B-1): Tambah tools array + tool_choice kalau provider
+         * mendukung native tool_calling. API akan menjamin format respons sesuai
+         * schema — tidak perlu regex parsing, tidak ada risiko escaping error. */
+        if (settings.supportsToolCalling) {
+            requestBody.put("tools", TOOL_SCHEMA)
+            requestBody.put("tool_choice", "auto")
+        }
+
+        return requestBody.toString()
     }
 
     private fun writeRequest(connection: HttpURLConnection, body: String) {

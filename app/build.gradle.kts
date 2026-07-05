@@ -1,6 +1,7 @@
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
+    id("org.jetbrains.kotlin.plugin.compose")
 }
 
 android {
@@ -21,8 +22,9 @@ android {
         // Phase 51: Automated tests (C-5) + BlockMode incremental parse (F-4)
         // Phase 52: Agent Mode audit fixes (Bug #1 approval dialog, Bug #2 success detection, Bug #3 Stop cancel)
         // Phase 58: TaskPlanManager (plan/act/observe/verify) + SFTP for SSH file I/O
-        versionCode = 37
-        versionName = "7.2.0-phase58-taskplan-sftp"
+        // Phase 59: Native API tool-calling (B-1) + AGP/Kotlin upgrade (C-2)
+        versionCode = 38
+        versionName = "7.3.0-phase59-native-tools-kotlin2"
 
         /* Phase 40 fix (M10): Restrict ke arm64-v8a saja — proot binary di assets
          * hanya arm64. Tanpa abiFilters, APK universal akan crash di device x86_64
@@ -78,9 +80,9 @@ android {
         compose = true
         buildConfig = true
     }
-    composeOptions {
-        kotlinCompilerExtensionVersion = "1.5.1"
-    }
+    /* Phase 59 fix (C-2): Kotlin 2.0+ uses Compose Compiler Gradle Plugin
+     * (declared in plugins block above) — kotlinCompilerExtensionVersion
+     * no longer needed in composeOptions. */
     packaging {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
