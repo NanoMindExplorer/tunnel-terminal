@@ -15,7 +15,6 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
-import androidx.compose.runtime.SnapshotStateList
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -73,7 +72,7 @@ class MainActivity : ComponentActivity() {
      * untuk support SSH sessions alongside local PTY. */
     /* Phase 49 fix (F-3): shellExecutors + activeExecutorId di-hold di Application scope
      * supaya survive Activity recreate (rotasi, low-memory kill). Screen buffer tidak hilang. */
-    private lateinit var shellExecutors: androidx.compose.runtime.SnapshotStateList<TerminalSession>
+    private lateinit var shellExecutors: MutableList<TerminalSession>
     private var activeExecutorId by mutableStateOf(0)
     private val aiAgent = AIAgent()
 
