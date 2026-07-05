@@ -84,9 +84,9 @@ class AgentTaskRunner(
         Regex("""wget.*\|\s*(sh|bash)"""),
         Regex("\\bdd\\b.*of="),                            // dd ke device
         Regex("""\bsudo\b"""),                               // sudo (tidak ada di proot, tapi jaga)
-        Regex("""mkfs\.""),                                   // format filesystem
+        Regex("mkfs\\."),  // format filesystem
         Regex(""">\s*/dev/sd[a-z]"""),                        // write langsung ke device
-        Regex(""":\(\)\s*\{""")                               // fork bomb pattern
+        Regex(":\\(\\)\\s*\\{")  // fork bomb pattern
     )
 
     /** Flag untuk Pause — dicek di awal tiap iterasi. */
