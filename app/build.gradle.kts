@@ -23,8 +23,8 @@ android {
         // Phase 52: Agent Mode audit fixes (Bug #1 approval dialog, Bug #2 success detection, Bug #3 Stop cancel)
         // Phase 58: TaskPlanManager (plan/act/observe/verify) + SFTP for SSH file I/O
         // Phase 59: Native API tool-calling (B-1) + AGP/Kotlin upgrade (C-2)
-        versionCode = 40
-        versionName = "7.2.2"
+        versionCode = 41
+        versionName = "7.2.3"
 
         /* Phase 40 fix (M10): Restrict ke arm64-v8a saja — proot binary di assets
          * hanya arm64. Tanpa abiFilters, APK universal akan crash di device x86_64
@@ -74,7 +74,7 @@ android {
         targetCompatibility = JavaVersion.VERSION_1_8
     }
     kotlinOptions {
-        jvmTarget = "1.8"
+        jvmTarget = "11"
     }
     buildFeatures {
         compose = true
@@ -120,7 +120,7 @@ dependencies {
 
     // Phase 41 fix (CRIT-01): EncryptedSharedPreferences untuk menyimpan API key &
     // SSH credentials secara aman (sebelumnya plaintext di SharedPreferences).
-    implementation("androidx.security:security-crypto:1.1.0-alpha06")
+    implementation("androidx.security:security-crypto:1.0.0")
 
     // BUG-21 fix: Update JSch dari 0.2.17 ke 0.2.21 (versi terbaru mwiede fork)
     implementation("com.github.mwiede:jsch:0.2.21")

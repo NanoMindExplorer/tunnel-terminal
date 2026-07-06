@@ -355,6 +355,21 @@ class AIAgent(
     private fun openConnection(settings: AISettings, streaming: Boolean): HttpURLConnection {
         val apiUrl = "${settings.baseUrl.trimEnd('/')}/chat/completions"
         val url = URL(apiUrl)
+
+        /* Phase 60 fix (audit Bug #2): Enforce HTTPS untuk provider eksternal. */
+        if (!url.protocol.equals("https", ignoreCase = true)) {
+            val host = url.host.lowercase()
+            val isLocal = host == "localhost" || host == "127.0.0.1" ||
+                          host == "10.0.2.2" || host == "::1"
+            if (!isLocal) {
+                throw java.io.IOException(
+                    "Security: Hanya HTTPS yang didukung untuk provider eksternal. " +
+                    "URL '" + host + "' menggunakan HTTP tidak aman. " +
+                    "Gunakan HTTPS, atau localhost untuk local AI (Ollama/LM Studio)."
+                )
+            }
+        }
+
         return (url.openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"
             setRequestProperty("Content-Type", "application/json; charset=utf-8")
@@ -580,9 +595,17 @@ class AIAgent(
                         mcpTools.forEach { (serverName, tools) ->
                             tools.forEach { mcpTool ->
                                 try {
+                                    /* Phase 60 fix (audit Bug #4): Validate MCP tool schema. */
                                     val paramsSchema = org.json.JSONObject(
                                         mcpTool.inputSchema.ifBlank { "{}" }
                                     )
+                                    if (!paramsSchema.has("type")) {
+                                        paramsSchema.put("type", "object")
+                                    }
+                                    if (paramsSchema.optString("type") == "object" &&
+                                        !paramsSchema.has("properties")) {
+                                        paramsSchema.put("properties", org.json.JSONObject())
+                                    }
                                     dynamic.put(org.json.JSONObject()
                                         .put("type", "function")
                                         .put("function", org.json.JSONObject()
