@@ -74,7 +74,10 @@ class ProotBootstrap(private val context: Context) {
             "https://cdimage.ubuntu.com/ubuntu-base/releases/24.04.3/release/ubuntu-base-24.04.3-base-amd64.tar.gz"
         )
 
-        const val MIN_FREE_BYTES = 1_500L * 1024 * 1024
+        /* Phase 60 fix (audit C-2): Lowered from 1.5GB to 500MB.
+         * Rootfs compressed = 29MB, extracted = ~150MB, apt cache ~100MB.
+         * 500MB is plenty. 1.5GB was too strict for low-end devices. */
+        const val MIN_FREE_BYTES = 500L * 1024 * 1024
 
         const val ASSET_PROOT_PATH = "proot/proot"
         /** Folder di assets yang berisi shared libraries proot. */
@@ -179,29 +182,59 @@ class ProotBootstrap(private val context: Context) {
         }
 
         // 4. Download rootfs tarball.
-        // Phase 40 fix (A2): Coba daftar URL fallback sampai ada yang berhasil.
+        // Phase 60 fix (audit C-1 to C-4): Robust download with retry + fallback progress.
+        // C-1: readTimeout 60s -> 300s (5 min) for file 29MB on slow mobile
+        // C-3: Retry 2x per URL before moving to next mirror
+        // C-4: Fallback to indeterminate progress if Content-Length unknown
         val rootfsUrls = pickRootfsUrls()
+        val MAX_RETRIES_PER_URL = 2  // Phase 60 fix (C-3)
         var downloadSuccess = false
         var lastError: Exception? = null
+
         for ((idx, url) in rootfsUrls.withIndex()) {
-            try {
-                listener.onProgress("Mengunduh Ubuntu rootfs (mirror ${idx + 1}/${rootfsUrls.size})", 0)
-                downloadWithProgress(url, rootfsTarball) { percent ->
-                    listener.onProgress("Mengunduh Ubuntu rootfs", percent)
+            for (attempt in 1..MAX_RETRIES_PER_URL) {
+                try {
+                    listener.onProgress(
+                        "Mengunduh Ubuntu rootfs (mirror ${idx + 1}/${rootfsUrls.size}, percobaan $attempt/$MAX_RETRIES_PER_URL)",
+                        0
+                    )
+                    downloadWithProgress(url, rootfsTarball) { percent ->
+                        listener.onProgress("Mengunduh Ubuntu rootfs", percent)
+                    }
+                    downloadSuccess = true
+                    break
+                } catch (e: Exception) {
+                    Log.w(TAG, "Download gagal dari $url (percobaan $attempt): ${e.message}")
+                    lastError = e
+                    try { if (rootfsTarball.exists()) rootfsTarball.delete() } catch (_: Exception) {}
+                    if (attempt < MAX_RETRIES_PER_URL) {
+                        Thread.sleep(2000)
+                    }
                 }
-                downloadSuccess = true
-                break
-            } catch (e: Exception) {
-                Log.w(TAG, "Download gagal dari $url: ${e.message}, coba mirror berikutnya...")
-                lastError = e
-                try { if (rootfsTarball.exists()) rootfsTarball.delete() } catch (_: Exception) {}
             }
+            if (downloadSuccess) break
         }
         if (!downloadSuccess) {
-            throw IllegalStateException(
-                "Semua mirror download gagal (${rootfsUrls.size} URL dicoba). " +
-                "Error terakhir: ${lastError?.message ?: "unknown"}"
-            )
+            // Phase 60 fix: Error message yang lebih informatif berdasarkan tipe exception
+            val errorMsg = when (lastError) {
+                is java.net.SocketTimeoutException ->
+                    "Download timeout - koneksi terlalu lambat atau server tidak responsif. " +
+                    "File Ubuntu rootfs = 29MB, butuh koneksi minimal 1Mbps. " +
+                    "Coba: (1) connect WiFi, (2) cek sinyal, (3) retry nanti. " +
+                    "Error detail: " + (lastError?.message ?: "unknown")
+                is java.net.UnknownHostException ->
+                    "DNS resolution gagal - tidak bisa resolve cdimage.ubuntu.com. " +
+                    "Cek: (1) koneksi internet aktif, (2) tidak di airplane mode. " +
+                    "Error detail: " + (lastError?.message ?: "unknown")
+                is java.io.IOException ->
+                    "Network error saat download: " + (lastError?.message ?: "unknown") + ". " +
+                    "Coba: (1) cek koneksi, (2) retry, (3) gunakan WiFi kalau ada."
+                else ->
+                    "Download gagal setelah " + rootfsUrls.size + " mirror x " +
+                    MAX_RETRIES_PER_URL + " percobaan. " +
+                    "Error terakhir: " + (lastError?.message ?: "unknown")
+            }
+            throw IllegalStateException(errorMsg)
         }
 
         // 5. Ekstrak via tar bawaan Android (toybox).
@@ -331,12 +364,19 @@ class ProotBootstrap(private val context: Context) {
         }
     }
 
+    /**
+     * Phase 60 fix (audit C-1 + C-4): Download dengan timeout realistis + fallback progress.
+     * C-1: readTimeout 60s -> 300s (file 29MB @ 1Mbps = 232s, timeout 60s pasti gagal)
+     * C-4: Kalau Content-Length = -1 (chunked), report bytes downloaded supaya user tahu masih jalan
+     */
     private fun downloadWithProgress(url: String, dest: File, onProgress: (Int) -> Unit) {
         val connection = (URL(url).openConnection() as HttpURLConnection).apply {
-            connectTimeout = 30000
-            readTimeout = 60000
+            connectTimeout = 60000   // C-1: 30s -> 60s (DNS lambat di beberapa network)
+            readTimeout = 300000     // C-1: 60s -> 300s (5 menit, file 29MB butuh waktu)
             instanceFollowRedirects = true
             requestMethod = "GET"
+            setRequestProperty("User-Agent", "TunnelTerminal/7.2.2 (Android; Linux Environment)")
+            setRequestProperty("Accept", "application/x-gzip, */*")
         }
         try {
             connection.connect()
@@ -347,6 +387,8 @@ class ProotBootstrap(private val context: Context) {
             val totalBytes = connection.contentLength.toLong()
             var downloadedBytes = 0L
             var lastReportedPercent = -1
+            var lastReportedBytes = 0L
+            val startTime = System.currentTimeMillis()
             connection.inputStream.use { input ->
                 FileOutputStream(dest).use { output ->
                     val buffer = ByteArray(64 * 1024)
@@ -354,19 +396,38 @@ class ProotBootstrap(private val context: Context) {
                     while (input.read(buffer).also { bytesRead = it } != -1) {
                         output.write(buffer, 0, bytesRead)
                         downloadedBytes += bytesRead
+
                         if (totalBytes > 0) {
                             val percent = ((downloadedBytes * 100) / totalBytes).toInt()
                             if (percent != lastReportedPercent) {
                                 onProgress(percent)
                                 lastReportedPercent = percent
                             }
+                        } else {
+                            // C-4: Content-Length tidak diketahui (chunked transfer)
+                            if (downloadedBytes - lastReportedBytes >= 1024 * 1024) {
+                                val mb = downloadedBytes / 1024 / 1024
+                                Log.i(TAG, "Downloaded " + mb + "MB (no Content-Length, indeterminate)")
+                                val estimatedPercent = ((downloadedBytes * 100) / (30L * 1024 * 1024)).toInt().coerceAtMost(99)
+                                onProgress(estimatedPercent)
+                                lastReportedBytes = downloadedBytes
+                            }
                         }
                     }
+                    if (totalBytes <= 0) onProgress(100)
                 }
             }
+            val elapsed = (System.currentTimeMillis() - startTime) / 1000.0
+            val speedKbps = if (elapsed > 0) (downloadedBytes / 1024 / elapsed).toInt() else 0
+            Log.i(TAG, "Download selesai: " + (downloadedBytes / 1024 / 1024) + "MB dalam " + elapsed.toInt() + "s (" + speedKbps + " KB/s)")
         } catch (e: Exception) {
             try { if (dest.exists()) dest.delete() } catch (_: Exception) {}
-            throw IllegalStateException("Download gagal: ${e.message}", e)
+            throw when (e) {
+                is java.net.SocketTimeoutException -> e
+                is java.net.UnknownHostException -> e
+                is java.io.IOException -> e
+                else -> IllegalStateException("Download gagal: " + e.message, e)
+            }
         } finally {
             connection.disconnect()
         }

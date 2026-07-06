@@ -1028,12 +1028,18 @@ class MainActivity : ComponentActivity() {
         ubuntuInstallStage = "Memulai instalasi"
         ubuntuInstallPercent = 0
 
+        /* Phase 60 fix (audit C-5): NonCancellable context supaya download
+         * tidak dibatalkan saat app di-background. Download 29MB butuh waktu
+         * lama di koneksi lambat. lifecycleScope akan cancel coroutine kalau
+         * Activity di-destroy, tapi NonCancellable memastikan install() selesai. */
         lifecycleScope.launch {
             try {
-                prootBootstrap.install(ProotBootstrap.ProgressListener { stage, percent ->
-                    ubuntuInstallStage = stage
-                    ubuntuInstallPercent = percent
-                })
+                kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
+                    prootBootstrap.install(ProotBootstrap.ProgressListener { stage, percent ->
+                        ubuntuInstallStage = stage
+                        ubuntuInstallPercent = percent
+                    })
+                }
                 // Sukses — tutup dialog, buka tab Ubuntu.
                 ubuntuInstalling = false
                 showUbuntuInstallDialog = false
