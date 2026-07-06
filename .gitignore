@@ -32,3 +32,9 @@ app/src/main/assets/proot/proot
 app/src/main/assets/proot/*.so
 app/src/main/assets/proot/*.so.*
 app/src/main/assets/proot/lib/
+
+# === Signing keys (NEVER commit) ===
+*.jks
+*.jks.base64
+*.keystore
+keystore.properties

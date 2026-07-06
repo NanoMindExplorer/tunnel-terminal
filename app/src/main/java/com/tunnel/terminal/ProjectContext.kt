@@ -21,7 +21,7 @@ import java.io.File
  *
  * Dipanggil dari AIAgent.buildRequestBody() supaya AI dapat context project setiap request.
  */
-class ProjectContext(private val context: Context, sessionType: String = "local" {
+class ProjectContext(private val context: Context, sessionType: String = "local") {
     companion object {
         private const val TAG = "ProjectContext"
         private const val MAX_FILE_TREE_ENTRIES = 200
