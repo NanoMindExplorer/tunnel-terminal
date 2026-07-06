@@ -21,7 +21,7 @@ import java.io.File
  * java.io.File, jauh lebih cepat dan aman daripada "mengetik" isi file lewat shell.
  */
 class SessionTargetResolver(
-    private val sessionType: String,
+    val sessionType: String,
     private val workspaceRoot: File,
     private val rootfsDir: File?
 ) {

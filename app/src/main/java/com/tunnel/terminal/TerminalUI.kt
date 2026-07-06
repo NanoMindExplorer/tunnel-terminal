@@ -375,20 +375,33 @@ fun TerminalScreenView(
                      * Phase 55 fix: Compensate for scrollState.offset + padding(4.dp) —
                      * pos.y dari pointerInput adalah relatif ke Composable, tapi text grid
                      * ada di dalam Column yang di-scroll + di-padding. Tanpa kompensasi,
-                     * seleksi meleset ke atas (terutama saat sudah scroll ke bawah). */
+                     * seleksi meleset ke atas (terutama saat sudah scroll ke bawah).
+                     *
+                     * Phase 60 fix (audit #3): Comment sebelumnya keliru — bilang "pos.y perlu
+                     * dikurangi scroll offset" padahal kode menambahkan (+ scrollState.value).
+                     * Setelah analisis matematis: kode BENAR, comment SALAH. Saat scroll ke
+                     * bawah, content bergerak ke atas → touch di pos.y yang sama sekarang
+                     * menunjuk ke row yang LEBIH BESAR. Maka adjustedY = pos.y + scrollState.value
+                     * - paddingPx adalah formula yang benar. Comment diperbaiki supaya konsisten.
+                     *
+                     * Added debug log untuk verifikasi di device (kalau masih meleset,
+                     * enable Logcat filter "Selection" untuk lihat nilai aktual). */
                     val paddingPx = with(density) { 4.dp.toPx() }
                     fun posToCell(pos: androidx.compose.ui.geometry.Offset): Pair<Int, Int> {
                         val charW = with(density) { fontSize.sp.toPx() * 0.6f }
                         val charH = with(density) { fontSize.sp.toPx() * 1.2f }
-                        /* Kompensasi: pos.y dari pointerInput sudah relatif ke Composable,
-                         * tapi grid ada di dalam Column(padding(4.dp) + verticalScroll).
-                         * Saat scroll ke bawah, scrollState.value > 0 → pos.y perlu dikurangi
-                         * scroll offset supaya mapping ke row yang benar.
-                         * Saat scroll di atas (value=0), pos.y perlu dikurangi paddingPx. */
+                        /* Formula: content row R ada di Box y = paddingPx - scrollState.value
+                         * + R * charH. Maka R = (pos.y + scrollState.value - paddingPx) / charH.
+                         * - pos.y: touch position relatif ke Box (pointerInput attached ke Box)
+                         * - scrollState.value: jumlah pixel yang di-scroll ke bawah (content
+                         *   bergerak ke atas sebanyak ini)
+                         * - paddingPx: offset 4dp dari top Column ke content */
                         val adjustedY = pos.y + scrollState.value - paddingPx
                         val adjustedX = pos.x - paddingPx
                         val col = (adjustedX / charW).toInt().coerceIn(0, renderCols - 1)
                         val row = (adjustedY / charH).toInt().coerceIn(0, renderRows - 1)
+                        android.util.Log.d("Selection", "touch=(${pos.x.toInt()},${pos.y.toInt()}) " +
+                            "scroll=${scrollState.value} pad=$paddingPx charH=$charH -> row=$row col=$col")
                         return Pair(row, col)
                     }
 
@@ -1357,17 +1370,12 @@ fun UbuntuInstallDialog(
     val rootfsMb = remember(installed) {
         if (installed) bootstrap.getRootfsSizeMb() else 0
     }
-    /* Phase 43 fix (LOW-03): Tampilkan status SECCOMP mode (normal vs fallback). */
+    /* Phase 43 fix (LOW-03): Tampilkan status SECCOMP mode (normal vs fallback).
+     * Phase 60 fix (audit #1d): Pakai method publik getSeccompFallbackEnabled()
+     * instead of reflection ke field private 'context'. Reflection di build
+     * minified (R8 enabled) akan fail dengan NoSuchFieldException. */
     val seccompPrefs = remember(installed) {
-        runCatching {
-            bootstrap.let {
-                val ctx = it.javaClass.getDeclaredField("context")
-                ctx.isAccessible = true
-                (ctx.get(it) as android.content.Context)
-                    .getSharedPreferences("TunnelLinux", android.content.Context.MODE_PRIVATE)
-                    .getBoolean("proot_no_seccomp", false)
-            }
-        }.getOrDefault(false)
+        bootstrap.getSeccompFallbackEnabled()
     }
 
     AlertDialog(

@@ -51,3 +51,11 @@
 -dontwarn com.google.api.client.googleapis.**
 -dontwarn com.google.api.client.util.**
 -dontwarn org.joda.time.**
+
+# Phase 60 fix (audit #1, defensive): SessionTargetResolver — dipakai oleh
+# AiToolCall untuk resolve path berdasarkan sesi aktif. Sebelumnya pakai
+# reflection ke field private 'sessionType' yang gagal di build minified.
+# Sekarang field sudah publik, tapi tetap tambah keep-rule sebagai
+# belt-and-suspenders supaya R8 tidak menghapus method yang dipanggil
+# via property access di tempat lain.
+-keep class com.tunnel.terminal.SessionTargetResolver { *; }

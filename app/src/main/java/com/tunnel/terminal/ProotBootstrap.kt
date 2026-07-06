@@ -60,13 +60,18 @@ class ProotBootstrap(private val context: Context) {
          * FIX: Daftar URL berurutan, download mencoba satu per satu sampai ada
          * yang berhasil (HTTP 200). Kalau semua gagal, throw error yang jelas.
          */
+        /* Phase 60 fix (audit #2): Setiap versi patch Ubuntu Base disimpan di
+         * foldernya sendiri (/24.04.X/release/), BUKAN digabung di /24.04/release/.
+         * Folder /24.04/release/ (tanpa nomor patch) hanya berisi 24.04.2.
+         * Sebelumnya URL hardcoded ke /24.04/release/ + nama file 24.04.3/24.04.4
+         * → selalu 404. Fix: samakan folder dengan versi file di dalamnya. */
         val ROOTFS_URLS_ARM64 = listOf(
-            "https://cdimage.ubuntu.com/ubuntu-base/releases/24.04/release/ubuntu-base-24.04.4-base-arm64.tar.gz",
-            "https://cdimage.ubuntu.com/ubuntu-base/releases/24.04/release/ubuntu-base-24.04.3-base-arm64.tar.gz"
+            "https://cdimage.ubuntu.com/ubuntu-base/releases/24.04.4/release/ubuntu-base-24.04.4-base-arm64.tar.gz",
+            "https://cdimage.ubuntu.com/ubuntu-base/releases/24.04.3/release/ubuntu-base-24.04.3-base-arm64.tar.gz"
         )
         val ROOTFS_URLS_AMD64 = listOf(
-            "https://cdimage.ubuntu.com/ubuntu-base/releases/24.04/release/ubuntu-base-24.04.4-base-amd64.tar.gz",
-            "https://cdimage.ubuntu.com/ubuntu-base/releases/24.04/release/ubuntu-base-24.04.3-base-amd64.tar.gz"
+            "https://cdimage.ubuntu.com/ubuntu-base/releases/24.04.4/release/ubuntu-base-24.04.4-base-amd64.tar.gz",
+            "https://cdimage.ubuntu.com/ubuntu-base/releases/24.04.3/release/ubuntu-base-24.04.3-base-amd64.tar.gz"
         )
 
         const val MIN_FREE_BYTES = 1_500L * 1024 * 1024
@@ -392,6 +397,29 @@ class ProotBootstrap(private val context: Context) {
     }
 
     fun getFreeSpaceMb(): Long = baseDir.usableSpace / 1024 / 1024
+
+    /**
+     * Phase 60 fix (audit #1c): Public accessor for SECCOMP fallback status.
+     * Sebelumnya, TerminalUI mengakses field private 'context' via reflection
+     * untuk baca SharedPreferences "proot_no_seccomp". Di build minified,
+     * R8 mengganti nama field private → NoSuchFieldException → status SECCOMP
+     * selalu fallback ke default (false) yang menyesatkan user.
+     *
+     * Fix: Expose method publik supaya TerminalUI bisa akses tanpa reflection.
+     */
+    fun getSeccompFallbackEnabled(): Boolean {
+        return context.getSharedPreferences("TunnelLinux", android.content.Context.MODE_PRIVATE)
+            .getBoolean("proot_no_seccomp", false)
+    }
+
+    /**
+     * Phase 60 fix (audit #1c): Public setter untuk SECCOMP fallback status.
+     * Dipakai oleh TerminalUI saat user toggle SECCOMP mode.
+     */
+    fun setSeccompFallbackEnabled(enabled: Boolean) {
+        context.getSharedPreferences("TunnelLinux", android.content.Context.MODE_PRIVATE)
+            .edit().putBoolean("proot_no_seccomp", enabled).apply()
+    }
 
     fun getRootfsSizeMb(): Long {
         if (!rootfsDir.isDirectory) return 0

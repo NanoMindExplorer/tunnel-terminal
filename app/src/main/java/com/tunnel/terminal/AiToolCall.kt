@@ -297,7 +297,7 @@ class ToolExecutor(
                 "read_file" -> {
                     val path = call.args["path"] ?: return "Error: path required"
                     /* Phase 58 fix (§4.1-D): SFTP untuk tab SSH. */
-                    val sessionType = sessionTargetResolver?.let { it.javaClass.getDeclaredField("sessionType").apply { isAccessible = true }.get(it) as? String } ?: "local"
+                    val sessionType = sessionTargetResolver?.sessionType ?: "local"
                     if (sessionType == "ssh" && sshExecutor != null) {
                         val text = sshExecutor!!.readFileRemote(path)
                         if (text != null) text.take(5000) else "Error: cannot read remote file: $path"
@@ -311,7 +311,7 @@ class ToolExecutor(
                 "list_files" -> {
                     val dirRaw = call.args["dir"] ?: "."
                     /* Phase 58 fix (§4.1-D): SFTP untuk tab SSH. */
-                    val sessionType = sessionTargetResolver?.let { it.javaClass.getDeclaredField("sessionType").apply { isAccessible = true }.get(it) as? String } ?: "local"
+                    val sessionType = sessionTargetResolver?.sessionType ?: "local"
                     if (sessionType == "ssh" && sshExecutor != null) {
                         val files = sshExecutor!!.listFilesRemote(dirRaw)
                         if (files != null) files.joinToString("\n") else "Error: cannot list remote directory: $dirRaw"
@@ -359,7 +359,7 @@ class ToolExecutor(
                     val path = call.args["path"] ?: return "Error: path required"
                     val content = call.args["content"] ?: return "Error: content required"
                     /* Phase 58 fix (§4.1-D): SFTP untuk tab SSH. */
-                    val sessionType = sessionTargetResolver?.let { it.javaClass.getDeclaredField("sessionType").apply { isAccessible = true }.get(it) as? String } ?: "local"
+                    val sessionType = sessionTargetResolver?.sessionType ?: "local"
                     if (sessionType == "ssh" && sshExecutor != null) {
                         if (sshExecutor!!.writeFileRemote(path, content)) "OK: wrote ${content.length} chars to $path (remote)"
                         else "Error: failed to write remote file: $path"
@@ -374,7 +374,7 @@ class ToolExecutor(
                 "delete_file" -> {
                     val path = call.args["path"] ?: return "Error: path required"
                     /* Phase 58 fix (§4.1-D): SFTP untuk tab SSH. */
-                    val sessionType = sessionTargetResolver?.let { it.javaClass.getDeclaredField("sessionType").apply { isAccessible = true }.get(it) as? String } ?: "local"
+                    val sessionType = sessionTargetResolver?.sessionType ?: "local"
                     if (sessionType == "ssh" && sshExecutor != null) {
                         if (sshExecutor!!.deleteFileRemote(path)) "OK: deleted $path (remote)"
                         else "Error: failed to delete remote file: $path"
