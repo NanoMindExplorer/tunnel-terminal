@@ -120,7 +120,7 @@ dependencies {
 
     // Phase 41 fix (CRIT-01): EncryptedSharedPreferences untuk menyimpan API key &
     // SSH credentials secara aman (sebelumnya plaintext di SharedPreferences).
-    implementation("androidx.security:security-crypto:1.0.0")
+    implementation("androidx.security:security-crypto:1.1.0-alpha06")
 
     // BUG-21 fix: Update JSch dari 0.2.17 ke 0.2.21 (versi terbaru mwiede fork)
     implementation("com.github.mwiede:jsch:0.2.21")
