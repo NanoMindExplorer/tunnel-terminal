@@ -21,7 +21,7 @@ import java.io.File
  *
  * Dipanggil dari AIAgent.buildRequestBody() supaya AI dapat context project setiap request.
  */
-class ProjectContext(private val context: Context) {
+class ProjectContext(private val context: Context, sessionType: String = "local" {
     companion object {
         private const val TAG = "ProjectContext"
         private const val MAX_FILE_TREE_ENTRIES = 200
@@ -74,7 +74,30 @@ class ProjectContext(private val context: Context) {
         return result
     }
 
-    /** Deteksi git state: branch aktif + status singkat. */
+    /**
+     * Deteksi git state: branch aktif + status singkat.
+     *
+     * Phase 60 fix (audit B-4): Sebelumnya pakai ProcessBuilder("git", ...)
+     * yang langsung spawn process dari app Android — tapi Android TIDAK PUNYA
+     * binary git terpasang di sistem. Panggilan selalu throw IOException,
+     * tertangkap catch, dan section Modified/Untracked/Staged tidak pernah
+     * terisi (cuma branch yang kebaca dari file .git/HEAD langsung).
+     *
+     * Fix:
+     * - Untuk sesi "ubuntu": git ada di rootfs Ubuntu via proot, tapi hanya
+     *   accessible lewat sesi terminal (MarkerExecutor), bukan ProcessBuilder
+     *   langsung. Karena ProjectContext tidak punya referensi ke MarkerExecutor
+     *   saat ini, kita skip status modified untuk sesi Ubuntu juga (TODO:
+     *   wire MarkerExecutor di sini supaya bisa dapat status real).
+     * - Untuk sesi "local" (Android shell): git tidak ada, skip status.
+     * - Branch tetap bisa dibaca dari file .git/HEAD langsung (tidak butuh
+     *   binary git eksternal).
+     *
+     * TODO: Untuk mendapatkan status modified/untracked di sesi Ubuntu,
+     * ProjectContext perlu referensi ke MarkerExecutor (atau interface
+     * abstrak) supaya bisa execute "git status --porcelain" lewat PTY.
+     * Saat ini cuma branch yang reliable across all session types.
+     */
     private fun detectGitState(root: File): String {
         val gitDir = File(root, ".git")
         if (!gitDir.exists()) return ""
@@ -82,7 +105,7 @@ class ProjectContext(private val context: Context) {
         val sb = StringBuilder()
         sb.append("Git: yes\n")
 
-        // Coba baca branch aktif dari HEAD
+        // Coba baca branch aktif dari HEAD (tidak butuh binary git, baca file langsung)
         try {
             val headFile = File(gitDir, "HEAD")
             if (headFile.exists()) {
@@ -98,24 +121,12 @@ class ProjectContext(private val context: Context) {
             Log.w(TAG, "Gagal baca git HEAD: ${e.message}")
         }
 
-        // Count modified/untracked files (best-effort via git status --porcelain)
-        try {
-            val process = ProcessBuilder("git", "status", "--porcelain")
-                .directory(root)
-                .redirectErrorStream(true)
-                .start()
-            val output = process.inputStream.bufferedReader().readText()
-            val exitCode = process.waitFor()
-            if (exitCode == 0 && output.isNotBlank()) {
-                val lines = output.trim().lines()
-                val modified = lines.count { it.startsWith(" M") || it.startsWith("M ") }
-                val untracked = lines.count { it.startsWith("??") }
-                val staged = lines.count { it.startsWith("A ") || it.startsWith("M  ") }
-                sb.append("Modified: $modified, Untracked: $untracked, Staged: $staged\n")
-            }
-        } catch (e: Exception) {
-            // git command tidak available — skip, bukan fatal
-        }
+        /* Phase 60 fix (audit B-4): Skip ProcessBuilder git status — tidak
+         * pernah jalan di Android. Status modified/untracked hanya bisa
+         * didapat lewat terminal session (MarkerExecutor) untuk sesi Ubuntu.
+         * Untuk sesi lokal Android, fitur ini memang tidak akan pernah bisa.
+         * Tambah note di context supaya AI tahu kenapa status tidak tersedia. */
+        sb.append("Status: (not available on Android — use 'git status' in terminal)\n")
 
         return sb.toString()
     }

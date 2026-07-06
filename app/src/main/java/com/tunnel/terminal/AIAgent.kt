@@ -49,8 +49,19 @@ data class ChatMessage(
  * Mendukung semua provider OpenAI-compatible:
  * OpenAI, DeepSeek, Groq, OpenRouter, Gemini (OpenAI-compat), Anthropic (OpenAI-compat), Ollama.
  */
-class AIAgent {
+class AIAgent(
+    /* Phase 60 fix (audit B-2): Referensi ke McpManager supaya tools MCP
+     * bisa ditambahkan dinamis ke TOOL_SCHEMA per-request. Sebelumnya,
+     * migrasi Phase 59 ke native tool-calling diam-diam menghilangkan
+     * kemampuan AI memanggil tool MCP — kodenya masih ada di AiToolCall,
+     * tapi AI tidak tahu mereka ada karena tidak terdaftar di TOOL_SCHEMA. */
+    private var mcpManager: McpManager? = null
+) {
     private val tag = "AIAgent"
+
+    /** Phase 60 fix (audit B-2): Update McpManager reference (dipanggil
+     * saat user connect/disconnect MCP server setelah AIAgent dibuat). */
+    fun setMcpManager(mgr: McpManager?) { mcpManager = mgr }
 
     /**
      * Phase 59 fix (B-1): Tool schema untuk native API tool_calling.
@@ -141,6 +152,27 @@ class AIAgent {
                     .put("status", org.json.JSONObject().put("type", "string").put("enum", org.json.JSONArray().put("PENDING").put("IN_PROGRESS").put("DONE").put("FAILED")))
                 )
                 .put("required", org.json.JSONArray().put("step_id").put("status"))
+            )
+        ))
+        // Phase 60 fix (audit B-2): search_files — sebelumnya hilang dari TOOL_SCHEMA,
+        // kodenya tetap ada di AiToolCall.execute() tapi AI tidak tahu tool ini ada.
+        put(org.json.JSONObject().put("type", "function").put("function", org.json.JSONObject()
+            .put("name", "search_files").put("description", "Cari file berdasarkan pattern nama di workspace.")
+            .put("parameters", org.json.JSONObject()
+                .put("type", "object")
+                .put("properties", org.json.JSONObject()
+                    .put("pattern", org.json.JSONObject().put("type", "string").put("description", "Pattern regex nama file"))
+                    .put("dir", org.json.JSONObject().put("type", "string").put("description", "Direktori search (opsional, default workspace root)"))
+                )
+                .put("required", org.json.JSONArray().put("pattern"))
+            )
+        ))
+        // Phase 60 fix (audit B-2): get_terminal_output — sebelumnya hilang dari TOOL_SCHEMA.
+        put(org.json.JSONObject().put("type", "function").put("function", org.json.JSONObject()
+            .put("name", "get_terminal_output").put("description", "Ambil output terminal terkini.")
+            .put("parameters", org.json.JSONObject()
+                .put("type", "object")
+                .put("properties", org.json.JSONObject())
             )
         ))
     }
@@ -532,9 +564,47 @@ class AIAgent {
 
         /* Phase 59 fix (B-1): Tambah tools array + tool_choice kalau provider
          * mendukung native tool_calling. API akan menjamin format respons sesuai
-         * schema — tidak perlu regex parsing, tidak ada risiko escaping error. */
+         * schema — tidak perlu regex parsing, tidak ada risiko escaping error.
+         *
+         * Phase 60 fix (audit B-2): Build tool schema dinamis — gabungkan
+         * TOOL_SCHEMA statis dengan tool MCP yang aktif (kalau ada MCP server
+         * connected). Sebelumnya, MCP tools tidak terdaftar di schema → AI
+         * tidak pernah memanggilnya walau kodenya tetap ada di AiToolCall. */
         if (settings.supportsToolCalling) {
-            requestBody.put("tools", TOOL_SCHEMA)
+            val fullToolSchema = if (mcpManager != null) {
+                /* Copy TOOL_SCHEMA statis, lalu append tool MCP aktif. */
+                val dynamic = org.json.JSONArray(TOOL_SCHEMA.toString())
+                try {
+                    val mcpTools = mcpManager!!.discoveredTools
+                    if (mcpTools.isNotEmpty()) {
+                        mcpTools.forEach { (serverName, tools) ->
+                            tools.forEach { mcpTool ->
+                                try {
+                                    val paramsSchema = org.json.JSONObject(
+                                        mcpTool.inputSchema.ifBlank { "{}" }
+                                    )
+                                    dynamic.put(org.json.JSONObject()
+                                        .put("type", "function")
+                                        .put("function", org.json.JSONObject()
+                                            .put("name", "mcp.$serverName.${mcpTool.name}")
+                                            .put("description", mcpTool.description.ifBlank { "MCP tool: ${mcpTool.name}" })
+                                            .put("parameters", paramsSchema)
+                                        )
+                                    )
+                                } catch (e: Exception) {
+                                    Log.w(tag, "Skip MCP tool $serverName/${mcpTool.name}: ${e.message}")
+                                }
+                            }
+                        }
+                    }
+                } catch (e: Exception) {
+                    Log.w(tag, "Gagal aggregate MCP tools: ${e.message}")
+                }
+                dynamic
+            } else {
+                TOOL_SCHEMA
+            }
+            requestBody.put("tools", fullToolSchema)
             requestBody.put("tool_choice", "auto")
         }
 

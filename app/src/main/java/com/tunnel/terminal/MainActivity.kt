@@ -74,6 +74,9 @@ class MainActivity : ComponentActivity() {
      * supaya survive Activity recreate (rotasi, low-memory kill). Screen buffer tidak hilang. */
     private lateinit var shellExecutors: MutableList<TerminalSession>
     private var activeExecutorId by mutableStateOf(0)
+    /* Phase 60 fix (audit B-2): AIAgent sekarang butuh McpManager reference
+     * supaya MCP tools bisa ditambahkan dinamis ke TOOL_SCHEMA. Inisialisasi
+     * lazy — mcpManager di-set di onCreate() setelah McpManager dibuat. */
     private val aiAgent = AIAgent()
 
     private val chatMessages = mutableStateListOf<ChatMessage>()
@@ -266,6 +269,9 @@ class MainActivity : ComponentActivity() {
         permissionManager = PermissionManager(this)
         contextManager = ContextManager(this)
         mcpManager = McpManager(this)
+        /* Phase 60 fix (audit B-2): Set mcpManager ke aiAgent supaya MCP tools
+         * bisa di-inject dinamis ke TOOL_SCHEMA di setiap request AI. */
+        aiAgent.setMcpManager(mcpManager)
         agentWorkflowManager = AgentWorkflowManager(this)
         /* Phase 47 (Bagian 2): Init AgentTaskRunner. */
         agentTaskRunner = AgentTaskRunner(aiAgent, toolExecutor, permissionManager, markerExecutor)
@@ -1357,7 +1363,6 @@ class MainActivity : ComponentActivity() {
                     agentTaskRunner.stop()
                     agentRunning = false
                 },
-                onApprove = { _, _ -> true },
                 onDismiss = { showAgentScreen = false }
             )
         }

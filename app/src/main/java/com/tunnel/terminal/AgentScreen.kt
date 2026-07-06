@@ -34,7 +34,6 @@ fun AgentScreen(
     onPause: () -> Unit,
     onResume: () -> Unit,
     onStop: () -> Unit,
-    onApprove: (AiToolCall, String) -> Boolean,
     onDismiss: () -> Unit
 ) {
     var goalText by remember { mutableStateOf("") }

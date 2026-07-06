@@ -271,7 +271,13 @@ class ToolExecutor(
         val original = try { file.readText() } catch (e: Exception) {
             return "Error: cannot read file: ${e.message}"
         }
-        val occurrences = original.split(oldString).size - 1
+        /* Phase 60 fix (audit B-5): Pakai Regex.findAll untuk hitung occurrence
+         * yang benar untuk pattern overlapping. Sebelumnya pakai split() yang
+         * hanya hitung non-overlapping dari kiri — bisa meleset untuk kasus
+         * tepi seperti cari "aa" di "aaaa" (split = 1, findAll = 3).
+         * Regex.escape memastikan oldString tidak di-interpretasi sebagai regex
+         * pattern (literal match). */
+        val occurrences = Regex(Regex.escape(oldString)).findAll(original).count()
         return when {
             occurrences == 0 -> "Error: old_string tidak ditemukan persis di ${file.absolutePath}. Baca ulang file dulu sebelum edit."
             occurrences > 1 -> "Error: old_string muncul $occurrences kali — perlu lebih spesifik (sertakan lebih banyak baris konteks)."

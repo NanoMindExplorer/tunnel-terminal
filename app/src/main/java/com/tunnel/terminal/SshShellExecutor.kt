@@ -433,14 +433,34 @@ class SshShellExecutor(
         }
     }
 
+    /**
+     * Phase 60 fix (audit B-3): Buat direktori recursive (seperti mkdir -p).
+     * Sebelumnya, writeFileRemote pakai sftp.mkdir(parent) yang hanya bisa
+     * buat satu level direktori (seperti mkdir POSIX tanpa -p). Kalau AI
+     * menulis ke path bersarang baru (mis. proyek_baru/src/main.py di mana
+     * dua-duanya belum ada), mkdir gagal dan comment mengasumsikan "mungkin
+     * sudah ada" padahal bisa juga berarti induknya belum ada.
+     *
+     * Fix: Traverse path per-segment, mkdir masing-masing level, ignore
+     * exception kalau sudah ada (idempotent).
+     */
+    private fun mkdirRecursive(sftp: ChannelSftp, path: String) {
+        val parts = path.trim('/').split("/").filter { it.isNotEmpty() }
+        var current = ""
+        for (part in parts) {
+            current = if (current.isEmpty()) part else "$current/$part"
+            try { sftp.mkdir(current) } catch (_: Exception) { /* sudah ada, lanjut */ }
+        }
+    }
+
     /** Tulis file ke remote via SFTP. */
     fun writeFileRemote(path: String, content: String): Boolean {
         val sftp = ensureSftpChannel() ?: return false
         return try {
-            // Pastikan parent directory exists
+            // Pastikan parent directory exists (recursive, Phase 60 fix audit B-3)
             val parent = path.substringBeforeLast("/", "")
             if (parent.isNotEmpty()) {
-                try { sftp.mkdir(parent) } catch (_: Exception) { /* mungkin sudah ada */ }
+                mkdirRecursive(sftp, parent)
             }
             sftp.put(content.byteInputStream(Charsets.UTF_8), path)
             Log.i(tag, "SFTP write: $path (${content.length} chars)")
