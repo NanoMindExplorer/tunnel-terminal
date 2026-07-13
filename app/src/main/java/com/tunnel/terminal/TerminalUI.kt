@@ -16,6 +16,8 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -35,6 +37,9 @@ import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -1010,20 +1015,36 @@ fun AIChatPanel(
     isLoadingModels: Boolean = false,
     modelsFetchError: String? = null,
     onFetchModels: () -> Unit = {},
-    onSelectModel: (ModelInfo) -> Unit = {}
+    onSelectModel: (ModelInfo) -> Unit = {},
+    /* Wave-17: Stop streaming / autopilot + deep-link tab. */
+    onStopAI: () -> Unit = {},
+    onRetryLastPrompt: () -> Unit = {},
+    autoPilotRunning: Boolean = false,
+    autoPilotStep: Int = 0,
+    autoPilotTotal: Int = 0,
+    autoPilotCommand: String = "",
+    onStopAutoPilot: () -> Unit = {},
+    initialTab: Int = 0
 ) {
     var inputText by remember { mutableStateOf("") }
-    var selectedTab by remember { mutableStateOf(0) }
+    var selectedTab by remember { mutableStateOf(initialTab.coerceIn(0, 2)) }
     /* Settings sub-tab: 0=AI Provider, 1=Theme, 2=About. */
     var settingsSubTab by remember { mutableStateOf(0) }
-    val scrollState = rememberScrollState()
+    /* Wave-17: Separate scroll per tab (was one shared state). */
+    val chatListState = rememberLazyListState()
+    val workflowsScroll = rememberScrollState()
+    val settingsScroll = rememberScrollState()
     var expandedProvider by remember { mutableStateOf(false) }
     var showSaveDialog by remember { mutableStateOf<String?>(null) }
     var snippetTitle by remember { mutableStateOf("") }
     var settingsDraft by remember { mutableStateOf(settings) }
     var showSaved by remember { mutableStateOf(false) }
+    var showApiKey by remember { mutableStateOf(false) }
     /* Streaming cursor blink state. */
     var cursorBlink by remember { mutableStateOf(true) }
+    var showJumpToLatest by remember { mutableStateOf(false) }
+    val copyText = rememberCopyToClipboard()
+    val scope = rememberCoroutineScope()
 
     /* Sync settingsDraft ketika settings prop berubah. */
     LaunchedEffect(settings) {
@@ -1041,12 +1062,26 @@ fun AIChatPanel(
         }
     }
 
-    /* Auto-scroll ke bawah saat ada message baru atau streaming update.
-     * Auto-scroll to bottom on new messages or streaming updates. */
+    /* Wave-17: Stick-to-bottom only when already near end. */
     LaunchedEffect(messages.size, messages.lastOrNull()?.content, messages.lastOrNull()?.isStreaming) {
-        if (scrollState.maxValue > 0) {
-            scrollState.scrollTo(scrollState.maxValue)
+        if (messages.isEmpty()) return@LaunchedEffect
+        val last = messages.lastIndex
+        val info = chatListState.layoutInfo
+        val lastVisible = info.visibleItemsInfo.lastOrNull()?.index ?: 0
+        val nearBottom = lastVisible >= last - 1
+        showJumpToLatest = !nearBottom && last > 2
+        if (nearBottom) {
+            chatListState.animateScrollToItem(last)
         }
+    }
+    LaunchedEffect(chatListState.firstVisibleItemIndex, chatListState.layoutInfo.visibleItemsInfo.size, messages.size) {
+        if (messages.isEmpty()) {
+            showJumpToLatest = false
+            return@LaunchedEffect
+        }
+        val last = messages.lastIndex
+        val lastVisible = chatListState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
+        showJumpToLatest = lastVisible < last - 1 && last > 2
     }
 
     /* Cursor blink animation saat streaming aktif. */
@@ -1055,6 +1090,7 @@ fun AIChatPanel(
             cursorBlink = !cursorBlink
             kotlinx.coroutines.delay(500)
         }
+        cursorBlink = true
     }
 
     if (showSaveDialog != null) {
@@ -1086,15 +1122,22 @@ fun AIChatPanel(
     Column(modifier = Modifier.fillMaxSize().background(theme.uiBg)) {
         /* Header dengan title + clear chat + close. */
         Row(
-            modifier = Modifier.fillMaxWidth().padding(16.dp),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
             Column {
-                Text("Tunnel Auto-Pilot", color = theme.uiText, fontSize = 18.sp, fontFamily = FontFamily.Monospace)
+                Text("AI Copilot", color = theme.uiText, fontSize = 18.sp, fontFamily = FontFamily.Monospace)
                 Text(
-                    if (isProcessingAI) "● Streaming..." else "${messages.size} pesan",
-                    color = if (isProcessingAI) theme.uiAccent else theme.uiTextMuted,
+                    when {
+                        autoPilotRunning -> "● Auto-Pilot $autoPilotStep/$autoPilotTotal"
+                        isProcessingAI -> "● Streaming…"
+                        else -> "${messages.size} pesan · ${settings.modelName.ifBlank { settings.provider }}"
+                    },
+                    color = when {
+                        autoPilotRunning || isProcessingAI -> theme.uiAccent
+                        else -> theme.uiTextMuted
+                    },
                     fontSize = 10.sp,
                     fontFamily = FontFamily.Monospace
                 )
@@ -1147,101 +1190,73 @@ fun AIChatPanel(
         }
 
         if (selectedTab == 0) {
-            /* ─── Chat Tab ─── */
-            Column(modifier = Modifier.weight(1f).padding(16.dp).verticalScroll(scrollState)) {
-                if (messages.isEmpty()) {
-                    Text(
-                        "Selamat datang di Tunnel Auto-Pilot!\n\n" +
-                        "Ketik permintaan Anda, contoh:\n" +
-                        "• \"Tampilkan 5 proses termahal\"\n" +
-                        "• \"Setup server Python http di port 8080\"\n" +
-                        "• \"Cari file .log ukuran > 10MB\"\n\n" +
-                        "AI akan streaming response token-by-token dan ingat seluruh percakapan.",
-                        color = theme.uiTextMuted,
-                        fontSize = 12.sp,
-                        fontFamily = FontFamily.Monospace
-                    )
-                }
-                messages.forEach { msg ->
-                    val nameColor = when {
-                        msg.isError -> Color(0xFFFF5252)
-                        msg.role == "user" -> theme.ansi.getOrElse(2) { Color(0xFF4CAF50) }
-                        else -> theme.uiAccent
-                    }
-                    val displayName = if (msg.role == "user") "Anda" else "AI"
-                    val suffix = if (msg.isStreaming) " (streaming...)" else ""
-                    Text(
-                        "$displayName:$suffix",
-                        color = nameColor,
-                        fontSize = 14.sp,
-                        fontFamily = FontFamily.Monospace
-                    )
-                    /* Content - tambahkan cursor blink jika streaming.
-                     * Phase 22: AI messages render as markdown (headers, code blocks, lists). */
-                    val displayContent = if (msg.isStreaming && cursorBlink) {
-                        msg.content + "▋"
-                    } else if (msg.isStreaming) {
-                        msg.content + " "
-                    } else {
-                        msg.content
-                    }
-                    if (msg.role == "assistant" && !msg.isStreaming && !msg.isError) {
-                        /* Phase 22: Markdown rendering untuk AI responses. */
-                        MarkdownText(
-                            markdown = displayContent,
-                            theme = theme,
-                            fontSize = 13,
-                            modifier = Modifier.padding(bottom = 8.dp).fillMaxWidth()
-                        )
-                    } else {
-                        Text(
-                            displayContent,
-                            color = if (msg.isError) Color(0xFFFF8A80) else theme.uiText,
-                            fontSize = 14.sp,
-                            fontFamily = FontFamily.Monospace,
-                            modifier = Modifier.padding(bottom = 8.dp)
-                        )
-                    }
-                    /* Command buttons. */
-                    if (msg.commands.size > 1 && !msg.isStreaming) {
-                        Text(
-                            "🚀 Rangkaian Auto-Pilot (${msg.commands.size} langkah):",
-                            color = theme.ansi.getOrElse(3) { Color(0xFFFFEB3B) },
-                            fontSize = 12.sp,
-                            fontFamily = FontFamily.Monospace
-                        )
-                        msg.commands.forEachIndexed { i, c ->
-                            Text(
-                                "  ${i + 1}. $c",
-                                color = theme.ansi.getOrElse(6) { Color(0xFF00BCD4) },
-                                fontSize = 11.sp,
-                                fontFamily = FontFamily.Monospace
+            /* ─── Chat Tab (Wave-17) ─── */
+            if (autoPilotRunning) {
+                AutoPilotProgressBar(
+                    current = autoPilotStep,
+                    total = autoPilotTotal,
+                    command = autoPilotCommand,
+                    theme = theme,
+                    onStop = onStopAutoPilot
+                )
+            }
+            Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+                LazyColumn(
+                    state = chatListState,
+                    modifier = Modifier.fillMaxSize().padding(horizontal = 12.dp),
+                    contentPadding = PaddingValues(vertical = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(2.dp)
+                ) {
+                    if (messages.isEmpty()) {
+                        items(1, key = { "empty" }) {
+                            AiChatEmptyState(
+                                theme = theme,
+                                needsApiKey = settings.apiKey.isBlank() &&
+                                    !settings.baseUrl.contains("localhost", ignoreCase = true) &&
+                                    !settings.baseUrl.contains("127.0.0.1"),
+                                onOpenSettings = { selectedTab = 2 },
+                                onSuggestion = { tip ->
+                                    inputText = tip
+                                }
                             )
                         }
-                        Row(modifier = Modifier.padding(bottom = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Button(
-                                onClick = { onRunAutoPilot(msg.commands) },
-                                enabled = !isProcessingAI,
-                                colors = ButtonDefaults.buttonColors(
-                                    containerColor = theme.ansi.getOrElse(6) { Color(0xFF00BCD4) }
-                                )
-                            ) { Text("Run Auto-Pilot") }
-                        }
-                    } else if (msg.isCommand && !msg.isStreaming) {
-                        Row(modifier = Modifier.padding(bottom = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            /* Untuk single command: pakai commands[0] (lebih akurat dari msg.content
-                             * yang mungkin berisi explanation + command). */
-                            val cmdToRun = msg.commands.firstOrNull() ?: msg.content
-                            Button(
-                                onClick = { onRunCommand(cmdToRun) },
-                                enabled = !isProcessingAI,
-                                colors = ButtonDefaults.buttonColors(containerColor = theme.uiAccent)
-                            ) { Text("▶ Run") }
-                            Button(
-                                onClick = { showSaveDialog = cmdToRun },
-                                colors = ButtonDefaults.buttonColors(containerColor = theme.uiSurface)
-                            ) { Text("💾 Save") }
-                        }
+                    }
+                    items(
+                        count = messages.size,
+                        key = { idx -> "m$idx-${messages[idx].role}-${messages[idx].content.length}" }
+                    ) { idx ->
+                        val msg = messages[idx]
+                        AiMessageBubble(
+                            msg = msg,
+                            theme = theme,
+                            cursorBlink = cursorBlink,
+                            isProcessingAI = isProcessingAI || autoPilotRunning,
+                            onRunCommand = onRunCommand,
+                            onRunAutoPilot = onRunAutoPilot,
+                            onSaveSnippet = { cmd -> showSaveDialog = cmd },
+                            onCopy = copyText,
+                            onRerun = { text -> onSendPrompt(text) },
+                            onRetry = onRetryLastPrompt
+                        )
+                    }
+                }
+                if (showJumpToLatest) {
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.BottomCenter)
+                            .padding(bottom = 8.dp)
+                            .background(theme.uiAccent.copy(alpha = 0.92f), RoundedCornerShape(16.dp))
+                            .clickable {
+                                scope.launch {
+                                    if (messages.isNotEmpty()) {
+                                        chatListState.animateScrollToItem(messages.lastIndex)
+                                    }
+                                }
+                                showJumpToLatest = false
+                            }
+                            .padding(horizontal = 12.dp, vertical = 6.dp)
+                    ) {
+                        Text("↓ Pesan baru", color = Color.White, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
                     }
                 }
             }
@@ -1282,15 +1297,17 @@ fun AIChatPanel(
                     modifier = Modifier.padding(horizontal = 16.dp)
                 )
             }
-            /* Input bar. */
-            Row(modifier = Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                /* Phase 19: Image attach button. */
+            /* Wave-17: Multi-line input + Stop while streaming. */
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.Bottom
+            ) {
                 Button(
                     onClick = onAttachImage,
-                    enabled = !isProcessingAI,
+                    enabled = !isProcessingAI && !autoPilotRunning,
                     colors = ButtonDefaults.buttonColors(containerColor = theme.uiSurface),
                     contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
-                    modifier = Modifier.padding(end = 8.dp)
+                    modifier = Modifier.padding(end = 6.dp)
                 ) {
                     Text("📎", fontSize = 14.sp)
                 }
@@ -1298,33 +1315,65 @@ fun AIChatPanel(
                     value = inputText,
                     onValueChange = { inputText = it },
                     modifier = Modifier.weight(1f),
-                    enabled = !isProcessingAI,
-                    textStyle = TextStyle(color = theme.uiText, fontFamily = FontFamily.Monospace),
+                    enabled = !isProcessingAI && !autoPilotRunning,
+                    maxLines = 4,
+                    textStyle = TextStyle(color = theme.uiText, fontFamily = FontFamily.Monospace, fontSize = 13.sp),
                     placeholder = {
                         Text(
-                            if (isProcessingAI) "AI sedang merespons..." else "Minta AI menyelesaikan tugas...",
-                            color = theme.uiTextMuted
+                            when {
+                                autoPilotRunning -> "Auto-Pilot berjalan…"
+                                isProcessingAI -> "AI merespons… (Stop untuk batalkan)"
+                                else -> "Tanya AI atau minta tugas…"
+                            },
+                            color = theme.uiTextMuted,
+                            fontSize = 12.sp
                         )
-                    }
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                Button(
-                    onClick = {
-                        /* Phase 19: allow send with just images (no text) if vision model. */
-                        if ((inputText.isNotEmpty() || pendingImages.isNotEmpty()) && !isProcessingAI) {
-                            onSendPrompt(inputText)
-                            inputText = ""
-                        }
                     },
-                    enabled = (inputText.isNotEmpty() || pendingImages.isNotEmpty()) && !isProcessingAI,
-                    colors = ButtonDefaults.buttonColors(containerColor = theme.uiAccent)
-                ) {
-                    Text(if (isProcessingAI) "..." else "Kirim")
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                    keyboardActions = KeyboardActions(
+                        onSend = {
+                            if ((inputText.isNotEmpty() || pendingImages.isNotEmpty()) && !isProcessingAI && !autoPilotRunning) {
+                                onSendPrompt(inputText)
+                                inputText = ""
+                            }
+                        }
+                    ),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = theme.uiAccent,
+                        unfocusedBorderColor = theme.uiSurface,
+                        cursorColor = theme.uiAccent,
+                        focusedTextColor = theme.uiText,
+                        unfocusedTextColor = theme.uiText
+                    )
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                if (isProcessingAI || autoPilotRunning) {
+                    Button(
+                        onClick = { if (autoPilotRunning) onStopAutoPilot() else onStopAI() },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF5252)),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)
+                    ) {
+                        Text("Stop", color = Color.White, fontSize = 12.sp)
+                    }
+                } else {
+                    Button(
+                        onClick = {
+                            if (inputText.isNotEmpty() || pendingImages.isNotEmpty()) {
+                                onSendPrompt(inputText)
+                                inputText = ""
+                            }
+                        },
+                        enabled = inputText.isNotEmpty() || pendingImages.isNotEmpty(),
+                        colors = ButtonDefaults.buttonColors(containerColor = theme.uiAccent),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)
+                    ) {
+                        Text("Kirim", fontSize = 12.sp)
+                    }
                 }
             }
         } else if (selectedTab == 1) {
             /* ─── Workflows Tab ─── */
-            Column(modifier = Modifier.weight(1f).padding(16.dp).verticalScroll(scrollState)) {
+            Column(modifier = Modifier.weight(1f).padding(16.dp).verticalScroll(workflowsScroll)) {
                 if (snippets.isEmpty()) {
                     Text(
                         "Belum ada workflow tersimpan.\n\nKlik '💾 Save' di pesan AI bercommand untuk menyimpan.",
@@ -1391,7 +1440,7 @@ fun AIChatPanel(
             when (settingsSubTab) {
                 0 -> {
                     /* AI Provider settings. */
-                    Column(modifier = Modifier.weight(1f).padding(16.dp).verticalScroll(scrollState)) {
+                    Column(modifier = Modifier.weight(1f).padding(16.dp).verticalScroll(settingsScroll)) {
                         Text("Provider:", color = theme.uiTextMuted, fontSize = 12.sp)
                         /* Phase 33 (A5 fix): Ganti OutlinedTextField dengan Row+Text non-interactive.
                          * Old code: OutlinedTextField enabled=true/readOnly=true → field interaktif
@@ -1526,39 +1575,74 @@ fun AIChatPanel(
                             }
                         }
                         Spacer(modifier = Modifier.height(16.dp))
-                        Text("API Key:", color = theme.uiTextMuted, fontSize = 12.sp)
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text("API Key:", color = theme.uiTextMuted, fontSize = 12.sp, modifier = Modifier.weight(1f))
+                            Text(
+                                if (showApiKey) "Sembunyikan" else "Tampilkan",
+                                color = theme.uiAccent,
+                                fontSize = 10.sp,
+                                fontFamily = FontFamily.Monospace,
+                                modifier = Modifier.clickable { showApiKey = !showApiKey }
+                            )
+                        }
                         OutlinedTextField(
                             value = settingsDraft.apiKey,
                             onValueChange = { settingsDraft = settingsDraft.copy(apiKey = it) },
                             modifier = Modifier.fillMaxWidth(),
                             textStyle = TextStyle(color = theme.uiText, fontFamily = FontFamily.Monospace),
-                            placeholder = { Text("sk-...", color = theme.uiTextMuted) }
+                            placeholder = { Text("sk-...", color = theme.uiTextMuted) },
+                            visualTransformation = if (showApiKey) VisualTransformation.None else PasswordVisualTransformation(),
+                            singleLine = true
                         )
-                        Spacer(modifier = Modifier.height(16.dp))
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Text("Max tokens:", color = theme.uiTextMuted, fontSize = 12.sp)
+                        OutlinedTextField(
+                            value = settingsDraft.maxTokens.toString(),
+                            onValueChange = { v ->
+                                v.toIntOrNull()?.let {
+                                    settingsDraft = settingsDraft.copy(maxTokens = it.coerceIn(256, 32000))
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                            textStyle = TextStyle(color = theme.uiText, fontFamily = FontFamily.Monospace),
+                            singleLine = true
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
                         Text("Timeout (ms):", color = theme.uiTextMuted, fontSize = 12.sp)
                         OutlinedTextField(
                             value = settingsDraft.requestTimeoutMs.toString(),
                             onValueChange = { v -> v.toIntOrNull()?.let { settingsDraft = settingsDraft.copy(requestTimeoutMs = it.coerceIn(5000, 120000)) } },
                             modifier = Modifier.fillMaxWidth(),
-                            textStyle = TextStyle(color = theme.uiText, fontFamily = FontFamily.Monospace)
+                            textStyle = TextStyle(color = theme.uiText, fontFamily = FontFamily.Monospace),
+                            singleLine = true
                         )
-                        Spacer(modifier = Modifier.height(16.dp))
+                        Spacer(modifier = Modifier.height(12.dp))
                         Text("Temperature:", color = theme.uiTextMuted, fontSize = 12.sp)
                         OutlinedTextField(
                             value = settingsDraft.temperature.toString(),
                             onValueChange = { v -> v.toDoubleOrNull()?.let { settingsDraft = settingsDraft.copy(temperature = it.coerceIn(0.0, 2.0)) } },
                             modifier = Modifier.fillMaxWidth(),
-                            textStyle = TextStyle(color = theme.uiText, fontFamily = FontFamily.Monospace)
+                            textStyle = TextStyle(color = theme.uiText, fontFamily = FontFamily.Monospace),
+                            singleLine = true
                         )
                         Spacer(modifier = Modifier.height(8.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            if (settingsDraft.supportsVision) {
+                                Text("👁 Vision", color = theme.uiAccent, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
+                            }
+                            if (settingsDraft.supportsToolCalling) {
+                                Text("🔧 Tools", color = theme.uiAccent, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(8.dp))
                         if (showSaved) {
-                            Text("✓ Saved", color = theme.ansi.getOrElse(2) { Color(0xFF4CAF50) }, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
+                            Text("✓ Tersimpan", color = theme.ansi.getOrElse(2) { Color(0xFF4CAF50) }, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
                         }
                     }
                 }
                 1 -> {
                     /* Theme picker. */
-                    Column(modifier = Modifier.weight(1f).padding(16.dp).verticalScroll(scrollState)) {
+                    Column(modifier = Modifier.weight(1f).padding(16.dp).verticalScroll(settingsScroll)) {
                         Text(
                             "Pilih tema terminal:",
                             color = theme.uiText,
@@ -1628,7 +1712,7 @@ fun AIChatPanel(
                     /* About tab. */
                     val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
                     val context = androidx.compose.ui.platform.LocalContext.current
-                    Column(modifier = Modifier.weight(1f).padding(16.dp).verticalScroll(scrollState)) {
+                    Column(modifier = Modifier.weight(1f).padding(16.dp).verticalScroll(settingsScroll)) {
                         Text(
                             "Tunnel Terminal v${BuildConfig.VERSION_NAME}",
                             color = theme.uiText,

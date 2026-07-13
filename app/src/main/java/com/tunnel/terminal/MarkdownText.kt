@@ -1,10 +1,12 @@
 package com.tunnel.terminal
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.AnnotatedString
@@ -67,31 +69,47 @@ fun MarkdownText(
                     )
                 }
                 is MarkdownBlock.CodeBlock -> {
-                    /* Code block dengan syntax highlighting. */
+                    /* Code block dengan syntax highlighting + Wave-17 copy. */
                     val language = block.language.ifBlank { "plain" }
                     val highlighted = SyntaxHighlighter.highlight(block.code, language, syntaxColors)
+                    val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
+                    val context = androidx.compose.ui.platform.LocalContext.current
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
                             .background(theme.background.copy(alpha = 0.6f), RoundedCornerShape(4.dp))
                             .padding(8.dp)
                     ) {
-                        if (block.language.isNotBlank()) {
-                            Column {
+                        Column {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
                                 Text(
-                                    block.language,
+                                    if (block.language.isNotBlank()) block.language else "code",
                                     color = theme.uiTextMuted,
                                     fontSize = 9.sp,
-                                    fontFamily = FontFamily.Monospace,
-                                    modifier = Modifier.padding(bottom = 4.dp)
-                                )
-                                Text(
-                                    text = highlighted,
-                                    fontSize = 11.sp,
                                     fontFamily = FontFamily.Monospace
                                 )
+                                Text(
+                                    "Copy",
+                                    color = theme.uiAccent,
+                                    fontSize = 10.sp,
+                                    fontFamily = FontFamily.Monospace,
+                                    modifier = Modifier
+                                        .clickable {
+                                            clipboard.setText(androidx.compose.ui.text.AnnotatedString(block.code))
+                                            android.widget.Toast.makeText(
+                                                context,
+                                                "Kode disalin",
+                                                android.widget.Toast.LENGTH_SHORT
+                                            ).show()
+                                        }
+                                        .padding(horizontal = 4.dp)
+                                )
                             }
-                        } else {
+                            Spacer(modifier = Modifier.height(4.dp))
                             Text(
                                 text = highlighted,
                                 color = theme.foreground,

@@ -16,6 +16,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -30,6 +31,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.input.key.*
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
@@ -82,6 +84,17 @@ class MainActivity : ComponentActivity() {
     private val chatMessages = mutableStateListOf<ChatMessage>()
     private var aiSettings by mutableStateOf(AISettings())
     private var isProcessingAI by mutableStateOf(false)
+    /** Wave-17: Job for cancellable AI stream. */
+    private var aiJob: kotlinx.coroutines.Job? = null
+    /** Wave-17: Auto-Pilot running state + progress for chat chrome. */
+    private var autoPilotRunning by mutableStateOf(false)
+    private var autoPilotStep by mutableStateOf(0)
+    private var autoPilotTotal by mutableStateOf(0)
+    private var autoPilotCommand by mutableStateOf("")
+    @Volatile private var autoPilotStopped = false
+    private var autoPilotJob: kotlinx.coroutines.Job? = null
+    /** Wave-17: Open drawer on settings tab when requested from palette. */
+    private var chatInitialTab by mutableStateOf(0)
     private var editingFile by mutableStateOf<String?>(null)
 
     private lateinit var snippetManager: SnippetManager
@@ -1583,9 +1596,30 @@ class MainActivity : ComponentActivity() {
         if (showCommandPalette) {
             val paletteItems = buildList {
                 /* AI actions. */
-                add(PaletteItem("ai_explain", "Ask AI to explain last output", "AI", Icons.Default.Psychology, PaletteCategory.AI) { scope.launch { handleAIPrompt("Jelaskan output terminal terakhir."); drawerState.open() } })
-                add(PaletteItem("ai_fix", "Ask AI to fix errors", "AI", Icons.Default.Build, PaletteCategory.AI) { scope.launch { handleAIPrompt("Perbaiki error di terminal."); drawerState.open() } })
-                add(PaletteItem("ai_autopilot", "Open AI Auto-Pilot", "AI", Icons.Default.SmartToy, PaletteCategory.AI) { scope.launch { drawerState.open() } })
+                add(PaletteItem("ai_explain", "Ask AI to explain last output", "AI", Icons.Default.Psychology, PaletteCategory.AI) {
+                    chatInitialTab = 0
+                    scope.launch {
+                        drawerState.open()
+                        aiJob?.cancel()
+                        aiJob = scope.launch { handleAIPrompt("Jelaskan output terminal terakhir.") }
+                    }
+                })
+                add(PaletteItem("ai_fix", "Ask AI to fix errors", "AI", Icons.Default.Build, PaletteCategory.AI) {
+                    chatInitialTab = 0
+                    scope.launch {
+                        drawerState.open()
+                        aiJob?.cancel()
+                        aiJob = scope.launch { handleAIPrompt("Perbaiki error di terminal.") }
+                    }
+                })
+                add(PaletteItem("ai_open_chat", "Open AI chat", "AI", Icons.Default.Chat, PaletteCategory.AI) {
+                    chatInitialTab = 0
+                    scope.launch { drawerState.open() }
+                })
+                add(PaletteItem("ai_autopilot", "Open AI chat (Auto-Pilot)", "AI", Icons.Default.SmartToy, PaletteCategory.AI) {
+                    chatInitialTab = 0
+                    scope.launch { drawerState.open() }
+                })
                 /* Navigation. */
                 add(PaletteItem("new_tab", "New tab", "Navigation", Icons.Default.Add, PaletteCategory.NAVIGATION) { lifecycleScope.launch { createNewTab() } })
                 add(PaletteItem("close_tab", "Close current tab", "Navigation", Icons.Default.Close, PaletteCategory.NAVIGATION) { closeTab(activeExecutorId) })
@@ -1597,7 +1631,10 @@ class MainActivity : ComponentActivity() {
                     }
                 })
                 /* Settings. */
-                add(PaletteItem("open_settings", "Open AI Settings", "Setting", Icons.Default.Settings, PaletteCategory.SETTING) { scope.launch { drawerState.open() } })
+                add(PaletteItem("open_settings", "Open AI Settings", "Setting", Icons.Default.Settings, PaletteCategory.SETTING) {
+                    chatInitialTab = 2
+                    scope.launch { drawerState.open() }
+                })
                 add(PaletteItem("open_file_explorer", "Open File Explorer", "Setting", Icons.Default.Folder, PaletteCategory.SETTING) { showFileExplorer = true })
                 add(PaletteItem("open_workspace", "Workspace Sessions", "Setting", Icons.Default.Save, PaletteCategory.SETTING) { showWorkspaceDrawer = true })
                 add(PaletteItem("open_ssh", "SSH Connect", "Setting", Icons.Default.Cloud, PaletteCategory.SETTING) { showSshDialog = true })
@@ -1779,8 +1816,11 @@ class MainActivity : ComponentActivity() {
                     pendingToolCall = null
                 },
                 onDeny = {
-                    chatMessages.add(ChatMessage("assistant", "Permission denied for: ${call.displayText}", false, isError = true))
+                    val msg = "Permission denied for: ${call.displayText}"
+                    chatMessages.add(ChatMessage("assistant", msg, false, isError = true))
                     pendingToolCall = null
+                    /* Wave-17: Let the model adapt after deny instead of stalling tool loop. */
+                    continueToolLoop("User denied tool: ${call.tool} — ${call.displayText}")
                 },
                 onNeverAllow = {
                     permissionManager.setPermission(call.tool, PermissionManager.PermissionState.ALWAYS_DENY)
@@ -1793,6 +1833,7 @@ class MainActivity : ComponentActivity() {
                         )
                     )
                     pendingToolCall = null
+                    continueToolLoop("User set never-allow for tool: ${call.tool}")
                 }
             )
         }
@@ -1878,6 +1919,7 @@ class MainActivity : ComponentActivity() {
                 isPaused = agentPaused,
                 events = agentEvents,
                 pendingClarification = agentPendingClarification,
+                lastGoal = agentLastGoal,
                 onStart = { goal, useUbuntu ->
                     startAgentTask(goal, useUbuntu)
                 },
@@ -2087,13 +2129,18 @@ class MainActivity : ComponentActivity() {
                         themes = ThemeManager.presets,
                         isProcessingAI = isProcessingAI,
                         onSettingsChanged = { saveAISettings(it) },
-                        onSendPrompt = { prompt -> scope.launch { handleAIPrompt(prompt) } },
+                        onSendPrompt = { prompt ->
+                            aiJob?.cancel()
+                            aiJob = scope.launch { handleAIPrompt(prompt) }
+                        },
                         onRunCommand = { cmd ->
                             shellExecutors.find { it.id == activeExecutorId }?.executeCommand(cmd)
                             scope.launch { drawerState.close() }
                         },
                         onRunAutoPilot = { commands ->
-                            scope.launch { runAutoPilot(commands); drawerState.close() }
+                            /* Wave-17: Keep drawer open so user sees progress. */
+                            autoPilotJob?.cancel()
+                            autoPilotJob = scope.launch { runAutoPilot(commands) }
                         },
                         onSaveSnippet = { title, cmd -> saveSnippet(title, cmd) },
                         onRunSnippet = { cmd ->
@@ -2109,16 +2156,44 @@ class MainActivity : ComponentActivity() {
                             scope.launch { drawerState.close() }
                         },
                         onClose = { scope.launch { drawerState.close() } },
-                        /* Phase 19: Image Vision. */
                         pendingImages = pendingImages,
                         onAttachImage = { attachImage() },
                         onRemoveImage = { idx -> removeImage(idx) },
-                        /* Phase 19: Model fetcher. */
                         availableModels = availableModels,
                         isLoadingModels = isLoadingModels,
                         modelsFetchError = modelsFetchError,
                         onFetchModels = { fetchModels() },
-                        onSelectModel = { m -> selectModel(m) }
+                        onSelectModel = { m -> selectModel(m) },
+                        onStopAI = {
+                            aiJob?.cancel()
+                            aiJob = null
+                            isProcessingAI = false
+                            /* Mark last streaming message as partial. */
+                            val idx = chatMessages.indexOfLast { it.isStreaming }
+                            if (idx >= 0) {
+                                val m = chatMessages[idx]
+                                chatMessages[idx] = m.copy(
+                                    content = m.content.ifBlank { "(dihentikan)" } + "\n\n⏹ Dihentikan.",
+                                    isStreaming = false
+                                )
+                            }
+                        },
+                        onRetryLastPrompt = {
+                            val lastUser = chatMessages.lastOrNull { it.role == "user" }?.content
+                            if (!lastUser.isNullOrBlank()) {
+                                aiJob?.cancel()
+                                aiJob = scope.launch { handleAIPrompt(lastUser) }
+                            }
+                        },
+                        autoPilotRunning = autoPilotRunning,
+                        autoPilotStep = autoPilotStep,
+                        autoPilotTotal = autoPilotTotal,
+                        autoPilotCommand = autoPilotCommand,
+                        onStopAutoPilot = {
+                            autoPilotStopped = true
+                            autoPilotJob?.cancel()
+                        },
+                        initialTab = chatInitialTab
                     )
                 }
             }
@@ -3140,29 +3215,70 @@ class MainActivity : ComponentActivity() {
                     )
                 }
 
-                /* FAB contextual untuk auto-debug. */
+                /* Wave-17: FAB opens AI chat; long-press = smart debug prompt. */
                 FloatingActionButton(
                     onClick = {
-                        val activeExec = shellExecutors.find { it.id == activeExecutorId }
-                        val ctx = activeExec?.getCleanOutput() ?: ""
-                        val hasError = ctx.lowercase().let {
-                            it.contains("error") || it.contains("not found") ||
-                            it.contains("no such file") || it.contains("permission denied")
-                        }
-                        val prompt = if (hasError) {
-                            "Saya menemukan error di terminal. Berikut outputnya:\n\n$ctx\n\nBagaimana cara memperbaikinya?"
-                        } else {
-                            "Tolong jelaskan apa yang sedang terjadi di terminal saya dan beri saran perintah selanjutnya. Output terminal:\n\n$ctx"
-                        }
-                        scope.launch {
-                            handleAIPrompt(prompt)
-                            drawerState.open()
-                        }
+                        chatInitialTab = 0
+                        scope.launch { drawerState.open() }
                     },
-                    modifier = Modifier.align(Alignment.BottomEnd).padding(16.dp).padding(bottom = 40.dp),
-                    containerColor = Color(0xFF6200EE),
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .padding(16.dp)
+                        .padding(bottom = 40.dp)
+                        .pointerInput(Unit) {
+                            detectTapGestures(
+                                onLongPress = {
+                                    val activeExec = shellExecutors.find { it.id == activeExecutorId }
+                                    val ctx = activeExec?.getCleanOutput() ?: ""
+                                    val hasError = ctx.lowercase().let {
+                                        it.contains("error") || it.contains("not found") ||
+                                            it.contains("no such file") || it.contains("permission denied")
+                                    }
+                                    val prompt = if (hasError) {
+                                        "Saya menemukan error di terminal. Berikut outputnya:\n\n$ctx\n\nBagaimana cara memperbaikinya?"
+                                    } else {
+                                        "Tolong jelaskan apa yang sedang terjadi di terminal saya dan beri saran perintah selanjutnya. Output terminal:\n\n$ctx"
+                                    }
+                                    chatInitialTab = 0
+                                    aiJob?.cancel()
+                                    aiJob = lifecycleScope.launch {
+                                        drawerState.open()
+                                        handleAIPrompt(prompt)
+                                    }
+                                }
+                            )
+                        },
+                    containerColor = when {
+                        agentRunning -> Color(0xFFFF6D00)
+                        isProcessingAI || autoPilotRunning -> currentTheme.uiAccent
+                        else -> Color(0xFF6200EE)
+                    },
                     contentColor = Color.White
-                ) { Text("🛠", fontSize = 20.sp) }
+                ) {
+                    Text(
+                        when {
+                            agentRunning -> "🤖"
+                            isProcessingAI || autoPilotRunning -> "●"
+                            else -> "AI"
+                        },
+                        fontSize = 16.sp,
+                        fontFamily = FontFamily.Monospace
+                    )
+                }
+                if (agentRunning && !showAgentScreen) {
+                    Text(
+                        "Agent berjalan — ketuk untuk buka",
+                        color = Color(0xFFFFAB00),
+                        fontSize = 10.sp,
+                        fontFamily = FontFamily.Monospace,
+                        modifier = Modifier
+                            .align(Alignment.BottomEnd)
+                            .padding(end = 16.dp, bottom = 100.dp)
+                            .background(currentTheme.uiSurface, RoundedCornerShape(8.dp))
+                            .clickable { showAgentScreen = true }
+                            .padding(horizontal = 10.dp, vertical = 6.dp)
+                    )
+                }
             }
         }
     }
@@ -3282,64 +3398,84 @@ class MainActivity : ComponentActivity() {
 
     private suspend fun runAutoPilot(commands: List<String>) {
         val activeExecutor = shellExecutors.find { it.id == activeExecutorId } ?: return
-        chatMessages.add(ChatMessage("assistant", "🚀 Auto-Pilot memulai ${commands.size} langkah...", false))
+        autoPilotStopped = false
+        autoPilotRunning = true
+        autoPilotTotal = commands.size
+        autoPilotStep = 0
+        autoPilotCommand = ""
+        chatMessages.add(ChatMessage("assistant", "🚀 Auto-Pilot memulai ${commands.size} langkah…", false))
 
-        for (i in commands.indices) {
-            val cmd = commands[i]
-            chatMessages.add(ChatMessage("assistant", "▶ [${i + 1}/${commands.size}] Menjalankan: $cmd", false))
+        try {
+            for (i in commands.indices) {
+                if (autoPilotStopped) {
+                    chatMessages.add(ChatMessage("assistant", "⏹ Auto-Pilot dihentikan oleh pengguna.", false, isError = true))
+                    return
+                }
+                val cmd = commands[i]
+                autoPilotStep = i + 1
+                autoPilotCommand = cmd
+                chatMessages.add(ChatMessage("assistant", "▶ [${i + 1}/${commands.size}] Menjalankan: $cmd", false))
 
-            /* Phase 37: Pakai MarkerExecutor — bukan regex prompt nebak.
-             * Phase 46 (Pilar 1b): Handle ExecutionOutcome (3 kemungkinan).
-             * maxTimeoutMs 5 menit (apt install bisa lama), idleTimeoutMs 15s (curiga nunggu input). */
-            val outcome = markerExecutor.executeWithMarker(
-                activeExecutor, cmd,
-                maxTimeoutMs = 300000,
-                idleTimeoutMs = 15000
-            )
+                val outcome = markerExecutor.executeWithMarker(
+                    activeExecutor, cmd,
+                    maxTimeoutMs = 300000,
+                    idleTimeoutMs = 15000
+                )
+                if (autoPilotStopped) {
+                    chatMessages.add(ChatMessage("assistant", "⏹ Auto-Pilot dihentikan oleh pengguna.", false, isError = true))
+                    return
+                }
 
-            when (outcome) {
-                is MarkerExecutor.ExecutionOutcome.Completed -> {
-                    val result = outcome.result
-                    val statusIcon = if (result.isSuccess) "✓" else "✗"
-                    val outputDisplay = if (result.output.isBlank()) "(no output)" else result.output.take(500)
-                    chatMessages.add(ChatMessage(
-                        "assistant",
-                        "$statusIcon [${i + 1}/${commands.size}] Exit code: ${result.exitCode} (${result.executionTimeMs}ms)\n$outputDisplay",
-                        false, isError = !result.isSuccess
-                    ))
-                    if (!result.isSuccess) {
+                when (outcome) {
+                    is MarkerExecutor.ExecutionOutcome.Completed -> {
+                        val result = outcome.result
+                        val statusIcon = if (result.isSuccess) "✓" else "✗"
+                        val outputDisplay = if (result.output.isBlank()) "(no output)" else result.output.take(500)
                         chatMessages.add(ChatMessage(
                             "assistant",
-                            "❌ Command gagal (exit code ${result.exitCode}). Auto-Pilot dihentikan.",
+                            "$statusIcon [${i + 1}/${commands.size}] Exit code: ${result.exitCode} (${result.executionTimeMs}ms)\n$outputDisplay",
+                            false, isError = !result.isSuccess
+                        ))
+                        if (!result.isSuccess) {
+                            chatMessages.add(ChatMessage(
+                                "assistant",
+                                "❌ Command gagal (exit code ${result.exitCode}). Auto-Pilot dihentikan.",
+                                false, isError = true
+                            ))
+                            return
+                        }
+                    }
+                    is MarkerExecutor.ExecutionOutcome.PossiblyWaitingForInput -> {
+                        val outputDisplay = if (outcome.partialOutput.isBlank()) "(no output)" else outcome.partialOutput.take(500)
+                        chatMessages.add(ChatMessage(
+                            "assistant",
+                            "⚠️ [${i + 1}/${commands.size}] Kemungkinan menunggu input interaktif " +
+                                "(idle 15s, elapsed ${outcome.elapsedMs}ms).\n$outputDisplay\n" +
+                                "Auto-Pilot dihentikan — periksa output dan beri arahan manual.",
+                            false, isError = true
+                        ))
+                        return
+                    }
+                    is MarkerExecutor.ExecutionOutcome.TimedOut -> {
+                        val outputDisplay = if (outcome.partialOutput.isBlank()) "(no output)" else outcome.partialOutput.take(500)
+                        chatMessages.add(ChatMessage(
+                            "assistant",
+                            "⚠️ [${i + 1}/${commands.size}] Timeout (5 menit) menunggu command selesai.\n$outputDisplay\n" +
+                                "Auto-Pilot dihentikan.",
                             false, isError = true
                         ))
                         return
                     }
                 }
-                is MarkerExecutor.ExecutionOutcome.PossiblyWaitingForInput -> {
-                    val outputDisplay = if (outcome.partialOutput.isBlank()) "(no output)" else outcome.partialOutput.take(500)
-                    chatMessages.add(ChatMessage(
-                        "assistant",
-                        "⚠️ [${i + 1}/${commands.size}] Kemungkinan menunggu input interaktif " +
-                        "(idle 15s, elapsed ${outcome.elapsedMs}ms).\n$outputDisplay\n" +
-                        "Auto-Pilot dihentikan — periksa output dan beri arahan manual.",
-                        false, isError = true
-                    ))
-                    return
-                }
-                is MarkerExecutor.ExecutionOutcome.TimedOut -> {
-                    val outputDisplay = if (outcome.partialOutput.isBlank()) "(no output)" else outcome.partialOutput.take(500)
-                    chatMessages.add(ChatMessage(
-                        "assistant",
-                        "⚠️ [${i + 1}/${commands.size}] Timeout (5 menit) menunggu command selesai.\n$outputDisplay\n" +
-                        "Auto-Pilot dihentikan.",
-                        false, isError = true
-                    ))
-                    return
-                }
             }
+            chatMessages.add(ChatMessage("assistant", "✅ Auto-Pilot selesai! Semua ${commands.size} perintah berhasil.", false))
+        } finally {
+            autoPilotRunning = false
+            autoPilotStep = 0
+            autoPilotTotal = 0
+            autoPilotCommand = ""
+            autoPilotStopped = false
         }
-        chatMessages.add(ChatMessage("assistant", "✅ Auto-Pilot selesai! Semua ${commands.size} perintah berhasil.", false))
     }
 
     /**
@@ -3378,13 +3514,10 @@ class MainActivity : ComponentActivity() {
     private suspend fun handleAIPrompt(prompt: String, fromToolResult: Boolean = false) {
         /* Wave-2: Reset tool loop when user starts a fresh prompt. */
         if (!fromToolResult) toolLoopDepth = 0
-        if (isProcessingAI) {
-            chatMessages.add(ChatMessage(
-                "assistant",
-                "⏳ AI masih memproses permintaan sebelumnya. Tunggu sebentar.",
-                false
-            ))
-            return
+        if (isProcessingAI && !fromToolResult) {
+            /* Wave-17: Cancel previous stream instead of only warning. */
+            aiJob?.cancel()
+            delay(50)
         }
         isProcessingAI = true
 

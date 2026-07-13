@@ -141,10 +141,12 @@ class AgentTaskRunner(
         }
 
         while (iteration < maxIterations && !stopped) {
-            // Cek pause
+            // Wave-17: Emit pause status once, then wait quietly.
+            if (paused && !stopped) {
+                events(AgentEvent.Status("⏸ Dijeda — ketuk Resume untuk lanjut"))
+            }
             while (paused && !stopped) {
-                events(AgentEvent.Status("⏸ Paused — tap Resume untuk lanjut"))
-                kotlinx.coroutines.delay(1000)
+                kotlinx.coroutines.delay(400)
             }
             if (stopped) {
                 events(AgentEvent.StoppedForSafety("Dihentikan oleh user"))
