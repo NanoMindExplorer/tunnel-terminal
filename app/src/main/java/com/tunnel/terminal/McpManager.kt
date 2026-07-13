@@ -24,7 +24,7 @@ data class McpServerConfig(
     val name: String,
     val transport: McpTransport,        // SSE atau HTTP
     val url: String,                     // server URL
-    val apiKey: String = "",             // optional auth
+    val apiKey: String = "",             // optional auth (loaded from SecureStorage)
     val enabled: Boolean = true
 )
 
@@ -43,20 +43,11 @@ data class McpTool(
  * McpManager - Manage MCP server connections.
  *
  * Phase 23: MCP (Model Context Protocol) support.
- * MCP adalah standard protocol dari Anthropic untuk AI tool interoperability.
- * Server MCP (filesystem, git, database, dll) expose tools via HTTP/SSE.
- * Tunnel Terminal bisa connect ke multiple MCP servers dan aggregate tools.
- *
- * Cara kerja:
- * 1. User tambah MCP server (URL + optional API key)
- * 2. Tunnel Terminal fetch /tools dari server
- * 3. AI system prompt di-update dengan daftar tools tersedia
- * 4. Saat AI call MCP tool, Tunnel Terminal forward ke server
- *
- * NOTE: Full MCP spec complex. Ini simplified HTTP-based implementation.
+ * Wave-2: Encrypt API keys; harden URL allowlist; fail closed on http spoof.
  */
 class McpManager(private val context: Context) {
     private val tag = "McpManager"
+    /** Non-secret server metadata only (no API keys). */
     private val prefs = context.getSharedPreferences("TunnelMcp", Context.MODE_PRIVATE)
 
     private val _servers = mutableStateListOf<McpServerConfig>()
@@ -75,18 +66,33 @@ class McpManager(private val context: Context) {
             val arr = JSONArray(json)
             for (i in 0 until arr.length()) {
                 val obj = arr.getJSONObject(i)
+                val name = obj.getString("name")
                 val transport = when (obj.optString("transport", "HTTP")) {
                     "SSE" -> McpTransport.SSE
                     else -> McpTransport.HTTP
                 }
+                /* Wave-2: API key from encrypted store; migrate legacy plaintext once. */
+                var apiKey = SecureStorage.getMcpApiKey(context, name) ?: ""
+                val legacyKey = obj.optString("apiKey", "")
+                if (apiKey.isEmpty() && legacyKey.isNotEmpty()) {
+                    try {
+                        SecureStorage.storeMcpApiKey(context, name, legacyKey)
+                        apiKey = legacyKey
+                    } catch (e: Exception) {
+                        Log.w(tag, "Could not migrate MCP key for $name: ${e.message}")
+                        apiKey = legacyKey // best-effort in-memory only
+                    }
+                }
                 _servers.add(McpServerConfig(
-                    name = obj.getString("name"),
+                    name = name,
                     transport = transport,
                     url = obj.getString("url"),
-                    apiKey = obj.optString("apiKey", ""),
+                    apiKey = apiKey,
                     enabled = obj.optBoolean("enabled", true)
                 ))
             }
+            /* Rewrite metadata without embedded keys. */
+            saveServers()
         } catch (_: Exception) {
             _servers.clear()
         }
@@ -95,24 +101,52 @@ class McpManager(private val context: Context) {
     private fun saveServers() {
         val arr = JSONArray()
         _servers.forEach { s ->
+            /* Wave-2: never persist apiKey in plaintext TunnelMcp prefs. */
             arr.put(JSONObject()
                 .put("name", s.name)
                 .put("transport", s.transport.name)
                 .put("url", s.url)
-                .put("apiKey", s.apiKey)
                 .put("enabled", s.enabled)
             )
+            try {
+                SecureStorage.storeMcpApiKey(context, s.name, s.apiKey.ifBlank { null })
+            } catch (e: Exception) {
+                Log.e(tag, "Failed to store MCP key for ${s.name}: ${e.message}")
+            }
         }
         prefs.edit().putString("servers", arr.toString()).apply()
+    }
+
+    /**
+     * Wave-2: Strict URL allowlist.
+     * - https always ok for public hosts (except link-local metadata)
+     * - http only for true loopback hosts (parsed host, not substring)
+     */
+    fun isAllowedMcpUrl(urlStr: String): Boolean {
+        return try {
+            val url = URL(urlStr)
+            val host = url.host?.lowercase() ?: return false
+            val isLoopback = host == "localhost" || host == "127.0.0.1" ||
+                host == "::1" || host == "[::1]" || host == "10.0.2.2"
+            when {
+                url.protocol.equals("http", ignoreCase = true) -> isLoopback
+                url.protocol.equals("https", ignoreCase = true) -> {
+                    /* Block cloud metadata / link-local. */
+                    if (host == "169.254.169.254" || host.endsWith(".internal")) return false
+                    true
+                }
+                else -> false
+            }
+        } catch (_: Exception) {
+            false
+        }
     }
 
     /** Add new MCP server. */
     fun addServer(config: McpServerConfig): Boolean {
         if (_servers.any { it.name == config.name }) return false
-        /* BUG-20 fix: Tolak http:// kecuali localhost/127.0.0.1 (API key bocor tanpa HTTPS). */
-        val url = config.url.lowercase()
-        if (url.startsWith("http://") && !url.contains("localhost") && !url.contains("127.0.0.1")) {
-            Log.w("McpManager", "BUG-20: Menolak MCP server http:// non-localhost: ${config.url}")
+        if (!isAllowedMcpUrl(config.url)) {
+            Log.w(tag, "Wave-2: Rejecting MCP server URL: ${config.url}")
             return false
         }
         _servers.add(config)
@@ -124,6 +158,7 @@ class McpManager(private val context: Context) {
     fun removeServer(name: String): Boolean {
         val removed = _servers.removeAll { it.name == name }
         _discoveredTools.remove(name)
+        SecureStorage.removeMcpApiKey(context, name)
         if (removed) saveServers()
         return removed
     }
@@ -158,6 +193,10 @@ class McpManager(private val context: Context) {
 
     /** Discover tools dari satu MCP server via GET /tools. */
     private suspend fun discoverTools(server: McpServerConfig): List<McpTool> = withContext(Dispatchers.IO) {
+        if (!isAllowedMcpUrl(server.url)) {
+            Log.w(tag, "Skip discover — URL not allowed: ${server.url}")
+            return@withContext emptyList()
+        }
         val url = URL("${server.url.trimEnd('/')}/tools")
         val conn = (url.openConnection() as HttpURLConnection).apply {
             requestMethod = "GET"
@@ -208,6 +247,10 @@ class McpManager(private val context: Context) {
     suspend fun invokeTool(serverName: String, toolName: String, args: String): String = withContext(Dispatchers.IO) {
         val server = _servers.find { it.name == serverName && it.enabled }
             ?: return@withContext "Error: MCP server '$serverName' not found or disabled"
+
+        if (!isAllowedMcpUrl(server.url)) {
+            return@withContext "Error: MCP server URL not allowed: ${server.url}"
+        }
 
         val url = URL("${server.url.trimEnd('/')}/tools/$toolName/invoke")
         val conn = (url.openConnection() as HttpURLConnection).apply {

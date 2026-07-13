@@ -10,16 +10,10 @@ import androidx.security.crypto.MasterKey
  * SecureStorage — Wrapper untuk EncryptedSharedPreferences.
  *
  * Phase 41 fix (CRIT-01): API key & kredensial SSH sebelumnya disimpan plaintext
- * di SharedPreferences biasa. Siapapun dengan akses root/adb backup bisa baca
- * langsung dari folder shared_prefs (file XML). allowBackup=false hanya mencegah eksfiltrasi
- * lewat backup resmi Android, bukan lewat root/malware/forensik device hilang.
+ * di SharedPreferences biasa.
  *
- * FIX: Pakai EncryptedSharedPreferences (AES256-GCM) untuk semua data sensitif:
- *  - API key AI provider (TunnelAIPrefs:apiKey)
- *  - SSH password & passphrase (TunnelSshCredentials)
- *
- * Migrasi: Saat startup pertama setelah update, baca prefs lama plaintext →
- * tulis ulang ke encrypted store → hapus key lama dari plaintext prefs.
+ * Wave-2: Fail-closed — jangan fallback ke plaintext prefs. Kalau Keystore /
+ * EncryptedSharedPreferences gagal, throw agar caller menolak simpan secret.
  */
 object SecureStorage {
     private const val TAG = "SecureStorage"
@@ -30,8 +24,20 @@ object SecureStorage {
     private const val AI_PREFS_LEGACY = "TunnelAIPrefs"
     /** Nama file encrypted prefs untuk SSH credentials. */
     private const val SSH_PREFS_NAME = "TunnelSshCredentials_secure"
+    /** Encrypted prefs for MCP API keys (Wave-2). */
+    private const val MCP_KEYS_PREFS = "TunnelMcpKeys_secure"
     /** Nama file plaintext prefs lama untuk SSH host keys (tetap plaintext — bukan secret). */
     const val SSH_HOSTKEYS_PREFS = "TunnelSshHostKeys"
+
+    /** Wave-2: true only when last getEncryptedPrefs succeeded. */
+    @Volatile
+    var isEncryptionAvailable: Boolean = true
+        private set
+
+    /** Wave-2: last failure reason (for UI toast). */
+    @Volatile
+    var lastEncryptionError: String? = null
+        private set
 
     /**
      * Buat MasterKey untuk EncryptedSharedPreferences.
@@ -44,21 +50,29 @@ object SecureStorage {
     }
 
     /**
-     * Buat instance EncryptedSharedPreferences. Fallback ke plaintext prefs
-     * kalau Keystore tidak tersedia (mis. emulator lama, device custom ROM corrupt).
+     * Buat instance EncryptedSharedPreferences.
+     * Wave-2: fail-closed — throw SecurityException instead of plaintext fallback.
      */
     fun getEncryptedPrefs(context: Context, fileName: String): SharedPreferences {
         return try {
-            EncryptedSharedPreferences.create(
+            val prefs = EncryptedSharedPreferences.create(
                 context,
                 fileName,
                 getMasterKey(context),
                 EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
                 EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
             )
+            isEncryptionAvailable = true
+            lastEncryptionError = null
+            prefs
         } catch (e: Exception) {
-            Log.e(TAG, "EncryptedSharedPreferences gagal untuk $fileName, fallback ke plaintext: ${e.message}")
-            context.getSharedPreferences("${fileName}_fallback", Context.MODE_PRIVATE)
+            isEncryptionAvailable = false
+            lastEncryptionError = e.message
+            Log.e(TAG, "EncryptedSharedPreferences gagal untuk $fileName (fail-closed): ${e.message}")
+            throw SecurityException(
+                "Secure storage unavailable — refusing to store secrets in plaintext. ${e.message}",
+                e
+            )
         }
     }
 
@@ -70,38 +84,36 @@ object SecureStorage {
     fun getSshCredsPrefs(context: Context): SharedPreferences =
         getEncryptedPrefs(context, SSH_PREFS_NAME)
 
+    /** Wave-2: Encrypted store for MCP server API keys. */
+    fun getMcpKeysPrefs(context: Context): SharedPreferences =
+        getEncryptedPrefs(context, MCP_KEYS_PREFS)
+
     /**
      * Migrasi satu kali: pindahkan apiKey dari plaintext prefs lama ke encrypted prefs.
-     * Dipanggil saat startup pertama setelah update dari versi < 6.2.0.
-     *
-     * Setelah migrasi sukses, hapus key lama dari plaintext prefs supaya tidak
-     * bisa dibaca oleh attacker yang punya akses ke shared_prefs lama.
+     * Wave-2: if encryption fails, leave legacy key in place and log (do not wipe).
      */
     fun migrateAICredentials(context: Context) {
         val legacyPrefs = context.getSharedPreferences(AI_PREFS_LEGACY, Context.MODE_PRIVATE)
         val legacyApiKey = legacyPrefs.getString("apiKey", null)
 
         if (!legacyApiKey.isNullOrEmpty()) {
-            val securePrefs = getAIPrefs(context)
-            val existingSecureKey = securePrefs.getString("apiKey", null)
+            try {
+                val securePrefs = getAIPrefs(context)
+                val existingSecureKey = securePrefs.getString("apiKey", null)
 
-            if (existingSecureKey.isNullOrEmpty()) {
-                // Belum pernah dimigrasi — pindahkan.
-                securePrefs.edit().putString("apiKey", legacyApiKey).apply()
-                Log.i(TAG, "Migrasi apiKey dari plaintext ke encrypted prefs sukses")
+                if (existingSecureKey.isNullOrEmpty()) {
+                    securePrefs.edit().putString("apiKey", legacyApiKey).apply()
+                    Log.i(TAG, "Migrasi apiKey dari plaintext ke encrypted prefs sukses")
+                }
+
+                legacyPrefs.edit().remove("apiKey").apply()
+                Log.i(TAG, "apiKey lama dihapus dari plaintext prefs")
+            } catch (e: Exception) {
+                Log.e(TAG, "Migrasi apiKey gagal (secure storage unavailable): ${e.message}")
             }
-
-            // Hapus key lama dari plaintext prefs (selalu, bahkan kalau sudah pernah dimigrasi).
-            legacyPrefs.edit().remove("apiKey").apply()
-            Log.i(TAG, "apiKey lama dihapus dari plaintext prefs")
         }
     }
 
-    /**
-     * Migrasi SSH credentials (password/passphrase) dari config yang disimpan
-     * di plaintext (kalau ada). Saat ini SSH credentials ada di SshConnectionConfig
-     * yang disimpan via WorkspaceManager — migrasi terjadi saat load.
-     */
     fun storeSshCredential(context: Context, hostKeyId: String, password: String?, passphrase: String?) {
         val prefs = getSshCredsPrefs(context)
         val editor = prefs.edit()
@@ -129,5 +141,27 @@ object SecureStorage {
             .remove("${hostKeyId}_password")
             .remove("${hostKeyId}_passphrase")
             .apply()
+    }
+
+    fun storeMcpApiKey(context: Context, serverName: String, apiKey: String?) {
+        val prefs = getMcpKeysPrefs(context)
+        if (apiKey.isNullOrEmpty()) {
+            prefs.edit().remove("mcp_$serverName").apply()
+        } else {
+            prefs.edit().putString("mcp_$serverName", apiKey).apply()
+        }
+    }
+
+    fun getMcpApiKey(context: Context, serverName: String): String? =
+        try {
+            getMcpKeysPrefs(context).getString("mcp_$serverName", null)
+        } catch (_: Exception) {
+            null
+        }
+
+    fun removeMcpApiKey(context: Context, serverName: String) {
+        try {
+            getMcpKeysPrefs(context).edit().remove("mcp_$serverName").apply()
+        } catch (_: Exception) { /* ignore */ }
     }
 }

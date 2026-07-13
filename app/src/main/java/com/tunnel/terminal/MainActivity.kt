@@ -158,6 +158,9 @@ class MainActivity : ComponentActivity() {
     private val blockManager = BlockManager()
     /** Phase 22: AI tool call pending permission. */
     private var pendingToolCall by mutableStateOf<AiToolCall?>(null)
+    /** Wave-2: Multi-turn tool loop depth (chat auto-continue after tool results). */
+    private var toolLoopDepth = 0
+    private val maxToolLoopDepth = 8
     /** Phase 22: Tool executor + permission manager. */
     private lateinit var toolExecutor: ToolExecutor
     private lateinit var permissionManager: PermissionManager
@@ -275,8 +278,8 @@ class MainActivity : ComponentActivity() {
          * bisa di-inject dinamis ke TOOL_SCHEMA di setiap request AI. */
         aiAgent.setMcpManager(mcpManager)
         agentWorkflowManager = AgentWorkflowManager(this)
-        /* Phase 47 (Bagian 2): Init AgentTaskRunner. */
-        agentTaskRunner = AgentTaskRunner(aiAgent, toolExecutor, permissionManager, markerExecutor)
+        /* Phase 47 (Bagian 2) + Wave-2: AgentTaskRunner with MCP support. */
+        agentTaskRunner = AgentTaskRunner(aiAgent, toolExecutor, permissionManager, markerExecutor, mcpManager)
         /* Phase 50 fix (B-5): Init ProjectContext for AI awareness. */
         projectContext = ProjectContext(this)
         voiceInputManager = VoiceInputManager(this)
@@ -391,6 +394,50 @@ class MainActivity : ComponentActivity() {
         return true
     }
 
+    /** Wave-2: Coalesce multiple tool results from one AI turn into a single follow-up. */
+    private var pendingToolLoopResults: StringBuilder? = null
+
+    /**
+     * Wave-2: Feed tool results back into the model for multi-turn tool use
+     * (Cursor/Claude Code style), with a hard depth cap.
+     * Multiple sync tool results in one turn are batched (~80ms) into one prompt.
+     */
+    private fun continueToolLoop(resultText: String) {
+        if (toolLoopDepth >= maxToolLoopDepth) {
+            chatMessages.add(
+                ChatMessage(
+                    "assistant",
+                    "⚠ Tool loop limit ($maxToolLoopDepth) reached. Lanjutkan manual jika masih perlu.",
+                    false,
+                    isError = true
+                )
+            )
+            toolLoopDepth = 0
+            pendingToolLoopResults = null
+            return
+        }
+        val batch = pendingToolLoopResults
+        if (batch != null) {
+            batch.append("\n---\n").append(resultText.take(2000))
+            return
+        }
+        val newBatch = StringBuilder(resultText.take(2000))
+        pendingToolLoopResults = newBatch
+        lifecycleScope.launch {
+            delay(80)
+            val text = pendingToolLoopResults?.toString() ?: return@launch
+            pendingToolLoopResults = null
+            if (toolLoopDepth >= maxToolLoopDepth) return@launch
+            toolLoopDepth++
+            handleAIPrompt(
+                "Hasil tool:\n${text.take(4000)}\n\n" +
+                    "Lanjutkan tugas berdasarkan hasil ini. " +
+                    "Jika sudah selesai, jawab singkat TANPA tool call lagi.",
+                fromToolResult = true
+            )
+        }
+    }
+
     /** Execute single tool call. */
     private fun executeToolCall(call: AiToolCall, alwaysAllow: Boolean) {
         chatMessages.add(ChatMessage("assistant", "🔧 Tool: ${call.displayText}", false))
@@ -412,7 +459,7 @@ class MainActivity : ComponentActivity() {
                         )
                         val outcomeText = markerExecutor.formatOutcomeForAI(outcome)
                         chatMessages.add(ChatMessage("assistant", "📋 Result:\n$outcomeText", false))
-                        handleAIPrompt("Berikut hasil eksekusi command:\n$outcomeText\n\nApakah perlu perbaikan atau langkah selanjutnya?")
+                        continueToolLoop(outcomeText)
                     }
                 }
             }
@@ -431,11 +478,14 @@ class MainActivity : ComponentActivity() {
                         pendingDiff = Triple(file.absolutePath, original, content)
                     } else {
                         chatMessages.add(ChatMessage("assistant", "No changes needed for ${file.absolutePath}", false))
+                        continueToolLoop("No changes needed for ${file.absolutePath}")
                     }
                 } catch (e: SecurityException) {
                     chatMessages.add(ChatMessage("assistant", "Error: ${e.message}", false, isError = true))
+                    continueToolLoop("Error: ${e.message}")
                 } catch (e: Exception) {
                     chatMessages.add(ChatMessage("assistant", "Error resolving path: ${e.message}", false, isError = true))
+                    continueToolLoop("Error resolving path: ${e.message}")
                 }
             }
             call.tool.startsWith("mcp.") -> {
@@ -452,12 +502,14 @@ class MainActivity : ComponentActivity() {
                     lifecycleScope.launch {
                         val result = mcpManager.invokeTool(serverName, toolName, args)
                         chatMessages.add(ChatMessage("assistant", "📋 MCP Result:\n$result", false))
+                        continueToolLoop(result)
                     }
                 }
             }
             else -> {
                 val result = toolExecutor.execute(call)
                 chatMessages.add(ChatMessage("assistant", "📋 Result:\n$result", false))
+                continueToolLoop(result)
             }
         }
     }
@@ -840,14 +892,25 @@ class MainActivity : ComponentActivity() {
         /* Non-sensitive settings (provider, baseUrl, model, dll) tetap di plaintext prefs
          * untuk kompatibilitas + performance. Hanya apiKey yang dipindah ke encrypted. */
         val prefs = getSharedPreferences("TunnelAIPrefs", Context.MODE_PRIVATE)
-        val securePrefs = SecureStorage.getAIPrefs(this)
         /* C3 fix: Wrap getDouble dalam try-catch — ClassCastException jika preference corrupt
          * atau disimpan sebagai tipe lain oleh versi lama. */
         val temperature = try { prefs.getDouble("temperature", 0.2) } catch (_: Exception) { 0.2 }
+        /* Wave-2: Secure storage fail-closed — load key only if encryption works. */
+        val apiKey = try {
+            SecureStorage.getAIPrefs(this).getString("apiKey", "") ?: ""
+        } catch (e: Exception) {
+            Log.e("MainActivity", "Secure storage unavailable on load: ${e.message}")
+            Toast.makeText(
+                this,
+                "Secure storage unavailable — API key cannot be loaded. ${e.message}",
+                Toast.LENGTH_LONG
+            ).show()
+            ""
+        }
         aiSettings = AISettings(
             providerName = prefs.getString("providerName", "OpenAI") ?: "OpenAI",
             baseUrl = prefs.getString("baseUrl", "https://api.openai.com/v1") ?: "https://api.openai.com/v1",
-            apiKey = securePrefs.getString("apiKey", "") ?: "",
+            apiKey = apiKey,
             modelName = prefs.getString("modelName", "gpt-4o-mini") ?: "gpt-4o-mini",
             temperature = temperature,
             maxTokens = prefs.getInt("maxTokens", 2000),
@@ -871,9 +934,18 @@ class MainActivity : ComponentActivity() {
         prefs.putBoolean("supportsToolCalling", newSettings.supportsToolCalling)
         prefs.apply()
 
-        val securePrefs = SecureStorage.getAIPrefs(this).edit()
-        securePrefs.putString("apiKey", newSettings.apiKey)
-        securePrefs.apply()
+        try {
+            val securePrefs = SecureStorage.getAIPrefs(this).edit()
+            securePrefs.putString("apiKey", newSettings.apiKey)
+            securePrefs.apply()
+        } catch (e: Exception) {
+            Log.e("MainActivity", "Cannot save API key — secure storage unavailable: ${e.message}")
+            Toast.makeText(
+                this,
+                "API key NOT saved: secure storage unavailable. ${e.message}",
+                Toast.LENGTH_LONG
+            ).show()
+        }
     }
 
     /* SharedPreferences helper untuk double karena tidak ada putDouble bawaan.
@@ -1317,10 +1389,13 @@ class MainActivity : ComponentActivity() {
                     )
                     chatMessages.add(ChatMessage("assistant", "✅ $result", false, isError = result.startsWith("Error")))
                     pendingDiff = null
+                    /* Wave-2: Continue multi-turn tool loop after apply. */
+                    continueToolLoop(result)
                 },
                 onReject = {
                     chatMessages.add(ChatMessage("assistant", "Changes rejected for ${java.io.File(path).name}", false))
                     pendingDiff = null
+                    continueToolLoop("User rejected write_file changes for $path")
                 }
             )
         }
@@ -2446,7 +2521,9 @@ class MainActivity : ComponentActivity() {
      *
      * Streaming SSE handler with multi-turn memory.
      */
-    private suspend fun handleAIPrompt(prompt: String) {
+    private suspend fun handleAIPrompt(prompt: String, fromToolResult: Boolean = false) {
+        /* Wave-2: Reset tool loop when user starts a fresh prompt. */
+        if (!fromToolResult) toolLoopDepth = 0
         if (isProcessingAI) {
             chatMessages.add(ChatMessage(
                 "assistant",

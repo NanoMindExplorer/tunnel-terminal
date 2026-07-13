@@ -61,7 +61,11 @@ data class AiToolCall(
     }
 
     companion object {
-        val READ_ONLY_TOOLS = setOf("read_file", "list_files", "search_files", "get_terminal_output")
+        /* Wave-2: plan_task / update_task_status are meta tools (no FS/shell side effects). */
+        val READ_ONLY_TOOLS = setOf(
+            "read_file", "list_files", "search_files", "get_terminal_output",
+            "plan_task", "update_task_status"
+        )
         val DESTRUCTIVE_TOOLS = setOf("write_file", "edit_file", "delete_file", "run_command")
 
         /** Parse tool call dari AI response.
