@@ -33,7 +33,7 @@ object SystemInfo {
         val sb = StringBuilder()
         sb.append("\u001B[32m") // hijau
         sb.appendLine("╔══════════════════════════════════════════════════════════════╗")
-        sb.appendLine("║       TUNNEL TERMINAL v3.0 - AI Native Dev Environment       ║")
+        sb.appendLine("║       TUNNEL TERMINAL v${BuildConfig.VERSION_NAME} - AI Native Dev Environment     ║")
         sb.appendLine("║          NDK PTY + Multi-Provider AI Copilot                ║")
         sb.appendLine("╚══════════════════════════════════════════════════════════════╝")
         sb.append("\u001B[0m") // reset

@@ -175,6 +175,19 @@ class AIAgent(
                 .put("properties", org.json.JSONObject())
             )
         ))
+        // Wave-4: grep_content — content search inside files
+        put(org.json.JSONObject().put("type", "function").put("function", org.json.JSONObject()
+            .put("name", "grep_content").put("description", "Cari teks di dalam isi file (content grep), bukan nama file.")
+            .put("parameters", org.json.JSONObject()
+                .put("type", "object")
+                .put("properties", org.json.JSONObject()
+                    .put("pattern", org.json.JSONObject().put("type", "string").put("description", "Regex pattern di isi file"))
+                    .put("dir", org.json.JSONObject().put("type", "string").put("description", "Direktori search (opsional)"))
+                    .put("max_results", org.json.JSONObject().put("type", "integer").put("description", "Maks hasil (default 40)"))
+                )
+                .put("required", org.json.JSONArray().put("pattern"))
+            )
+        ))
     }
 
     /**
@@ -376,7 +389,7 @@ class AIAgent(
             setRequestProperty("Authorization", "Bearer ${settings.apiKey}")
             setRequestProperty("HTTP-Referer", "https://github.com/NanoMindExplorer/tunnel-terminal")
             setRequestProperty("X-Title", "Tunnel Terminal")
-            setRequestProperty("User-Agent", "TunnelTerminal/4.8.0 (Android)")
+            setRequestProperty("User-Agent", "TunnelTerminal/${com.tunnel.terminal.BuildConfig.VERSION_NAME} (Android)")
             /* Accept: text/event-stream penting untuk SSE. */
             if (streaming) {
                 setRequestProperty("Accept", "text/event-stream")
@@ -426,7 +439,7 @@ class AIAgent(
         }
 
         val systemPrompt = """
-            Anda adalah 'Tunnel Auto-Pilot', agen AI otonom untuk terminal Android (Tunnel Terminal v6.1.0).
+            Anda adalah 'Tunnel Auto-Pilot', agen AI otonom untuk terminal Android (Tunnel Terminal ${com.tunnel.terminal.BuildConfig.VERSION_NAME}).
             Tugas Anda adalah menyelesaikan tujuan pengguna dengan rangkaian perintah shell ATAU tool calls.
 
             $shellInfo

@@ -120,8 +120,8 @@ class SshShellExecutor(
 
     override val commandHistory = mutableListOf<String>()
 
-    @Volatile
-    override var currentCommandBuffer: String = ""
+    /* Wave-4: Compose state for live autocomplete. */
+    override var currentCommandBuffer by mutableStateOf("")
 
     @Volatile
     override var historyIndex: Int = -1
@@ -322,8 +322,8 @@ class SshShellExecutor(
                 emulator.process(text)
                 val outputStr = synchronized(outputLock) {
                     outputBuffer.append(text)
-                    if (outputBuffer.length > 4000) {
-                        outputBuffer = StringBuilder(outputBuffer.substring(outputBuffer.length - 4000))
+                    if (outputBuffer.length > 16000) {
+                        outputBuffer = StringBuilder(outputBuffer.substring(outputBuffer.length - 16000))
                     }
                     outputBuffer.toString()
                 }
@@ -401,7 +401,7 @@ class SshShellExecutor(
             lastEnd = m.range.last + 1
         }
         sb.append(raw, lastEnd, raw.length)
-        return sb.toString().trim().take(2000)
+        return sb.toString().trim().take(8000)
     }
 
     override fun destroy() {

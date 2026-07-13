@@ -1251,7 +1251,7 @@ fun AIChatPanel(
                     val context = androidx.compose.ui.platform.LocalContext.current
                     Column(modifier = Modifier.weight(1f).padding(16.dp).verticalScroll(scrollState)) {
                         Text(
-                            "Tunnel Terminal v5.4.0",
+                            "Tunnel Terminal v${BuildConfig.VERSION_NAME}",
                             color = theme.uiText,
                             fontSize = 16.sp,
                             fontFamily = FontFamily.Monospace
