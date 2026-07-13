@@ -386,6 +386,8 @@ class SshShellExecutor(
 
     override fun clearScreen() {
         emulator.process("\u001B[2J\u001B[H")
+        /* Wave-12: Parity with PtySessionBase — drop scrollback on clear. */
+        emulator.clearScrollback()
         synchronized(outputLock) { outputBuffer.setLength(0) }
         _lastCommandOutput.value = ""
         triggerScreenUpdate()

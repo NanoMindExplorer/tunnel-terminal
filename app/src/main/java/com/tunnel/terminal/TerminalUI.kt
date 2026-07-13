@@ -35,6 +35,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
 /**
@@ -190,9 +191,14 @@ fun ExtraKeysBar(
     /* Wave-7: Theme-aware colors (was hardcoded dark grays). */
     theme: TerminalTheme = ThemeManager.defaultTheme
 ) {
-    /* Dua baris: simbol + kontrol. Tambah HOME, END, PGUP, PGDN. */
+    /* Dua/tiga baris: simbol + kontrol + one-shot Ctrl / F-keys (Wave-12). */
     /* Phase 34 (A4): Tambah "PASTE" key untuk paste dari clipboard. */
-    val controlKeys = listOf("ESC", "TAB", "CTRL", "ALT", "↑", "↓", "←", "→", "HOME", "END", "PGUP", "PGDN", "BKSP", "DEL", "PASTE")
+    val controlKeys = listOf(
+        "ESC", "TAB", "CTRL", "ALT", "↑", "↓", "←", "→",
+        "HOME", "END", "PGUP", "PGDN", "BKSP", "DEL", "PASTE"
+    )
+    /* Wave-12: One-shot control + F5–F12 for mobile TUI (vim/htop/less). */
+    val quickCtrlKeys = listOf("^C", "^D", "^Z", "^L", "^U", "^W", "F5", "F6", "F7", "F8", "F9", "F10", "F11", "F12")
     val symbolKeys = listOf("~", "*", "$", "\"", "'", ";", "&", "|", "-", "/", "(", ")", "<", ">", "=", "{", "}", "[", "]", "#", "!", "?", "\\", "@", "`")
 
     val barBg = theme.uiBg
@@ -200,6 +206,7 @@ fun ExtraKeysBar(
     val accent = theme.uiAccent
     val symbolColor = theme.ansi.getOrElse(6) { Color(0xFF00BCD4) }
     val textColor = theme.uiText
+    val ctrlChipColor = Color(0xFFFFAB00)
 
     Column(modifier = Modifier.fillMaxWidth().background(barBg)) {
         LazyRow(
@@ -230,6 +237,30 @@ fun ExtraKeysBar(
                 ) { Text(key, color = textColor, fontSize = 11.sp, fontFamily = FontFamily.Monospace) }
             }
         }
+
+        /* Wave-12: Quick Ctrl + F-keys row. */
+        LazyRow(
+            modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+            horizontalArrangement = Arrangement.spacedBy(4.dp), contentPadding = PaddingValues(horizontal = 4.dp)
+        ) {
+            items(quickCtrlKeys) { key ->
+                val isCtrlChip = key.startsWith("^")
+                Box(
+                    modifier = Modifier
+                        .background(if (isCtrlChip) accent.copy(alpha = 0.35f) else keyBg, RoundedCornerShape(4.dp))
+                        .clickable { onKeyPressed(key) }
+                        .padding(horizontal = 10.dp, vertical = 6.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        key,
+                        color = if (isCtrlChip) ctrlChipColor else textColor,
+                        fontSize = 11.sp,
+                        fontFamily = FontFamily.Monospace
+                    )
+                }
+            }
+        }
     }
 }
 
@@ -254,6 +285,7 @@ fun TerminalScreenView(
     val fontSize = fontSizeState
     var lastResizeTime by remember { mutableStateOf(0L) }
     val scrollState = rememberScrollState()
+    val scope = rememberCoroutineScope()
 
     /* BUG-05 fix: Simpan ukuran Box terakhir untuk dipakai saat pinch-zoom.
      * BUG-06 fix: onResize dipanggil langsung di LaunchedEffect(fontSize), bukan
@@ -261,14 +293,31 @@ fun TerminalScreenView(
     var lastSize by remember { mutableStateOf(androidx.compose.ui.unit.IntSize.Zero) }
     val density = androidx.compose.ui.platform.LocalDensity.current
 
+    /* Phase 35 (A3): Text selection state — declared BEFORE Box modifier chain
+     * and before auto-scroll LaunchedEffect (uses isSelecting). */
+    var selectionStart by remember { mutableStateOf<Pair<Int, Int>?>(null) }
+    var selectionEnd by remember { mutableStateOf<Pair<Int, Int>?>(null) }
+    var isSelecting by remember { mutableStateOf(false) }
+
     /* Wave-7: Auto-scroll only when user is already near the bottom.
      * OLD: always pin to bottom on every screenDirty → fighting selection/history scroll.
-     * Also removed duplicate LaunchedEffect(screenDirty). */
-    LaunchedEffect(screenDirty) {
+     * Also removed duplicate LaunchedEffect(screenDirty).
+     * Wave-12: Freeze auto-scroll while selecting text. */
+    var showJumpToBottom by remember { mutableStateOf(false) }
+    LaunchedEffect(screenDirty, isSelecting) {
         if (scrollState.maxValue <= 0) return@LaunchedEffect
         val nearBottom = scrollState.value >= scrollState.maxValue - 80
-        if (nearBottom) {
+        showJumpToBottom = !nearBottom
+        if (nearBottom && !isSelecting) {
             scrollState.scrollTo(scrollState.maxValue)
+        }
+    }
+    /* Wave-12: Track scroll position for jump-to-bottom FAB visibility. */
+    LaunchedEffect(scrollState.value, scrollState.maxValue) {
+        if (scrollState.maxValue <= 0) {
+            showJumpToBottom = false
+        } else {
+            showJumpToBottom = scrollState.value < scrollState.maxValue - 80
         }
     }
 
@@ -286,11 +335,6 @@ fun TerminalScreenView(
             }
         }
     }
-
-    /* Phase 35 (A3): Text selection state — declared BEFORE Box modifier chain. */
-    var selectionStart by remember { mutableStateOf<Pair<Int, Int>?>(null) }
-    var selectionEnd by remember { mutableStateOf<Pair<Int, Int>?>(null) }
-    var isSelecting by remember { mutableStateOf(false) }
     val clipboardManager = androidx.compose.ui.platform.LocalClipboardManager.current
     /* Phase 53: Text toolbar for COPY/PASTE floating menu. */
     val textToolbar = androidx.compose.ui.platform.LocalTextToolbar.current
@@ -506,21 +550,17 @@ fun TerminalScreenView(
             /* Wave-1: Scrollback history (oldest first), then live screen rows.
              * Selection still maps to live-screen coordinates only. */
             for (sbLine in scrollbackSnapshot) {
-                val annotatedString = buildAnnotatedString {
-                    for (col in 0 until renderCols) {
-                        val cell = sbLine.getOrElse(col) { TerminalCell() }
-                        val bgColor = if (cell.reverse) cell.fgColor else cell.bgColor
-                        val fgColor = if (cell.reverse) cell.bgColor else cell.fgColor
-                        withStyle(SpanStyle(
-                            color = fgColor,
-                            background = bgColor,
-                            fontFamily = FontFamily.Monospace,
-                            fontWeight = if (cell.bold) FontWeight.Bold else FontWeight.Normal,
-                            fontStyle = if (cell.italic) FontStyle.Italic else FontStyle.Normal,
-                            textDecoration = if (cell.underline) androidx.compose.ui.text.style.TextDecoration.Underline else androidx.compose.ui.text.style.TextDecoration.None
-                        )) { append(cell.char) }
-                    }
-                }
+                val annotatedString = buildTerminalRowAnnotated(
+                    rowCells = sbLine,
+                    cols = renderCols,
+                    cursorCol = -1,
+                    cursorVisible = false,
+                    isSelecting = false,
+                    selectionStart = null,
+                    selectionEnd = null,
+                    rowIndex = -1,
+                    theme = theme
+                )
                 Text(
                     text = annotatedString,
                     fontFamily = FontFamily.Monospace,
@@ -532,45 +572,18 @@ fun TerminalScreenView(
                 )
             }
             for (row in 0 until renderRows) {
-                val annotatedString = buildAnnotatedString {
-                    for (col in 0 until renderCols) {
-                        val cell = screenSnapshot.getOrElse(row) { arrayOf() }.getOrElse(col) { TerminalCell() }
-                        val isCursor = cursorState.visible && row == cursorState.row && col == cursorState.col
-
-                        /* Phase 35 (A3): Selection highlight. */
-                        val isInSelection = isSelecting && selectionStart != null && selectionEnd != null &&
-                            isCellInSelection(row, col, selectionStart!!, selectionEnd!!)
-
-                        /* Phase 20: Fix cursor double-render. */
-                        if (isInSelection) {
-                            /* Selected cell: highlight background. */
-                            withStyle(SpanStyle(
-                                background = theme.uiAccent.copy(alpha = 0.4f),
-                                color = theme.uiText,
-                                fontFamily = FontFamily.Monospace
-                            )) { append(cell.char) }
-                        } else if (isCursor) {
-                            withStyle(SpanStyle(
-                                background = theme.cursor,
-                                color = theme.background,
-                                fontFamily = FontFamily.Monospace,
-                                fontWeight = if (cell.bold) FontWeight.Bold else FontWeight.Normal,
-                                fontStyle = if (cell.italic) FontStyle.Italic else FontStyle.Normal
-                            )) { append(cell.char) }
-                        } else {
-                            val bgColor = if (cell.reverse) cell.fgColor else cell.bgColor
-                            val fgColor = if (cell.reverse) cell.bgColor else cell.fgColor
-                            withStyle(SpanStyle(
-                                color = fgColor,
-                                background = bgColor,
-                                fontFamily = FontFamily.Monospace,
-                                fontWeight = if (cell.bold) FontWeight.Bold else FontWeight.Normal,
-                                fontStyle = if (cell.italic) FontStyle.Italic else FontStyle.Normal,
-                                textDecoration = if (cell.underline) androidx.compose.ui.text.style.TextDecoration.Underline else androidx.compose.ui.text.style.TextDecoration.None
-                            )) { append(cell.char) }
-                        }
-                    }
-                }
+                val rowCells = screenSnapshot.getOrElse(row) { arrayOf() }
+                val annotatedString = buildTerminalRowAnnotated(
+                    rowCells = rowCells,
+                    cols = renderCols,
+                    cursorCol = cursorState.col,
+                    cursorVisible = cursorState.visible && row == cursorState.row,
+                    isSelecting = isSelecting,
+                    selectionStart = selectionStart,
+                    selectionEnd = selectionEnd,
+                    rowIndex = row,
+                    theme = theme
+                )
                 Text(
                     text = annotatedString,
                     fontFamily = FontFamily.Monospace,
@@ -580,6 +593,23 @@ fun TerminalScreenView(
                     overflow = androidx.compose.ui.text.style.TextOverflow.Clip,
                     modifier = Modifier.fillMaxWidth()
                 )
+            }
+        }
+
+        /* Wave-12: Jump-to-bottom when browsing scrollback. */
+        if (showJumpToBottom) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(12.dp)
+                    .background(theme.uiAccent.copy(alpha = 0.9f), RoundedCornerShape(20.dp))
+                    .clickable {
+                        scope.launch { scrollState.scrollTo(scrollState.maxValue) }
+                        showJumpToBottom = false
+                    }
+                    .padding(horizontal = 14.dp, vertical = 8.dp)
+            ) {
+                Text("↓", color = Color.White, fontFamily = FontFamily.Monospace, fontSize = 14.sp)
             }
         }
 
@@ -633,7 +663,11 @@ private fun getSelectedText(
         val lineBuilder = StringBuilder()
         for (col in rowStart..rowEnd) {
             if (col < screen[row].size) {
-                lineBuilder.append(screen[row][col].char)
+                val cell = screen[row][col]
+                /* Wave-12: Skip wide-char continuation cells (avoid double-width garbage). */
+                if (!cell.wideContinuation) {
+                    lineBuilder.append(cell.char)
+                }
             }
         }
         /* Phase 53 fix: trimEnd whitespace — terminal cells are space-padded,
@@ -642,6 +676,102 @@ private fun getSelectedText(
         if (row < endRow) sb.append('\n')
     }
     return sb.toString()
+}
+
+/**
+ * Wave-12: Build a terminal row as AnnotatedString with run-length style merges.
+ * Adjacent cells with the same style share one SpanStyle (far fewer Compose spans).
+ */
+internal fun buildTerminalRowAnnotated(
+    rowCells: Array<TerminalCell>,
+    cols: Int,
+    cursorCol: Int,
+    cursorVisible: Boolean,
+    isSelecting: Boolean,
+    selectionStart: Pair<Int, Int>?,
+    selectionEnd: Pair<Int, Int>?,
+    rowIndex: Int,
+    theme: TerminalTheme
+): AnnotatedString {
+    return buildAnnotatedString {
+        var col = 0
+        while (col < cols) {
+            val cell = rowCells.getOrElse(col) { TerminalCell() }
+            if (cell.wideContinuation) {
+                col++
+                continue
+            }
+            val isCursor = cursorVisible && col == cursorCol
+            val isInSelection = isSelecting && selectionStart != null && selectionEnd != null &&
+                isCellInSelection(rowIndex, col, selectionStart, selectionEnd)
+
+            val bgColor: Color
+            val fgColor: Color
+            val bold: Boolean
+            val italic: Boolean
+            val underline: Boolean
+            when {
+                isInSelection -> {
+                    bgColor = theme.uiAccent.copy(alpha = 0.4f)
+                    fgColor = theme.uiText
+                    bold = false
+                    italic = false
+                    underline = false
+                }
+                isCursor -> {
+                    bgColor = theme.cursor
+                    fgColor = theme.background
+                    bold = cell.bold
+                    italic = cell.italic
+                    underline = false
+                }
+                else -> {
+                    bgColor = if (cell.reverse) cell.fgColor else cell.bgColor
+                    fgColor = if (cell.reverse) cell.bgColor else cell.fgColor
+                    bold = cell.bold
+                    italic = cell.italic
+                    underline = cell.underline
+                }
+            }
+
+            /* Merge adjacent same-style cells into one span. */
+            val run = StringBuilder().append(cell.char)
+            var next = col + 1
+            while (next < cols) {
+                val nCell = rowCells.getOrElse(next) { TerminalCell() }
+                if (nCell.wideContinuation) {
+                    next++
+                    continue
+                }
+                val nCursor = cursorVisible && next == cursorCol
+                val nSel = isSelecting && selectionStart != null && selectionEnd != null &&
+                    isCellInSelection(rowIndex, next, selectionStart, selectionEnd)
+                if (nCursor || nSel || isCursor || isInSelection) break
+                val nBg = if (nCell.reverse) nCell.fgColor else nCell.bgColor
+                val nFg = if (nCell.reverse) nCell.bgColor else nCell.fgColor
+                if (nBg != bgColor || nFg != fgColor || nCell.bold != bold ||
+                    nCell.italic != italic || nCell.underline != underline
+                ) break
+                run.append(nCell.char)
+                next++
+            }
+            withStyle(
+                SpanStyle(
+                    color = fgColor,
+                    background = bgColor,
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = if (bold) FontWeight.Bold else FontWeight.Normal,
+                    fontStyle = if (italic) FontStyle.Italic else FontStyle.Normal,
+                    textDecoration = if (underline) {
+                        androidx.compose.ui.text.style.TextDecoration.Underline
+                    } else {
+                        androidx.compose.ui.text.style.TextDecoration.None
+                    }
+                )
+            ) { append(run.toString()) }
+            col = next
+        }
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)

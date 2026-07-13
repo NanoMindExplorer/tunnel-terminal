@@ -5,7 +5,7 @@
 ![Architecture](https://img.shields.io/badge/Architecture-NDK%20%2B%20Jetpack%20Compose-purple)
 ![AI](https://img.shields.io/badge/AI-Multi%20Provider%20%2B%20Vision%20%2B%20MCP-cyan)
 ![Linux](https://img.shields.io/badge/Linux-Ubuntu%2024.04%20via%20proot-orange)
-![Version](https://img.shields.io/badge/version-7.6.1-blue)
+![Version](https://img.shields.io/badge/version-7.7.0-blue)
 ![Stability](https://img.shields.io/badge/stability-production-green)
 
 ## Quick Links
@@ -81,6 +81,8 @@ Terminal Android konvensional hanya menampilkan teks dan mengeksekusi command. T
 | `ssh-list-hostkeys` / `ssh-reset-hostkeys` | TOFU host keys |
 
 **UX Wave 10:** long-press tab untuk rename label; keep-screen-on (default on); command palette items untuk bookmark/copy/rename.
+
+**UX Wave 12 (terminal polish):** safe paste (bracketed / flatten newlines), DECCKM arrows for vim/less, ExtraKeys `^C ^D ^Z ^L ^U ^W` + F5–F12, jump-to-bottom, faster row render, IME sync after history/paste.
 
 ## 🐧 Linux Environment (Ubuntu via proot)
 

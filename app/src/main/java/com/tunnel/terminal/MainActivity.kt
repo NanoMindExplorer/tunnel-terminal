@@ -116,6 +116,12 @@ class MainActivity : ComponentActivity() {
     /** Wave-10: Rename dialog target tab id. */
     private var renameTabId by mutableStateOf<Int?>(null)
     private var renameTabDraft by mutableStateOf("")
+    /**
+     * Wave-11/12: Transparent IME field state (Activity-scoped so paste/history/ExtraKeys can sync).
+     * [imeFieldText] = BasicTextField value; [imeFieldLast] = last applied IME string for deltas.
+     */
+    private var imeFieldText by mutableStateOf("")
+    private var imeFieldLast by mutableStateOf("")
     /** Phase 47 (Bagian 2): Agent Mode screen visibility. */
     private var showAgentScreen by mutableStateOf(false)
     /** Phase 49 (D-4): MCP server management dialog visibility. */
@@ -415,6 +421,8 @@ class MainActivity : ComponentActivity() {
         }
         exec.currentCommandBuffer = text
         exec.writeRaw(text)
+        /* Wave-12: Align IME tracker after programmatic insert. */
+        syncImeLine(text)
         Toast.makeText(this, "Inserted into terminal (not executed)", Toast.LENGTH_SHORT).show()
     }
 
@@ -1452,7 +1460,22 @@ class MainActivity : ComponentActivity() {
             val cmd = history[history.size - 1 - activeExecutor.historyIndex]
             activeExecutor.currentCommandBuffer = cmd
             activeExecutor.writeRaw(cmd)
+            /* Wave-12: Keep transparent IME field aligned with recalled history. */
+            syncImeLine(cmd)
+        } else {
+            syncImeLine("")
         }
+    }
+
+    /** Wave-12: Set both IME field trackers (and keep them equal). */
+    private fun syncImeLine(text: String) {
+        imeFieldText = text
+        imeFieldLast = text
+    }
+
+    private fun clearImeLine() {
+        imeFieldText = ""
+        imeFieldLast = ""
     }
 
     /* ─── Compose UI ─── */
@@ -2036,9 +2059,7 @@ class MainActivity : ComponentActivity() {
                     label = tabLabels[executor.id] ?: defaultTabLabel(executor, index + 1)
                 )
             }
-            var hiddenInput by remember { mutableStateOf("") }
-            /* Wave-11: Shared IME tracking (was per-pane local — stale after Enter/tab switch). */
-            var lastImeValue by remember { mutableStateOf("") }
+            /* Wave-11/12: IME field is Activity-scoped (imeFieldText / imeFieldLast). */
 
             /* Phase 33 (A2 fix): Deteksi keyboard fisik — jangan paksa soft keyboard muncul.
              * Old code: if (!hasPhysicalKeyboard) keyboardController?.show() selalu dipanggil → soft keyboard muncul
@@ -2127,22 +2148,85 @@ class MainActivity : ComponentActivity() {
                     pasteFromClipboard(activeExecutor)
                     return
                 }
+                /* Wave-12: One-shot control chips (^C etc.) — not sticky CTRL. */
+                when (key) {
+                    "^C" -> { activeExecutor.writeRaw(3.toChar().toString()); return }
+                    "^D" -> { activeExecutor.writeRaw(4.toChar().toString()); return }
+                    "^Z" -> { activeExecutor.writeRaw(26.toChar().toString()); return }
+                    "^L" -> {
+                        activeExecutor.writeRaw(12.toChar().toString())
+                        return
+                    }
+                    "^U" -> {
+                        activeExecutor.writeRaw(21.toChar().toString())
+                        activeExecutor.currentCommandBuffer = ""
+                        clearImeLine()
+                        return
+                    }
+                    "^W" -> {
+                        /* Delete last word: send Ctrl+W and drop last token from trackers. */
+                        activeExecutor.writeRaw(23.toChar().toString())
+                        val prev = activeExecutor.currentCommandBuffer.trimEnd()
+                        val i = prev.lastIndexOf(' ')
+                        val next = if (i < 0) "" else prev.take(i + 1)
+                        activeExecutor.currentCommandBuffer = next
+                        syncImeLine(next)
+                        return
+                    }
+                }
+                val emu = activeExecutor.emulator
                 val ansiCode: String = when (key) {
                     "ESC" -> "\u001B"
                     "TAB" -> "\t"
-                    "↑" -> "\u001B[A"
-                    "↓" -> "\u001B[B"
-                    "→" -> "\u001B[C"
-                    "←" -> "\u001B[D"
+                    "↑" -> emu.cursorKey('A')
+                    "↓" -> emu.cursorKey('B')
+                    "→" -> emu.cursorKey('C')
+                    "←" -> emu.cursorKey('D')
                     "HOME" -> "\u001B[H"
                     "END" -> "\u001B[F"
                     "PGUP" -> "\u001B[5~"
                     "PGDN" -> "\u001B[6~"
-                    "BKSP" -> "\u007F"
+                    "BKSP" -> {
+                        if (activeExecutor.currentCommandBuffer.isNotEmpty()) {
+                            activeExecutor.currentCommandBuffer =
+                                activeExecutor.currentCommandBuffer.dropLast(1)
+                        }
+                        if (imeFieldText.isNotEmpty()) {
+                            syncImeLine(imeFieldText.dropLast(1))
+                        }
+                        "\u007F"
+                    }
                     "DEL" -> "\u001B[3~"
                     "CTRL" -> { isCtrlActive = !isCtrlActive; "" }
                     "ALT" -> { isAltActive = !isAltActive; "" }
-                    else -> key
+                    "F5" -> emu.functionKey(5)
+                    "F6" -> emu.functionKey(6)
+                    "F7" -> emu.functionKey(7)
+                    "F8" -> emu.functionKey(8)
+                    "F9" -> emu.functionKey(9)
+                    "F10" -> emu.functionKey(10)
+                    "F11" -> emu.functionKey(11)
+                    "F12" -> emu.functionKey(12)
+                    else -> {
+                        /* Sticky CTRL + symbol/letter from ExtraKeys. */
+                        if (isCtrlActive && key.length == 1) {
+                            isCtrlActive = false
+                            val ch = key[0].lowercaseChar()
+                            if (ch in 'a'..'z') {
+                                (ch - 'a' + 1).toChar().toString()
+                            } else key
+                        } else if (isAltActive && key.length == 1) {
+                            isAltActive = false
+                            "\u001B$key"
+                        } else {
+                            /* Printable symbol — also update line tracker. */
+                            if (key.length == 1 && !key[0].isISOControl()) {
+                                activeExecutor.currentCommandBuffer += key
+                                syncImeLine(imeFieldText + key)
+                            }
+                            key
+                        }
+                    }
                 }
                 if (ansiCode.isNotEmpty()) activeExecutor.writeRaw(ansiCode)
             }
@@ -2375,13 +2459,13 @@ class MainActivity : ComponentActivity() {
              * Wave-3 + Wave-11: Unified soft-IME / BasicTextField handler.
              *
              * Wave-11 fix (text disappears while typing):
-             * BasicTextField is controlled by [hiddenInput]. Previously we only updated
-             * [lastInputValue] on each keystroke and left hiddenInput as "" until Enter.
+             * BasicTextField is controlled by [imeFieldText]. Previously we only updated
+             * [lastInputValue] on each keystroke and left imeFieldText as "" until Enter.
              * When the shell echoed a char → screenDirty → recompose, Compose forced the
              * field back to "" and IME fired onValueChange(""), which was interpreted as
              * "delete all" → backspaces wiped the just-typed (and echoed) characters.
              *
-             * Fix: always keep hiddenInput in sync with the tracked IME string via setHidden.
+             * Fix: always keep imeFieldText in sync with the tracked IME string via setHidden.
              * Text stays transparent (color Transparent) so the user still sees only PTY echo.
              */
             fun applyImeValueChange(
@@ -2420,7 +2504,7 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
-                /** Commit IME tracking state (never leave hiddenInput stale). */
+                /** Commit IME tracking state (never leave imeFieldText stale). */
                 fun syncField(value: String) {
                     setLast(value)
                     setHidden(value)
@@ -2554,8 +2638,8 @@ class MainActivity : ComponentActivity() {
                         processInput(activeExecutor.currentCommandBuffer + "\n")
                         activeExecutor.currentCommandBuffer = ""
                         /* Wave-11: Clear both controlled field and IME tracker. */
-                        hiddenInput = ""
-                        lastImeValue = ""
+                        imeFieldText = ""
+                        imeFieldLast = ""
                         return true
                     }
                     Key.Backspace -> {
@@ -2564,27 +2648,44 @@ class MainActivity : ComponentActivity() {
                         }
                         activeExecutor.writeRaw("\u007F")
                         /* Wave-11: Keep IME field tracker aligned with shell line buffer. */
-                        if (hiddenInput.isNotEmpty()) {
-                            hiddenInput = hiddenInput.dropLast(1)
-                            lastImeValue = hiddenInput
+                        if (imeFieldText.isNotEmpty()) {
+                            imeFieldText = imeFieldText.dropLast(1)
+                            imeFieldLast = imeFieldText
                         }
                         return true
                     }
                     Key.Tab -> { activeExecutor.writeRaw("\t"); return true }
-                    Key.DirectionUp -> { activeExecutor.writeRaw("\u001B[A"); return true }
-                    Key.DirectionDown -> { activeExecutor.writeRaw("\u001B[B"); return true }
-                    Key.DirectionRight -> { activeExecutor.writeRaw("\u001B[C"); return true }
-                    Key.DirectionLeft -> { activeExecutor.writeRaw("\u001B[D"); return true }
+                    Key.DirectionUp -> {
+                        activeExecutor.writeRaw(activeExecutor.emulator.cursorKey('A')); return true
+                    }
+                    Key.DirectionDown -> {
+                        activeExecutor.writeRaw(activeExecutor.emulator.cursorKey('B')); return true
+                    }
+                    Key.DirectionRight -> {
+                        activeExecutor.writeRaw(activeExecutor.emulator.cursorKey('C')); return true
+                    }
+                    Key.DirectionLeft -> {
+                        activeExecutor.writeRaw(activeExecutor.emulator.cursorKey('D')); return true
+                    }
                     Key.Escape -> { activeExecutor.writeRaw("\u001B"); return true }
                     Key.MoveHome -> { activeExecutor.writeRaw("\u001B[H"); return true }
                     Key.MoveEnd -> { activeExecutor.writeRaw("\u001B[F"); return true }
                     Key.PageUp -> { activeExecutor.writeRaw("\u001B[5~"); return true }
                     Key.PageDown -> { activeExecutor.writeRaw("\u001B[6~"); return true }
                     Key.Delete -> { activeExecutor.writeRaw("\u001B[3~"); return true }
-                    Key.F1 -> { activeExecutor.writeRaw("\u001BOP"); return true }
-                    Key.F2 -> { activeExecutor.writeRaw("\u001BOQ"); return true }
-                    Key.F3 -> { activeExecutor.writeRaw("\u001BOR"); return true }
-                    Key.F4 -> { activeExecutor.writeRaw("\u001BOS"); return true }
+                    /* Wave-12: Full F1–F12 for TUI apps. */
+                    Key.F1 -> { activeExecutor.writeRaw(activeExecutor.emulator.functionKey(1)); return true }
+                    Key.F2 -> { activeExecutor.writeRaw(activeExecutor.emulator.functionKey(2)); return true }
+                    Key.F3 -> { activeExecutor.writeRaw(activeExecutor.emulator.functionKey(3)); return true }
+                    Key.F4 -> { activeExecutor.writeRaw(activeExecutor.emulator.functionKey(4)); return true }
+                    Key.F5 -> { activeExecutor.writeRaw(activeExecutor.emulator.functionKey(5)); return true }
+                    Key.F6 -> { activeExecutor.writeRaw(activeExecutor.emulator.functionKey(6)); return true }
+                    Key.F7 -> { activeExecutor.writeRaw(activeExecutor.emulator.functionKey(7)); return true }
+                    Key.F8 -> { activeExecutor.writeRaw(activeExecutor.emulator.functionKey(8)); return true }
+                    Key.F9 -> { activeExecutor.writeRaw(activeExecutor.emulator.functionKey(9)); return true }
+                    Key.F10 -> { activeExecutor.writeRaw(activeExecutor.emulator.functionKey(10)); return true }
+                    Key.F11 -> { activeExecutor.writeRaw(activeExecutor.emulator.functionKey(11)); return true }
+                    Key.F12 -> { activeExecutor.writeRaw(activeExecutor.emulator.functionKey(12)); return true }
                 }
 
                 /* Phase 33 (A1 fix): JANGAN handle karakter cetak biasa di sini.
@@ -2696,17 +2797,17 @@ class MainActivity : ComponentActivity() {
                                 val focusRequester = remember { FocusRequester() }
                                 val keyboardController = LocalSoftwareKeyboardController.current
                                 LaunchedEffect(activeExecutorId) {
-                                    lastImeValue = ""
-                                    hiddenInput = ""
+                                    imeFieldLast = ""
+                                    imeFieldText = ""
                                     try { focusRequester.requestFocus(); if (!hasPhysicalKeyboard) keyboardController?.show() } catch (_: Exception) {}
                                 }
                                 BasicTextField(
-                                    value = hiddenInput,
+                                    value = imeFieldText,
                                     onValueChange = { newValue ->
                                         applyImeValueChange(
-                                            newValue, lastImeValue,
-                                            setLast = { lastImeValue = it },
-                                            setHidden = { hiddenInput = it }
+                                            newValue, imeFieldLast,
+                                            setLast = { imeFieldLast = it },
+                                            setHidden = { imeFieldText = it }
                                         )
                                     },
                                     textStyle = TextStyle(color = Color.Transparent),
@@ -2760,17 +2861,17 @@ class MainActivity : ComponentActivity() {
                             val focusRequester = remember { FocusRequester() }
                             val keyboardController = LocalSoftwareKeyboardController.current
                             LaunchedEffect(activeExecutorId, blockMode) {
-                                lastImeValue = ""
-                                hiddenInput = ""
+                                imeFieldLast = ""
+                                imeFieldText = ""
                                 try { focusRequester.requestFocus(); if (!hasPhysicalKeyboard) keyboardController?.show() } catch (_: Exception) {}
                             }
                             BasicTextField(
-                                value = hiddenInput,
+                                value = imeFieldText,
                                 onValueChange = { newValue ->
                                     applyImeValueChange(
-                                        newValue, lastImeValue,
-                                        setLast = { lastImeValue = it },
-                                        setHidden = { hiddenInput = it }
+                                        newValue, imeFieldLast,
+                                        setLast = { imeFieldLast = it },
+                                        setHidden = { imeFieldText = it }
                                     )
                                 },
                                 textStyle = TextStyle(color = Color.Transparent),
@@ -2816,8 +2917,8 @@ class MainActivity : ComponentActivity() {
                             enterHandledByKeyEvent = false
                             /* Wave-11: Drop stale IME buffer when switching tabs so the next
                              * keystroke is not treated as a replace/delete of another tab. */
-                            lastImeValue = ""
-                            hiddenInput = ""
+                            imeFieldLast = ""
+                            imeFieldText = ""
                             try {
                                 focusRequester.requestFocus()
                                 if (!hasPhysicalKeyboard) keyboardController?.show()
@@ -2827,12 +2928,12 @@ class MainActivity : ComponentActivity() {
                         }
 
                         BasicTextField(
-                            value = hiddenInput,
+                            value = imeFieldText,
                             onValueChange = { newValue ->
                                 applyImeValueChange(
-                                    newValue, lastImeValue,
-                                    setLast = { lastImeValue = it },
-                                    setHidden = { hiddenInput = it }
+                                    newValue, imeFieldLast,
+                                    setLast = { imeFieldLast = it },
+                                    setHidden = { imeFieldText = it }
                                 )
                             },
                             textStyle = TextStyle(color = Color.Transparent),
@@ -2897,8 +2998,8 @@ class MainActivity : ComponentActivity() {
                                 activeExecutor.currentCommandBuffer = suggestion
                                 activeExecutor.writeRaw(suggestion)
                                 /* Wave-11: Keep transparent IME field aligned after autocomplete. */
-                                hiddenInput = suggestion
-                                lastImeValue = suggestion
+                                imeFieldText = suggestion
+                                imeFieldLast = suggestion
                             }
                         )
                     }
@@ -2937,17 +3038,41 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    /** Phase 53: Extract paste logic supaya bisa dipakai ulang oleh floating toolbar. */
+    /** Phase 53 + Wave-12: Safe paste with bracketed mode + IME sync. */
     private fun pasteFromClipboard(executor: TerminalSession) {
         val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
         val clipText = clipboard.primaryClip?.getItemAt(0)?.coerceToText(this)?.toString() ?: ""
-        if (clipText.isNotEmpty()) {
-            executor.writeRaw(clipText)
-            executor.currentCommandBuffer += clipText.replace("\n", "")
-            Toast.makeText(this, "Pasted ${clipText.length} chars", Toast.LENGTH_SHORT).show()
-        } else {
+        if (clipText.isEmpty()) {
             Toast.makeText(this, "Clipboard kosong", Toast.LENGTH_SHORT).show()
+            return
         }
+        val prepared = PasteUtils.prepare(
+            raw = clipText,
+            bracketed = executor.emulator.bracketedPaste,
+            flattenNewlines = true
+        )
+        if (prepared.payload.isEmpty()) {
+            Toast.makeText(this, "Clipboard kosong", Toast.LENGTH_SHORT).show()
+            return
+        }
+        executor.writeRaw(prepared.payload)
+        /* Track single-line form so next keystroke deltas stay consistent. */
+        if (prepared.multiLine && executor.emulator.bracketedPaste) {
+            /* Bracketed paste inserts into shell; keep our line tracker as append of flattened. */
+            executor.currentCommandBuffer += prepared.lineBuffer
+            syncImeLine(executor.currentCommandBuffer)
+        } else {
+            executor.currentCommandBuffer += prepared.lineBuffer
+            syncImeLine(executor.currentCommandBuffer)
+        }
+        val msg = buildString {
+            append("Pasted ${prepared.payload.length} chars")
+            if (prepared.multiLine && !executor.emulator.bracketedPaste) {
+                append(" (newlines → spaces)")
+            }
+            if (prepared.truncated) append(" [truncated]")
+        }
+        Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
     }
 
     private fun buildHelpText(): String = """
@@ -2984,11 +3109,13 @@ class MainActivity : ComponentActivity() {
         - Tool calling, Agent Mode, MCP HTTP bridge, vision (model-dependent)
 
         Shortcuts & UX:
-        - Volume Up/Down : Navigasi riwayat perintah (per-tab)
+        - Volume Up/Down : History (IME-synced, per-tab)
         - Ctrl+K         : Command palette
         - Long-press tab : Rename tab label
+        - ExtraKeys      : ^C ^D ^Z ^L ^U ^W, F5–F12, PASTE (safe)
         - CTRL + C       : Hentikan proses yang berjalan
         - Pinch Screen   : Zoom In/Out ukuran font terminal
+        - Scroll ↑ + ↓ FAB: Jump to live bottom
         ==========================================
     """.trimIndent()
 
