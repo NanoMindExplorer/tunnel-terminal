@@ -129,6 +129,11 @@ class MainActivity : ComponentActivity() {
     private var agentRunning by mutableStateOf(false)
     /** Wave-1: Agent pause state for Resume button UI. */
     private var agentPaused by mutableStateOf(false)
+    /** Wave-6: Last clarification question from agent (null if none). */
+    private var agentPendingClarification by mutableStateOf<String?>(null)
+    /** Wave-6: Goal + useUbuntu remembered so clarification can continue the task. */
+    private var agentLastGoal by mutableStateOf("")
+    private var agentLastUseUbuntu by mutableStateOf(true)
     /** Phase 52 fix (Bug #1): State untuk approval dialog (CompletableDeferred bridge). */
     private var pendingAgentApproval by mutableStateOf<Pair<AiToolCall, String>?>(null)
     private var agentApprovalDeferred: kotlinx.coroutines.CompletableDeferred<Boolean>? = null
@@ -684,6 +689,9 @@ class MainActivity : ComponentActivity() {
         agentEvents.clear()
         agentRunning = true
         agentPaused = false
+        agentPendingClarification = null
+        agentLastGoal = goal
+        agentLastUseUbuntu = useUbuntu
 
         /* Phase 52 + Wave-1: Entire flow (incl. Ubuntu tab wait) runs on a coroutine —
          * never Thread.sleep on the main thread. */
@@ -728,6 +736,10 @@ class MainActivity : ComponentActivity() {
                     },
                     events = { event ->
                         agentEvents.add(event)
+                        /* Wave-6: Capture clarification for UI answer form. */
+                        if (event is AgentTaskRunner.AgentEvent.NeedsClarification) {
+                            agentPendingClarification = event.question
+                        }
                     }
                 )
             } catch (e: kotlinx.coroutines.CancellationException) {
@@ -739,6 +751,20 @@ class MainActivity : ComponentActivity() {
                 agentPaused = false
             }
         }
+    }
+
+    /** Wave-6: Continue agent after user answers NeedsClarification. */
+    private fun continueAgentWithClarification(answer: String) {
+        val q = agentPendingClarification
+        val baseGoal = agentLastGoal.ifBlank { "Continue previous task" }
+        val enriched = buildString {
+            append(baseGoal)
+            append("\n\n[User clarification]\n")
+            if (!q.isNullOrBlank()) append("Question was: $q\n")
+            append("Answer: $answer")
+        }
+        agentPendingClarification = null
+        startAgentTask(enriched, agentLastUseUbuntu)
     }
 
     /* ─── Phase 19: AI Provider Model Fetcher ─── */
@@ -1474,6 +1500,7 @@ class MainActivity : ComponentActivity() {
                 isRunning = agentRunning,
                 isPaused = agentPaused,
                 events = agentEvents,
+                pendingClarification = agentPendingClarification,
                 onStart = { goal, useUbuntu ->
                     startAgentTask(goal, useUbuntu)
                 },
@@ -1493,7 +1520,8 @@ class MainActivity : ComponentActivity() {
                     agentRunning = false
                     agentPaused = false
                 },
-                onDismiss = { showAgentScreen = false }
+                onDismiss = { showAgentScreen = false },
+                onAnswerClarification = { answer -> continueAgentWithClarification(answer) }
             )
         }
 
