@@ -1,28 +1,27 @@
 package com.tunnel.terminal
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
 /**
- * Phase 47 (Bagian 2): Agent Screen — UI untuk AgentTaskRunner.
- *
- * User input goal → pilih environment → Start → real-time event log.
- * Tombol Pause/Stop untuk kontrol selama task berjalan.
+ * Phase 47 + Wave-17: Agent Screen — goal, live log, pause/resume, clarification.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -32,51 +31,109 @@ fun AgentScreen(
     isPaused: Boolean = false,
     events: List<AgentTaskRunner.AgentEvent>,
     pendingClarification: String? = null,
+    lastGoal: String = "",
     onStart: (goal: String, useUbuntu: Boolean) -> Unit,
     onPause: () -> Unit,
     onResume: () -> Unit,
     onStop: () -> Unit,
     onDismiss: () -> Unit,
-    /** Wave-6: Answer clarification and continue as a new agent run with context. */
     onAnswerClarification: ((answer: String) -> Unit)? = null
 ) {
     var goalText by remember { mutableStateOf("") }
     var useUbuntu by remember { mutableStateOf(true) }
     var clarifyAnswer by remember { mutableStateOf("") }
-    val scrollState = rememberScrollState()
+    val emptyScroll = rememberScrollState()
+    val listState = rememberLazyListState()
 
-    // Auto-scroll ke bawah saat event baru
+    /* Wave-17: Auto-scroll event LazyColumn when near bottom. */
     LaunchedEffect(events.size) {
-        if (scrollState.maxValue > 0) {
-            scrollState.scrollTo(scrollState.maxValue)
+        if (events.isNotEmpty()) {
+            val last = events.lastIndex
+            val lastVisible = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
+            if (lastVisible >= last - 2) {
+                listState.animateScrollToItem(last)
+            }
         }
     }
+
+    val iterationHint = events.asReversed().firstOrNull { ev ->
+        ev is AgentTaskRunner.AgentEvent.Status && ev.message.contains("Iterasi")
+    }?.let { (it as AgentTaskRunner.AgentEvent.Status).message }
 
     AlertDialog(
         onDismissRequest = { if (!isRunning) onDismiss() },
         modifier = Modifier.fillMaxSize(0.95f).background(theme.uiBg),
         title = {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("🤖 ", color = theme.uiAccent, fontSize = 20.sp)
-                Text(
-                    "Agent Mode — Autonomous Task Runner",
-                    color = theme.uiText,
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 14.sp
-                )
+            Column {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("🤖 ", color = theme.uiAccent, fontSize = 20.sp)
+                    Text(
+                        "Agent Mode",
+                        color = theme.uiText,
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 14.sp,
+                        modifier = Modifier.weight(1f)
+                    )
+                    if (isRunning) {
+                        Text(
+                            if (isPaused) "PAUSED" else "RUNNING",
+                            color = if (isPaused) Color(0xFFFFAB00) else Color(0xFF4CAF50),
+                            fontSize = 10.sp,
+                            fontFamily = FontFamily.Monospace
+                        )
+                    }
+                }
+                if (isRunning && lastGoal.isNotBlank()) {
+                    Text(
+                        "Goal: ${lastGoal.take(80)}${if (lastGoal.length > 80) "…" else ""}",
+                        color = theme.uiTextMuted,
+                        fontSize = 10.sp,
+                        fontFamily = FontFamily.Monospace
+                    )
+                }
+                if (isRunning && !iterationHint.isNullOrBlank()) {
+                    Text(
+                        iterationHint,
+                        color = theme.uiAccent,
+                        fontSize = 10.sp,
+                        fontFamily = FontFamily.Monospace
+                    )
+                    LinearProgressIndicator(
+                        modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                        color = theme.uiAccent,
+                        trackColor = theme.background
+                    )
+                }
             }
         },
         text = {
             Column(modifier = Modifier.fillMaxSize()) {
-                /* Goal input */
                 if (!isRunning) {
                     OutlinedTextField(
                         value = goalText,
                         onValueChange = { goalText = it },
-                        label = { Text("Goal — deskripsikan tugas yang ingin diselesaikan", color = theme.uiTextMuted, fontFamily = FontFamily.Monospace, fontSize = 11.sp) },
-                        placeholder = { Text("Mis: Buat CLI tool Python yang hitung factorial, compile dan test", color = theme.uiTextMuted, fontSize = 11.sp, fontFamily = FontFamily.Monospace) },
-                        modifier = Modifier.fillMaxWidth().height(80.dp),
-                        textStyle = androidx.compose.ui.text.TextStyle(color = theme.uiText, fontFamily = FontFamily.Monospace, fontSize = 12.sp),
+                        label = {
+                            Text(
+                                "Goal — deskripsikan tugas",
+                                color = theme.uiTextMuted,
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 11.sp
+                            )
+                        },
+                        placeholder = {
+                            Text(
+                                "Mis: Buat CLI Python factorial, compile dan test",
+                                color = theme.uiTextMuted,
+                                fontSize = 11.sp,
+                                fontFamily = FontFamily.Monospace
+                            )
+                        },
+                        modifier = Modifier.fillMaxWidth().height(88.dp),
+                        textStyle = androidx.compose.ui.text.TextStyle(
+                            color = theme.uiText,
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 12.sp
+                        ),
                         colors = OutlinedTextFieldDefaults.colors(
                             focusedBorderColor = theme.uiAccent,
                             unfocusedBorderColor = theme.uiSurface,
@@ -84,8 +141,6 @@ fun AgentScreen(
                         )
                     )
                     Spacer(modifier = Modifier.height(8.dp))
-
-                    /* Environment picker */
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text("Environment: ", color = theme.uiTextMuted, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
                         FilterChip(
@@ -102,8 +157,8 @@ fun AgentScreen(
                     }
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
-                        if (useUbuntu) "Ubuntu via proot — sandbox aman, apt/gcc/python/node tersedia"
-                        else "Android shell lokal — terbatas, tidak ada package manager",
+                        if (useUbuntu) "Ubuntu via proot — apt/gcc/python tersedia"
+                        else "Shell Android lokal — tanpa package manager",
                         color = theme.uiTextMuted,
                         fontSize = 9.sp,
                         fontFamily = FontFamily.Monospace
@@ -111,31 +166,49 @@ fun AgentScreen(
                     Spacer(modifier = Modifier.height(12.dp))
                 }
 
-                /* Wave-6: Clarification answer UI when agent asked a question. */
                 if (!isRunning && !pendingClarification.isNullOrBlank()) {
-                    Text(
-                        "Agent asks: $pendingClarification",
-                        color = Color(0xFFFFAB00),
-                        fontSize = 11.sp,
-                        fontFamily = FontFamily.Monospace
-                    )
+                    Surface(
+                        color = Color(0x33FFAB00),
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(modifier = Modifier.padding(10.dp)) {
+                            Text(
+                                "Agent bertanya:",
+                                color = Color(0xFFFFAB00),
+                                fontSize = 11.sp,
+                                fontFamily = FontFamily.Monospace
+                            )
+                            Text(
+                                pendingClarification,
+                                color = theme.uiText,
+                                fontSize = 12.sp,
+                                fontFamily = FontFamily.Monospace
+                            )
+                        }
+                    }
                     Spacer(modifier = Modifier.height(6.dp))
                     OutlinedTextField(
                         value = clarifyAnswer,
                         onValueChange = { clarifyAnswer = it },
                         label = {
-                            Text(
-                                "Your answer",
-                                color = theme.uiTextMuted,
-                                fontFamily = FontFamily.Monospace,
-                                fontSize = 11.sp
-                            )
+                            Text("Jawaban Anda", color = theme.uiTextMuted, fontFamily = FontFamily.Monospace, fontSize = 11.sp)
                         },
                         modifier = Modifier.fillMaxWidth().height(64.dp),
                         textStyle = androidx.compose.ui.text.TextStyle(
                             color = theme.uiText,
                             fontFamily = FontFamily.Monospace,
                             fontSize = 12.sp
+                        ),
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                        keyboardActions = KeyboardActions(
+                            onSend = {
+                                val a = clarifyAnswer.trim()
+                                if (a.isNotBlank()) {
+                                    onAnswerClarification?.invoke(a)
+                                    clarifyAnswer = ""
+                                }
+                            }
                         ),
                         colors = OutlinedTextFieldDefaults.colors(
                             focusedBorderColor = theme.uiAccent,
@@ -155,7 +228,7 @@ fun AgentScreen(
                         enabled = clarifyAnswer.isNotBlank() && onAnswerClarification != null
                     ) {
                         Text(
-                            "▶ Continue with answer",
+                            "▶ Lanjut dengan jawaban",
                             color = if (clarifyAnswer.isNotBlank()) theme.uiAccent else theme.uiTextMuted,
                             fontFamily = FontFamily.Monospace
                         )
@@ -163,34 +236,34 @@ fun AgentScreen(
                     Spacer(modifier = Modifier.height(8.dp))
                 }
 
-                /* Event log */
-                Box(modifier = Modifier.weight(1f).fillMaxWidth().background(theme.background, RoundedCornerShape(4.dp))) {
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                        .background(theme.background, RoundedCornerShape(4.dp))
+                ) {
                     if (events.isEmpty()) {
                         Text(
                             "Belum ada aktivitas.\n\n" +
-                            "Cara pakai:\n" +
-                            "1. Tulis goal di atas (mis. 'Buat web scraper Python')\n" +
-                            "2. Pilih environment (Ubuntu recommended)\n" +
-                            "3. Tap Start\n" +
-                            "4. AI akan bekerja otonom — tulis file, jalankan command, fix error\n" +
-                            "5. Tap Stop kalau mau hentikan\n\n" +
-                            "Agent akan berhenti otomatis kalau:\n" +
-                            "- AI bilang selesai (<agent_done>)\n" +
-                            "- Mencapai 40 iterasi\n" +
-                            "- AI stuck 3 iterasi tanpa aksi\n" +
-                            "- Aksi berisiko butuh approval",
+                                "1. Tulis goal\n" +
+                                "2. Pilih environment (Ubuntu disarankan)\n" +
+                                "3. Ketuk Start\n" +
+                                "4. AI bekerja otonom (file, command, fix)\n" +
+                                "5. Stop kapan saja\n\n" +
+                                "Agent berhenti jika: selesai, 40 iterasi, stuck, atau butuh approval.",
                             color = theme.uiTextMuted,
                             fontSize = 10.sp,
                             fontFamily = FontFamily.Monospace,
-                            modifier = Modifier.padding(12.dp).verticalScroll(scrollState)
+                            modifier = Modifier.padding(12.dp).verticalScroll(emptyScroll)
                         )
                     } else {
                         LazyColumn(
+                            state = listState,
                             modifier = Modifier.fillMaxSize().padding(8.dp),
                             verticalArrangement = Arrangement.spacedBy(4.dp)
                         ) {
-                            items(events) { event ->
-                                AgentEventItem(event, theme)
+                            items(events.size) { idx ->
+                                AgentEventItem(events[idx], theme)
                             }
                         }
                     }
@@ -200,7 +273,6 @@ fun AgentScreen(
         confirmButton = {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (isRunning) {
-                    /* Wave-1: Pause is no longer a one-way trap — show Resume when paused. */
                     if (isPaused) {
                         TextButton(onClick = onResume) {
                             Text("▶ Resume", color = Color(0xFF4CAF50), fontFamily = FontFamily.Monospace)
@@ -213,12 +285,20 @@ fun AgentScreen(
                     TextButton(onClick = onStop) {
                         Text("⏹ Stop", color = Color(0xFFFF5252), fontFamily = FontFamily.Monospace)
                     }
+                    /* Wave-17: Allow hiding dialog while agent keeps running. */
+                    TextButton(onClick = onDismiss) {
+                        Text("Sembunyikan", color = theme.uiTextMuted, fontFamily = FontFamily.Monospace)
+                    }
                 } else {
                     TextButton(
                         onClick = { onStart(goalText.trim(), useUbuntu) },
                         enabled = goalText.isNotBlank()
                     ) {
-                        Text("▶ Start", color = if (goalText.isNotBlank()) theme.uiAccent else theme.uiTextMuted, fontFamily = FontFamily.Monospace)
+                        Text(
+                            "▶ Start",
+                            color = if (goalText.isNotBlank()) theme.uiAccent else theme.uiTextMuted,
+                            fontFamily = FontFamily.Monospace
+                        )
                     }
                 }
             }
@@ -226,7 +306,7 @@ fun AgentScreen(
         dismissButton = {
             if (!isRunning) {
                 TextButton(onClick = onDismiss) {
-                    Text("Close", color = theme.uiTextMuted, fontFamily = FontFamily.Monospace)
+                    Text("Tutup", color = theme.uiTextMuted, fontFamily = FontFamily.Monospace)
                 }
             }
         }
@@ -235,6 +315,7 @@ fun AgentScreen(
 
 @Composable
 private fun AgentEventItem(event: AgentTaskRunner.AgentEvent, theme: TerminalTheme) {
+    var expanded by remember { mutableStateOf(false) }
     val (icon, color, text) = when (event) {
         is AgentTaskRunner.AgentEvent.Status -> Triple("▶", theme.uiTextMuted, event.message)
         is AgentTaskRunner.AgentEvent.ToolResult -> {
@@ -242,11 +323,14 @@ private fun AgentEventItem(event: AgentTaskRunner.AgentEvent, theme: TerminalThe
             val col = if (event.success) Color(0xFF4CAF50) else Color(0xFFFF5252)
             Triple(ic, col, "${event.tool}: ${event.argsSummary}\n${event.resultSummary}")
         }
-        is AgentTaskRunner.AgentEvent.NeedsApproval -> Triple("🔐", Color(0xFFFFAB00), "Need approval: ${event.reason}\nCall: ${event.call.displayText}")
+        is AgentTaskRunner.AgentEvent.NeedsApproval ->
+            Triple("🔐", Color(0xFFFFAB00), "Butuh approval: ${event.reason}\n${event.call.displayText}")
         is AgentTaskRunner.AgentEvent.Done -> Triple("✅", Color(0xFF4CAF50), "SELESAI: ${event.summary}")
         is AgentTaskRunner.AgentEvent.StoppedForSafety -> Triple("⚠️", Color(0xFFFF5252), "Dihentikan: ${event.reason}")
-        is AgentTaskRunner.AgentEvent.NeedsClarification -> Triple("❓", Color(0xFFFFAB00), "Butuh klarifikasi: ${event.question}")
+        is AgentTaskRunner.AgentEvent.NeedsClarification ->
+            Triple("❓", Color(0xFFFFAB00), "Butuh klarifikasi: ${event.question}")
     }
+    val long = text.length > 160
     Surface(
         modifier = Modifier.fillMaxWidth(),
         color = theme.uiBg,
@@ -254,7 +338,25 @@ private fun AgentEventItem(event: AgentTaskRunner.AgentEvent, theme: TerminalThe
     ) {
         Row(modifier = Modifier.padding(8.dp)) {
             Text(icon, color = color, fontSize = 12.sp, fontFamily = FontFamily.Monospace, modifier = Modifier.padding(end = 6.dp))
-            Text(text, color = theme.uiText, fontSize = 10.sp, fontFamily = FontFamily.Monospace, modifier = Modifier.weight(1f))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    if (!expanded && long) text.take(160) + "…" else text,
+                    color = theme.uiText,
+                    fontSize = 10.sp,
+                    fontFamily = FontFamily.Monospace
+                )
+                if (long) {
+                    Text(
+                        if (expanded) "Sembunyikan" else "Tampilkan lebih",
+                        color = theme.uiAccent,
+                        fontSize = 9.sp,
+                        fontFamily = FontFamily.Monospace,
+                        modifier = Modifier
+                            .padding(top = 2.dp)
+                            .clickable { expanded = !expanded }
+                    )
+                }
+            }
         }
     }
 }
