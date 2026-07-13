@@ -48,12 +48,17 @@ jobs:
 | `06-WaveUtilsTest` | path sandbox, width, metrics, markers |
 | `07-AiToolCallAndPromptTest` | parse, read-only set, cwd prompt |
 | `08-HistoryAndUrlTest` | AI base URL validation |
+| `09-ChatExportTest` | Chat export role formatting |
 
-## Built-in commands (Wave 8+)
+## Built-in commands (Wave 8–9)
 
 | Command | Description |
 |---------|-------------|
 | `history` | Show current tab command history |
 | `history-clear` | Clear session + persisted history |
-| `export-output` | Write transcript to `filesDir/exports/` |
+| `export-output` | Write terminal transcript to `filesDir/exports/` |
+| `export-chat` | Export AI chat transcript |
 | `ai-metrics` | Show last AI request latency/size |
+| `font-reset` | Reset terminal font to density default |
+| `ssh-list-hostkeys` | List TOFU SSH fingerprints |
+| `ssh-reset-hostkeys` | Clear all TOFU fingerprints |

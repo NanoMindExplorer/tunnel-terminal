@@ -643,6 +643,10 @@ fun AIChatPanel(
     onThemeChanged: (TerminalTheme) -> Unit,
     onClearChat: () -> Unit,
     onClose: () -> Unit,
+    /* Wave-9: Export chat transcript. */
+    onExportChat: () -> Unit = {},
+    /* Wave-9: Type snippet into terminal buffer without executing. */
+    onInsertSnippet: (String) -> Unit = {},
     /* Phase 19: Image Vision. */
     pendingImages: List<String> = emptyList(),
     onAttachImage: () -> Unit = {},
@@ -742,6 +746,18 @@ fun AIChatPanel(
                 )
             }
             Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                /* Wave-9: Export chat. */
+                Button(
+                    onClick = { onExportChat() },
+                    enabled = messages.isNotEmpty(),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = theme.uiSurface,
+                        disabledContainerColor = theme.uiSurface.copy(alpha = 0.5f)
+                    ),
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                ) {
+                    Text("💾", color = theme.uiText, fontSize = 14.sp)
+                }
                 /* Clear chat button. */
                 Button(
                     onClick = { onClearChat() },
@@ -987,6 +1003,11 @@ fun AIChatPanel(
                                         onClick = { onRunSnippet(snippet.command) },
                                         colors = ButtonDefaults.buttonColors(containerColor = theme.uiAccent)
                                     ) { Text("▶ Run") }
+                                    /* Wave-9: Insert into terminal line buffer without Enter. */
+                                    Button(
+                                        onClick = { onInsertSnippet(snippet.command) },
+                                        colors = ButtonDefaults.buttonColors(containerColor = theme.uiSurface)
+                                    ) { Text("⌨ Type") }
                                     Button(
                                         onClick = { onDeleteSnippet(snippet.id) },
                                         colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF5252))

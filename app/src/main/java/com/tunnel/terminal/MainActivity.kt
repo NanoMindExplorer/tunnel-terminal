@@ -375,6 +375,51 @@ class MainActivity : ComponentActivity() {
     private fun clearChat() {
         chatMessages.clear()
         pendingImages.clear()
+        Toast.makeText(this, "Chat cleared", Toast.LENGTH_SHORT).show()
+    }
+
+    /** Wave-9: Soft-cap chat list so UI stays responsive on long sessions. */
+    private fun trimChatIfNeeded(maxMessages: Int = 80) {
+        while (chatMessages.size > maxMessages) {
+            chatMessages.removeAt(0)
+        }
+    }
+
+    /** Wave-9: Export AI chat to filesDir/exports/. */
+    private fun exportChat() {
+        val r = ChatExporter.export(this, chatMessages.toList())
+        Toast.makeText(this, if (r.ok) "Chat exported:\n${r.path}" else r.message, Toast.LENGTH_LONG).show()
+    }
+
+    /**
+     * Wave-9: Type text into the active terminal buffer without executing (no Enter).
+     * Replaces any in-progress line buffer.
+     */
+    private fun insertIntoTerminal(text: String) {
+        val exec = shellExecutors.find { it.id == activeExecutorId } ?: return
+        val old = exec.currentCommandBuffer
+        if (old.isNotEmpty()) {
+            repeat(old.length) { exec.writeRaw("\u007F") }
+        }
+        exec.currentCommandBuffer = text
+        exec.writeRaw(text)
+        Toast.makeText(this, "Inserted into terminal (not executed)", Toast.LENGTH_SHORT).show()
+    }
+
+    /** Wave-9: Reset font size to density-aware default and persist. */
+    private fun resetFontSize() {
+        val dm = resources.displayMetrics
+        val density = dm.density.takeIf { it > 0f } ?: 2f
+        /* Prefer slightly larger on high-density phones. */
+        val defaultSp = when {
+            density >= 3f -> 13f
+            density >= 2.5f -> 12.5f
+            else -> 12f
+        }
+        terminalFontSize = defaultSp
+        getSharedPreferences("TunnelUI", Context.MODE_PRIVATE)
+            .edit().putFloat("fontSize", defaultSp).apply()
+        Toast.makeText(this, "Font size reset to ${defaultSp}sp", Toast.LENGTH_SHORT).show()
     }
 
     /* ─── Phase 22: AI Tool Call Execution ─── */
@@ -1418,6 +1463,35 @@ class MainActivity : ComponentActivity() {
                     permissionManager.resetAll()
                     Toast.makeText(this@MainActivity, "Permissions reset for active session", Toast.LENGTH_SHORT).show()
                 })
+                add(PaletteItem("export_chat", "Export AI chat", "AI", Icons.Default.Save, PaletteCategory.AI) { exportChat() })
+                add(PaletteItem("clear_chat", "Clear AI chat", "AI", Icons.Default.Delete, PaletteCategory.AI) { clearChat() })
+                add(PaletteItem("font_reset", "Reset font size", "Setting", Icons.Default.FormatSize, PaletteCategory.SETTING) { resetFontSize() })
+                add(PaletteItem("ssh_list_keys", "List SSH host keys (TOFU)", "Setting", Icons.Default.VpnKey, PaletteCategory.SETTING) {
+                    val list = SshHostKeyStore.formatList(this@MainActivity)
+                    shellExecutors.find { it.id == activeExecutorId }?.let { exec ->
+                        exec.emulator.process("\u001B[36m[SSH known hosts]\n$list\u001B[0m\n")
+                        exec.triggerScreenUpdate()
+                    }
+                })
+                /* Wave-9: Snippets in palette for quick type/run. */
+                snippetsState.take(10).forEach { sn ->
+                    add(PaletteItem(
+                        "snippet_run_${sn.id}",
+                        "Snippet ▶ ${sn.title}",
+                        "Workflow",
+                        Icons.Default.PlayArrow,
+                        PaletteCategory.COMMAND
+                    ) {
+                        shellExecutors.find { it.id == activeExecutorId }?.executeCommand(sn.command)
+                    })
+                    add(PaletteItem(
+                        "snippet_type_${sn.id}",
+                        "Snippet ⌨ ${sn.title}",
+                        "Workflow",
+                        Icons.Default.Keyboard,
+                        PaletteCategory.COMMAND
+                    ) { insertIntoTerminal(sn.command) })
+                }
                 /* Phase 23: MCP discovery. */
                 add(PaletteItem("mcp_discover", "Discover MCP Tools", "AI", Icons.Default.CloudSync, PaletteCategory.AI) { discoverMcpTools() })
                 /* Phase 23: Voice input. */
@@ -1726,6 +1800,11 @@ class MainActivity : ComponentActivity() {
                         onDeleteSnippet = { id -> deleteSnippet(id) },
                         onThemeChanged = { changeTheme(it) },
                         onClearChat = { clearChat() },
+                        onExportChat = { exportChat() },
+                        onInsertSnippet = { cmd ->
+                            insertIntoTerminal(cmd)
+                            scope.launch { drawerState.close() }
+                        },
                         onClose = { scope.launch { drawerState.close() } },
                         /* Phase 19: Image Vision. */
                         pendingImages = pendingImages,
@@ -1886,9 +1965,11 @@ class MainActivity : ComponentActivity() {
                  * TIDAK perlu di-backspace karena karakternya memang harus sampai ke shell. */
                 val isLocalOnly = cmd == "help" || cmd == "clear" || cmd == "setup-storage" ||
                     cmd == "storage-status" || cmd == "storage-reset" ||
-                    cmd == "ssh-reset-hostkeys" || cmd == "system-info" ||
+                    cmd == "ssh-reset-hostkeys" || cmd == "ssh-list-hostkeys" ||
+                    cmd == "system-info" ||
                     cmd == "history" || cmd == "history-clear" ||
-                    cmd == "export-output" || cmd == "ai-metrics" ||
+                    cmd == "export-output" || cmd == "export-chat" || cmd == "ai-metrics" ||
+                    cmd == "font-reset" ||
                     cmd.startsWith("open ") ||
                     (activeExecutor.sessionType == "ubuntu" &&
                         (cmd.startsWith("systemctl ") || cmd.startsWith("service ")))
@@ -1950,8 +2031,23 @@ class MainActivity : ComponentActivity() {
                     }
                     cmd == "ssh-reset-hostkeys" -> {
                         /* BUG-02: Reset SSH host key fingerprints (TOFU). */
-                        getSharedPreferences("TunnelSshHostKeys", Context.MODE_PRIVATE).edit().clear().apply()
+                        SshHostKeyStore.clearAll(this@MainActivity)
                         activeExecutor.emulator.process("\n\u001B[33m[SSH] Semua host key fingerprints direset. Koneksi berikutnya akan menerima host key baru.\u001B[0m\n")
+                        activeExecutor.triggerScreenUpdate()
+                    }
+                    cmd == "ssh-list-hostkeys" -> {
+                        val list = SshHostKeyStore.formatList(this@MainActivity)
+                        activeExecutor.emulator.process("\u001B[36m[SSH known hosts]\n$list\u001B[0m\n")
+                        activeExecutor.triggerScreenUpdate()
+                    }
+                    cmd == "font-reset" -> {
+                        resetFontSize()
+                        activeExecutor.emulator.process("\u001B[33m[UI] Font size reset.\u001B[0m\n")
+                        activeExecutor.triggerScreenUpdate()
+                    }
+                    cmd == "export-chat" -> {
+                        exportChat()
+                        activeExecutor.emulator.process("\u001B[32m[Export] Chat export requested (see toast).\u001B[0m\n")
                         activeExecutor.triggerScreenUpdate()
                     }
                     cmd == "system-info" -> {
@@ -2612,13 +2708,16 @@ class MainActivity : ComponentActivity() {
         - clear             Bersihkan layar terminal
         - history           Tampilkan riwayat perintah tab ini
         - history-clear     Hapus history (tab + storage)
-        - export-output     Export transcript ke filesDir/exports/
+        - export-output     Export terminal transcript ke filesDir/exports/
+        - export-chat       Export percakapan AI
         - ai-metrics        Latency / size request AI terakhir
+        - font-reset        Reset ukuran font terminal
         - setup-storage     Bridge ke /sdcard via Storage Access Framework
         - storage-status    Cek status konfigurasi storage
         - storage-reset     Reset konfigurasi storage
         - system-info       Tampilkan info sistem (MOTD)
         - open <file>       Edit file di Tunnel Editor UI
+        - ssh-list-hostkeys List TOFU fingerprints
         - ssh-reset-hostkeys Reset TOFU host key fingerprints
 
         Shell / Ubuntu / SSH:
