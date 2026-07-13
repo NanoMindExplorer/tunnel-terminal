@@ -189,8 +189,27 @@ class BlockManager {
         val idx = _blocks.indexOfFirst { it.id == id }
         if (idx >= 0) {
             _blocks[idx] = _blocks[idx].copy(output = output, status = status)
+            if (status != CommandBlock.BlockStatus.RUNNING && currentBlock?.id == id) {
+                currentBlock = null
+            }
         }
     }
+
+    /** Wave-3: Live-update the current RUNNING block from terminal output. */
+    fun updateRunningOutput(output: String) {
+        val block = currentBlock ?: return
+        updateBlockOutput(block.id, output, CommandBlock.BlockStatus.RUNNING)
+    }
+
+    /** Wave-3: Mark current RUNNING block finished. */
+    fun completeRunning(output: String, status: CommandBlock.BlockStatus) {
+        val block = currentBlock ?: _blocks.lastOrNull { it.status == CommandBlock.BlockStatus.RUNNING } ?: return
+        updateBlockOutput(block.id, output, status)
+        currentBlock = null
+    }
+
+    fun hasRunningBlock(): Boolean =
+        currentBlock != null || _blocks.any { it.status == CommandBlock.BlockStatus.RUNNING }
 
     /** Clear all blocks. */
     fun clear() {

@@ -250,6 +250,15 @@ class ShellExecutor(
             /* Phase 19.5: Close FileInputStream untuk hindari fd leak. */
             try { inputStream.close() } catch (_: Exception) {}
             try { emulator.flush() } catch (_: Exception) {}
+            /* Wave-3: Reap zombie child on natural shell exit (not only destroy()). */
+            try {
+                if (childPid > 1) {
+                    TerminalJni.killSession(childPid, 0) // maps to safe reap/kill path
+                    childPid = -1
+                }
+            } catch (e: Exception) {
+                Log.w(tag, "reap on exit: ${e.message}")
+            }
             isAlive = false
             emulator.process("\n\u001B[33m[Process Exited. Tap screen to restart session.]\u001B[0m\n")
             triggerScreenUpdate()

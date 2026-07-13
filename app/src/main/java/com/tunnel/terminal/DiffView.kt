@@ -145,14 +145,24 @@ fun DiffViewDialog(
                 /* Stats. */
                 val added = diff.count { it.type == DiffCalculator.DiffType.ADDED }
                 val removed = diff.count { it.type == DiffCalculator.DiffType.REMOVED }
+                val hasContentChange = originalContent != modifiedContent
                 Row(
                     modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
                     horizontalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    Text("+$added", color = Color(0xFF4CAF50), fontSize = 12.sp, fontFamily = FontFamily.Monospace)
-                    Text("-$removed", color = Color(0xFFFF5252), fontSize = 12.sp, fontFamily = FontFamily.Monospace)
-                    if (!DiffCalculator.hasChanges(diff)) {
-                        Text("(no changes)", color = theme.uiTextMuted, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
+                    if (diffSkipped) {
+                        Text(
+                            "File too large for inline diff — review skipped",
+                            color = Color(0xFFFFAB00),
+                            fontSize = 11.sp,
+                            fontFamily = FontFamily.Monospace
+                        )
+                    } else {
+                        Text("+$added", color = Color(0xFF4CAF50), fontSize = 12.sp, fontFamily = FontFamily.Monospace)
+                        Text("-$removed", color = Color(0xFFFF5252), fontSize = 12.sp, fontFamily = FontFamily.Monospace)
+                        if (!DiffCalculator.hasChanges(diff) && !hasContentChange) {
+                            Text("(no changes)", color = theme.uiTextMuted, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
+                        }
                     }
                 }
 
@@ -166,15 +176,45 @@ fun DiffViewDialog(
                         .padding(8.dp)
                         .verticalScroll(scrollState)
                 ) {
-                    Column {
-                        diff.forEach { line ->
-                            DiffLineView(line, theme)
+                    if (diffLoading) {
+                        Text("Computing diff…", color = theme.uiTextMuted, fontFamily = FontFamily.Monospace, fontSize = 11.sp)
+                    } else if (diffSkipped) {
+                        Column {
+                            Text(
+                                "Diff skipped (file too large for LCS). You can still Apply or Reject.",
+                                color = theme.uiTextMuted,
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 11.sp
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(
+                                "Modified preview (first 40 lines):",
+                                color = theme.uiAccent,
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 10.sp
+                            )
+                            modifiedContent.lineSequence().take(40).forEach { line ->
+                                Text(line, color = theme.foreground, fontFamily = FontFamily.Monospace, fontSize = 10.sp, maxLines = 1)
+                            }
+                        }
+                    } else {
+                        Column {
+                            diff.forEach { line ->
+                                DiffLineView(line, theme)
+                            }
                         }
                     }
                 }
             }
         },
         confirmButton = {
+            /* Wave-3: Apply enabled when content differs OR LCS found changes.
+             * OLD BUG: diffSkipped left Apply permanently disabled. */
+            val canApply = !diffLoading && (
+                diffSkipped ||
+                    DiffCalculator.hasChanges(diff) ||
+                    originalContent != modifiedContent
+            )
             Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 Button(
                     onClick = onReject,
@@ -182,7 +222,7 @@ fun DiffViewDialog(
                 ) { Text("Reject", color = theme.uiText, fontSize = 11.sp) }
                 Button(
                     onClick = onApply,
-                    enabled = DiffCalculator.hasChanges(diff),
+                    enabled = canApply,
                     colors = ButtonDefaults.buttonColors(containerColor = theme.ansi.getOrElse(2) { Color(0xFF4CAF50) })
                 ) { Text("Apply", color = Color.White, fontSize = 11.sp) }
             }

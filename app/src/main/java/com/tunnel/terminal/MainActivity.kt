@@ -1349,7 +1349,16 @@ class MainActivity : ComponentActivity() {
                 theme = currentTheme,
                 items = paletteItems,
                 recentCommands = recentCmds,
-                onExecute = { it.action() },
+                onExecute = { item ->
+                    /* Wave-3: Recent palette items actually run the command. */
+                    if (item.id.startsWith("recent_")) {
+                        shellExecutors.find { it.id == activeExecutorId }
+                            ?.executeCommand(item.title)
+                    } else {
+                        item.action()
+                    }
+                    showCommandPalette = false
+                },
                 onDismiss = { showCommandPalette = false }
             )
         }
@@ -1657,6 +1666,37 @@ class MainActivity : ComponentActivity() {
              * (physical keyboard KeyDown) dan onValueChange (soft keyboard commitText). */
             var enterHandledByKeyEvent by remember { mutableStateOf(false) }
 
+            /* Wave-3: Live-update RUNNING blocks from terminal stream. */
+            LaunchedEffect(activeExecutor.id, screenDirty, blockMode) {
+                if (!blockMode || !blockManager.hasRunningBlock()) return@LaunchedEffect
+                val clean = activeExecutor.getCleanOutput()
+                val running = blockManager.blocks.lastOrNull {
+                    it.status == CommandBlock.BlockStatus.RUNNING
+                } ?: return@LaunchedEffect
+                val idx = clean.lastIndexOf(running.command)
+                val out = if (idx >= 0) {
+                    clean.substring(idx + running.command.length).trim()
+                } else {
+                    clean.takeLast(800)
+                }
+                val tail = clean.takeLast(120)
+                val promptBack = Regex("""(?:tunnel@android|[\w.-]+@[\w.-]+):[^\n]*[$#]\s*$""")
+                    .containsMatchIn(tail) ||
+                    Regex("""root@ubuntu:[^\n]*#\s*$""").containsMatchIn(tail)
+                if (promptBack && out.isNotBlank()) {
+                    val status = when {
+                        out.lowercase().contains("command not found") ||
+                            out.lowercase().contains("permission denied") ||
+                            out.lowercase().contains("no such file") ||
+                            out.lowercase().contains(": error") -> CommandBlock.BlockStatus.ERROR
+                        else -> CommandBlock.BlockStatus.SUCCESS
+                    }
+                    blockManager.completeRunning(out, status)
+                } else {
+                    blockManager.updateRunningOutput(out)
+                }
+            }
+
             /* Phase 26: Fix auto-error-detection terlalu agresif.
              * Old code: trigger pada setiap output chunk yang mengandung "error"
              * → false positive untuk `grep error`, `cat error.log`, dll.
@@ -1775,11 +1815,17 @@ class MainActivity : ComponentActivity() {
                         val helpText = buildHelpText()
                         activeExecutor.emulator.process("\u001B[36m$helpText\u001B[0m\n")
                         activeExecutor.triggerScreenUpdate()
+                        if (blockMode) {
+                            blockManager.completeRunning(helpText, CommandBlock.BlockStatus.SUCCESS)
+                        }
                     }
                     cmd == "clear" -> {
                         /* Clear screen buffer lokal - tidak kirim ke shell.
                          * Local clear - don't send to shell. */
                         activeExecutor.clearScreen()
+                        if (blockMode) {
+                            blockManager.completeRunning("(cleared)", CommandBlock.BlockStatus.SUCCESS)
+                        }
                     }
                     cmd == "setup-storage" -> {
                         activeExecutor.emulator.process(
@@ -1857,6 +1903,82 @@ class MainActivity : ComponentActivity() {
                     return "\u001B$char"
                 }
                 return char.toString()
+            }
+
+            /**
+             * Wave-3: Unified soft-IME / BasicTextField handler for normal, split, and block modes.
+             * Handles: append, equal-length single-char replace (some IMEs), backspace, Enter flag.
+             */
+            fun applyImeValueChange(
+                newValue: String,
+                lastInputValue: String,
+                setLast: (String) -> Unit,
+                setHidden: (String) -> Unit
+            ) {
+                if (newValue == lastInputValue) return
+
+                fun processChar(ch: Char) {
+                    when (ch) {
+                        '\n', '\r' -> {
+                            if (!enterHandledByKeyEvent) {
+                                processInput(activeExecutor.currentCommandBuffer + "\n")
+                                activeExecutor.currentCommandBuffer = ""
+                            }
+                            enterHandledByKeyEvent = false
+                            setHidden("")
+                            setLast("")
+                        }
+                        '\u007F', '\b' -> {
+                            if (activeExecutor.currentCommandBuffer.isNotEmpty()) {
+                                activeExecutor.currentCommandBuffer =
+                                    activeExecutor.currentCommandBuffer.dropLast(1)
+                            }
+                            activeExecutor.writeRaw("\u007F")
+                        }
+                        else -> {
+                            val translated = handleChar(ch)
+                            activeExecutor.currentCommandBuffer += translated
+                            activeExecutor.writeRaw(translated)
+                        }
+                    }
+                }
+
+                when {
+                    newValue.startsWith(lastInputValue) -> {
+                        val added = newValue.substring(lastInputValue.length)
+                        for (ch in added) processChar(ch)
+                        if (!added.contains('\n') && !added.contains('\r')) {
+                            setLast(newValue)
+                        }
+                    }
+                    lastInputValue.startsWith(newValue) -> {
+                        val deleted = lastInputValue.length - newValue.length
+                        repeat(deleted.coerceAtLeast(0)) {
+                            if (activeExecutor.currentCommandBuffer.isNotEmpty()) {
+                                activeExecutor.currentCommandBuffer =
+                                    activeExecutor.currentCommandBuffer.dropLast(1)
+                            }
+                            activeExecutor.writeRaw("\u007F")
+                        }
+                        setLast(newValue)
+                    }
+                    else -> {
+                        if (newValue.length == 1 && lastInputValue.length == 1) {
+                            if (activeExecutor.currentCommandBuffer.isNotEmpty()) {
+                                activeExecutor.currentCommandBuffer =
+                                    activeExecutor.currentCommandBuffer.dropLast(1)
+                            }
+                            activeExecutor.writeRaw("\u007F")
+                            processChar(newValue[0])
+                            if (newValue[0] != '\n' && newValue[0] != '\r') setLast(newValue)
+                        } else {
+                            for (ch in newValue) processChar(ch)
+                            if (!newValue.contains('\n') && !newValue.contains('\r')) {
+                                setLast(newValue)
+                            }
+                        }
+                    }
+                }
             }
 
             /** Map Compose Key to char untuk Alt+key handling.
@@ -2093,23 +2215,11 @@ class MainActivity : ComponentActivity() {
                                 BasicTextField(
                                     value = hiddenInput,
                                     onValueChange = { newValue ->
-                                        val oldText = lastInputValue
-                                        lastInputValue = newValue
-                                        if (newValue.length > oldText.length) {
-                                            val added = newValue.substring(oldText.length)
-                                            for (ch in added) {
-                                                when (ch) {
-                                                    '\n', '\r' -> {
-                                                        processInput(activeExecutor.currentCommandBuffer + "\n")
-                                                        activeExecutor.currentCommandBuffer = ""
-                                                        hiddenInput = ""; lastInputValue = ""
-                                                    }
-                                                    '\u007F', '\b' -> { if (activeExecutor.currentCommandBuffer.isNotEmpty()) activeExecutor.currentCommandBuffer = activeExecutor.currentCommandBuffer.dropLast(1); activeExecutor.writeRaw("\u007F") }
-                                                    else -> { val t = handleChar(ch); activeExecutor.currentCommandBuffer += t; activeExecutor.writeRaw(t) }
-                                                }
-                                            }
-                                        }
-                                        /* Phase 26: JANGAN reset hiddenInput di sini (IME confused). */
+                                        applyImeValueChange(
+                                            newValue, lastInputValue,
+                                            setLast = { lastInputValue = it },
+                                            setHidden = { hiddenInput = it }
+                                        )
                                     },
                                     textStyle = TextStyle(color = Color.Transparent),
                                     cursorBrush = SolidColor(Color.Transparent),
@@ -2125,7 +2235,6 @@ class MainActivity : ComponentActivity() {
                                     fontSizeState = terminalFontSize,
                                     onFontSizeChange = {
                                         terminalFontSize = it
-                                        /* Phase 26: Persist fontSize. */
                                         getSharedPreferences("TunnelUI", Context.MODE_PRIVATE)
                                             .edit().putFloat("fontSize", it).apply()
                                     }
@@ -2169,23 +2278,11 @@ class MainActivity : ComponentActivity() {
                             BasicTextField(
                                 value = hiddenInput,
                                 onValueChange = { newValue ->
-                                    val oldText = lastInputValue
-                                    lastInputValue = newValue
-                                    if (newValue.length > oldText.length) {
-                                        val added = newValue.substring(oldText.length)
-                                        for (ch in added) {
-                                            when (ch) {
-                                                '\n', '\r' -> {
-                                                    processInput(activeExecutor.currentCommandBuffer + "\n")
-                                                    activeExecutor.currentCommandBuffer = ""
-                                                    hiddenInput = ""; lastInputValue = ""
-                                                }
-                                                '\u007F', '\b' -> { if (activeExecutor.currentCommandBuffer.isNotEmpty()) activeExecutor.currentCommandBuffer = activeExecutor.currentCommandBuffer.dropLast(1); activeExecutor.writeRaw("\u007F") }
-                                                else -> { val t = handleChar(ch); activeExecutor.currentCommandBuffer += t; activeExecutor.writeRaw(t) }
-                                            }
-                                        }
-                                    }
-                                    /* Phase 26: JANGAN reset hiddenInput di sini (IME confused). */
+                                    applyImeValueChange(
+                                        newValue, lastInputValue,
+                                        setLast = { lastInputValue = it },
+                                        setHidden = { hiddenInput = it }
+                                    )
                                 },
                                 textStyle = TextStyle(color = Color.Transparent),
                                 cursorBrush = SolidColor(Color.Transparent),
@@ -2244,40 +2341,11 @@ class MainActivity : ComponentActivity() {
                         BasicTextField(
                             value = hiddenInput,
                             onValueChange = { newValue ->
-                                val oldText = lastInputValue
-                                lastInputValue = newValue
-
-                                if (newValue.length > oldText.length) {
-                                    val added = newValue.substring(oldText.length)
-                                    for (ch in added) {
-                                        when (ch) {
-                                            '\n', '\r' -> {
-                                                /* Phase 36: Enter dari soft keyboard — handle di sini.
-                                                 * Cek flag: jika handleKeyEvent sudah handle (physical keyboard),
-                                                 * skip untuk mencegah double-fire. */
-                                                if (!enterHandledByKeyEvent) {
-                                                    processInput(activeExecutor.currentCommandBuffer + "\n")
-                                                    activeExecutor.currentCommandBuffer = ""
-                                                    hiddenInput = ""
-                                                    lastInputValue = ""
-                                                }
-                                                enterHandledByKeyEvent = false
-                                            }
-                                            '\u007F', '\b' -> {
-                                                if (activeExecutor.currentCommandBuffer.isNotEmpty()) {
-                                                    activeExecutor.currentCommandBuffer = activeExecutor.currentCommandBuffer.dropLast(1)
-                                                }
-                                                activeExecutor.writeRaw("\u007F")
-                                            }
-                                            else -> {
-                                                val translated = handleChar(ch)
-                                                activeExecutor.currentCommandBuffer += translated
-                                                activeExecutor.writeRaw(translated)
-                                            }
-                                        }
-                                    }
-                                }
-                                /* JANGAN reset hiddenInput di sini — IME confused. */
+                                applyImeValueChange(
+                                    newValue, lastInputValue,
+                                    setLast = { lastInputValue = it },
+                                    setHidden = { hiddenInput = it }
+                                )
                             },
                             textStyle = TextStyle(color = Color.Transparent),
                             cursorBrush = SolidColor(Color.Transparent),
@@ -2310,9 +2378,13 @@ class MainActivity : ComponentActivity() {
                             onScroll = { delta ->
                                 /* Forward ke TerminalScreenView internal scroll (handled di composable). */
                             },
-                            /* Phase 24: External fontSize state untuk persist pinch-to-zoom. */
+                            /* Phase 24 + Wave-3: Persist fontSize in normal mode too. */
                             fontSizeState = terminalFontSize,
-                            onFontSizeChange = { terminalFontSize = it },
+                            onFontSizeChange = {
+                                terminalFontSize = it
+                                getSharedPreferences("TunnelUI", Context.MODE_PRIVATE)
+                                    .edit().putFloat("fontSize", it).apply()
+                            },
                             /* Phase 53: Paste callback for floating selection toolbar. */
                             onPasteRequested = { pasteFromClipboard(activeExecutor) }
                         )
