@@ -2887,6 +2887,7 @@ class MainActivity : ComponentActivity() {
             images = imagesToSend
         )
         chatMessages.add(userMsg)
+        trimChatIfNeeded()
         /* Clear pending images setelah di-attach ke pesan. */
         pendingImages.clear()
 
