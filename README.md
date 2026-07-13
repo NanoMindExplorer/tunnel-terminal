@@ -5,7 +5,7 @@
 ![Architecture](https://img.shields.io/badge/Architecture-NDK%20%2B%20Jetpack%20Compose-purple)
 ![AI](https://img.shields.io/badge/AI-Multi%20Provider%20%2B%20Vision%20%2B%20MCP-cyan)
 ![Linux](https://img.shields.io/badge/Linux-Ubuntu%2024.04%20via%20proot-orange)
-![Version](https://img.shields.io/badge/version-7.8.0-blue)
+![Version](https://img.shields.io/badge/version-7.9.0-blue)
 ![Stability](https://img.shields.io/badge/stability-production-green)
 
 ## Quick Links
@@ -85,6 +85,8 @@ Terminal Android konvensional hanya menampilkan teks dan mengeksekusi command. T
 **UX Wave 12 (terminal polish):** safe paste (bracketed / flatten newlines), DECCKM arrows for vim/less, ExtraKeys `^C ^D ^Z ^L ^U ^W` + F5–F12, jump-to-bottom, faster row render, IME sync after history/paste.
 
 **UX Wave 13:** select/copy dari scrollback, ExtraKeys key-repeat (panah/BKSP), split pane tap-to-activate, ukuran PTY awal dari display (local/Ubuntu/SSH).
+
+**UX Wave 14:** `find <query>` di scrollback, `open-url` / Open URL chip, mouse wheel + mode 1000/1006, restart session **tanpa hapus history**, ExtraKeys F1–F4 + `^A`/`^E`.
 
 ## 🐧 Linux Environment (Ubuntu via proot)
 

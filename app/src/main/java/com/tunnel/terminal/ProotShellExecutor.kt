@@ -56,7 +56,7 @@ class ProotShellExecutor(
                 }
             }
         } else {
-            "\n\u001B[33m[Ubuntu session exited. Tap screen to restart.]\u001B[0m\n"
+            "\n\u001B[33m[Ubuntu session exited. Tap screen to restart — history kept.]\u001B[0m\n"
         }
     }
 
@@ -171,7 +171,10 @@ class ProotShellExecutor(
 
     override suspend fun restart() {
         destroy()
-        rewireEmulator()
+        /* Wave-14: Preserve scrollback across Ubuntu session restart. */
+        rebindEmulatorCallback()
+        emulator.process(reconnectBanner())
+        triggerScreenUpdate()
         start()
     }
 }

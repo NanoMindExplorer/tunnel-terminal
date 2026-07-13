@@ -82,7 +82,7 @@ abstract class PtySessionBase(
 
     /** Message shown when the process exits naturally. */
     protected open fun processExitMessage(): String =
-        "\n\u001B[33m[Process Exited. Tap screen to restart session.]\u001B[0m\n"
+        "\n\u001B[33m[Process exited. Tap screen to restart — history will be kept.]\u001B[0m\n"
 
     protected fun resetSessionBuffers() {
         synchronized(outputLock) { outputBuffer.setLength(0) }
@@ -250,6 +250,18 @@ abstract class PtySessionBase(
             it.writeCallback = { data -> writeRaw(data) }
         }
     }
+
+    /**
+     * Wave-14: Re-bind writeCallback without wiping scrollback/screen.
+     * Used by restart so user history survives session death.
+     */
+    protected fun rebindEmulatorCallback() {
+        emulator.writeCallback = { data -> writeRaw(data) }
+    }
+
+    /** Wave-14: Banner appended on reconnect (does not clear screen). */
+    protected open fun reconnectBanner(): String =
+        "\n\u001B[33m[Session restarted — scrollback preserved. Tap output area if keyboard is hidden.]\u001B[0m\n"
 
     companion object {
         private val globalIdCounter = AtomicInteger(0)

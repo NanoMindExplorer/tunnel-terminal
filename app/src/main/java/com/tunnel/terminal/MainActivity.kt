@@ -1478,6 +1478,28 @@ class MainActivity : ComponentActivity() {
         imeFieldLast = ""
     }
 
+    /** Wave-14: Open http(s) URL in external browser. */
+    private fun openExternalUrl(url: String) {
+        if (!UrlOpenUtils.isSafeHttpUrl(url)) {
+            Toast.makeText(this, "URL not allowed: $url", Toast.LENGTH_SHORT).show()
+            return
+        }
+        try {
+            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            startActivity(intent)
+        } catch (e: Exception) {
+            Toast.makeText(this, "Cannot open URL: ${e.message}", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    /** Wave-14: Dead-session overlay text by session type. */
+    private fun deadSessionLabel(session: TerminalSession): String = when (session.sessionType) {
+        "ssh" -> "SSH disconnected.\nTap to reconnect\n(history preserved)."
+        "ubuntu" -> "Ubuntu session exited.\nTap to restart\n(history preserved)."
+        else -> "Session exited.\nTap to restart\n(history preserved)."
+    }
+
     /* ─── Compose UI ─── */
     @OptIn(ExperimentalMaterial3Api::class)
     @Composable
@@ -1587,6 +1609,21 @@ class MainActivity : ComponentActivity() {
                 /* Wave-10: Copy output, bookmarks, rename tab, keep screen on. */
                 add(PaletteItem("copy_output", "Copy last terminal output", "Command", Icons.Default.ContentCopy, PaletteCategory.COMMAND) {
                     shellExecutors.find { it.id == activeExecutorId }?.let { copyLastOutput(it) }
+                })
+                add(PaletteItem("find_scrollback", "Find in scrollback…", "Command", Icons.Default.Search, PaletteCategory.COMMAND) {
+                    shellExecutors.find { it.id == activeExecutorId }?.let { exec ->
+                        exec.emulator.process(
+                            "\u001B[36mType: find <query>  (e.g. find error)\u001B[0m\n"
+                        )
+                        exec.triggerScreenUpdate()
+                        insertIntoTerminal("find ")
+                    }
+                })
+                add(PaletteItem("open_url_from_output", "Open URL from last output", "Command", Icons.Default.Link, PaletteCategory.COMMAND) {
+                    val exec = shellExecutors.find { it.id == activeExecutorId } ?: return@PaletteItem
+                    val url = UrlOpenUtils.firstUrl(exec.getCleanOutput().takeLast(8000))
+                    if (url != null) openExternalUrl(url)
+                    else Toast.makeText(this@MainActivity, "No URL in recent output", Toast.LENGTH_SHORT).show()
                 })
                 add(PaletteItem("bookmark_list", "List directory bookmarks", "Command", Icons.Default.Bookmarks, PaletteCategory.COMMAND) {
                     shellExecutors.find { it.id == activeExecutorId }?.let { exec ->
@@ -2173,6 +2210,8 @@ class MainActivity : ComponentActivity() {
                         syncImeLine(next)
                         return
                     }
+                    "^A" -> { activeExecutor.writeRaw(1.toChar().toString()); return }
+                    "^E" -> { activeExecutor.writeRaw(5.toChar().toString()); return }
                 }
                 val emu = activeExecutor.emulator
                 val ansiCode: String = when (key) {
@@ -2182,8 +2221,9 @@ class MainActivity : ComponentActivity() {
                     "↓" -> emu.cursorKey('B')
                     "→" -> emu.cursorKey('C')
                     "←" -> emu.cursorKey('D')
-                    "HOME" -> "\u001B[H"
-                    "END" -> "\u001B[F"
+                    /* Wave-14: xterm HOME/END (works better with bash/readline). */
+                    "HOME" -> "\u001B[1~"
+                    "END" -> "\u001B[4~"
                     "PGUP" -> "\u001B[5~"
                     "PGDN" -> "\u001B[6~"
                     "BKSP" -> {
@@ -2199,6 +2239,10 @@ class MainActivity : ComponentActivity() {
                     "DEL" -> "\u001B[3~"
                     "CTRL" -> { isCtrlActive = !isCtrlActive; "" }
                     "ALT" -> { isAltActive = !isAltActive; "" }
+                    "F1" -> emu.functionKey(1)
+                    "F2" -> emu.functionKey(2)
+                    "F3" -> emu.functionKey(3)
+                    "F4" -> emu.functionKey(4)
                     "F5" -> emu.functionKey(5)
                     "F6" -> emu.functionKey(6)
                     "F7" -> emu.functionKey(7)
@@ -2264,6 +2308,8 @@ class MainActivity : ComponentActivity() {
                     cmd == "font-reset" ||
                     cmd == "copy-output" ||
                     cmd == "bookmark" || cmd.startsWith("bookmark ") ||
+                    cmd == "find" || cmd.startsWith("find ") ||
+                    cmd == "open-url" || cmd.startsWith("open-url ") ||
                     cmd.startsWith("open ") ||
                     (activeExecutor.sessionType == "ubuntu" &&
                         (cmd.startsWith("systemctl ") || cmd.startsWith("service ")))
@@ -2405,6 +2451,33 @@ class MainActivity : ComponentActivity() {
                         if (blockMode) {
                             blockManager.completeRunning(msg, CommandBlock.BlockStatus.SUCCESS)
                         }
+                    }
+                    cmd == "find" || cmd.startsWith("find ") -> {
+                        val q = cmd.removePrefix("find").trim()
+                        val msg = if (q.isBlank()) {
+                            "Usage: find <query>   (search scrollback + screen)"
+                        } else {
+                            val lines = activeExecutor.emulator.exportPlainLines(2000)
+                            val hits = ScrollbackSearch.find(lines, q, ignoreCase = true)
+                            ScrollbackSearch.formatHits(hits, q)
+                        }
+                        activeExecutor.emulator.process("\u001B[36m$msg\u001B[0m\n")
+                        activeExecutor.triggerScreenUpdate()
+                        if (blockMode) {
+                            blockManager.completeRunning(msg, CommandBlock.BlockStatus.SUCCESS)
+                        }
+                    }
+                    cmd == "open-url" || cmd.startsWith("open-url ") -> {
+                        val raw = cmd.removePrefix("open-url").trim()
+                        val url = UrlOpenUtils.firstUrl(raw) ?: UrlOpenUtils.firstUrl(activeExecutor.getCleanOutput().takeLast(4000))
+                        val msg = if (url == null) {
+                            "No http(s) URL found. Usage: open-url https://…"
+                        } else {
+                            openExternalUrl(url)
+                            "Opening $url"
+                        }
+                        activeExecutor.emulator.process("\u001B[36m$msg\u001B[0m\n")
+                        activeExecutor.triggerScreenUpdate()
                     }
                     cmd.startsWith("open ") -> {
                         val fileName = cmd.removePrefix("open ").trim()
@@ -2828,6 +2901,8 @@ class MainActivity : ComponentActivity() {
                                     theme = currentTheme,
                                     onTap = { try { focusRequester.requestFocus(); if (!hasPhysicalKeyboard) keyboardController?.show() } catch (_: Exception) {} },
                                     onPasteRequested = { pasteFromClipboard(activeExecutor) },
+                                    onOpenUrl = { openExternalUrl(it) },
+                                    deadSessionMessage = deadSessionLabel(activeExecutor),
                                     fontSizeState = terminalFontSize,
                                     onFontSizeChange = {
                                         terminalFontSize = it
@@ -2856,6 +2931,8 @@ class MainActivity : ComponentActivity() {
                                             }
                                         },
                                         onPasteRequested = { pasteFromClipboard(exec) },
+                                        onOpenUrl = { openExternalUrl(it) },
+                                        deadSessionMessage = deadSessionLabel(exec),
                                         fontSizeState = terminalFontSize,
                                         onFontSizeChange = {
                                             terminalFontSize = it
@@ -2975,19 +3052,17 @@ class MainActivity : ComponentActivity() {
                                     if (!hasPhysicalKeyboard) keyboardController?.show()
                                 } catch (_: Exception) {}
                             },
-                            /* Phase 19.5: Mouse scroll wheel untuk scroll terminal history. */
-                            onScroll = { delta ->
-                                /* Forward ke TerminalScreenView internal scroll (handled di composable). */
-                            },
-                            /* Phase 24 + Wave-3: Persist fontSize in normal mode too. */
+                            /* Wave-14: Wheel handled inside TerminalScreenView. */
+                            onScroll = { },
                             fontSizeState = terminalFontSize,
                             onFontSizeChange = {
                                 terminalFontSize = it
                                 getSharedPreferences("TunnelUI", Context.MODE_PRIVATE)
                                     .edit().putFloat("fontSize", it).apply()
                             },
-                            /* Phase 53: Paste callback for floating selection toolbar. */
-                            onPasteRequested = { pasteFromClipboard(activeExecutor) }
+                            onPasteRequested = { pasteFromClipboard(activeExecutor) },
+                            onOpenUrl = { openExternalUrl(it) },
+                            deadSessionMessage = deadSessionLabel(activeExecutor)
                         )
                     }
                     } /* end else (normal mode) */
@@ -3099,6 +3174,8 @@ class MainActivity : ComponentActivity() {
         - export-output     Export terminal transcript ke filesDir/exports/
         - export-chat       Export percakapan AI
         - copy-output       Salin output terminal ke clipboard
+        - find <query>      Cari teks di scrollback + layar
+        - open-url [url]    Buka URL http(s) (atau deteksi dari output)
         - bookmark list     Daftar bookmark direktori
         - bookmark add <n> [path]  Simpan bookmark (default: app home)
         - bookmark go <n|#>        cd ke bookmark
