@@ -468,6 +468,7 @@ class AIAgent(
             ## AI TOOL CALLS (Phase 22)
 
             ${AiToolCall.SYSTEM_PROMPT_TOOLS}
+            ${mcpManager?.generateSystemPromptSection() ?: ""}
 
             ## PRIORITAS: FILE/PROGRAM YANG DIMINTA USER vs CODE BLOCK PENJELASAN
 

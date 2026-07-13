@@ -33,7 +33,9 @@ class AgentTaskRunner(
     private val aiAgent: AIAgent,
     private val toolExecutor: ToolExecutor,
     private val permissionManager: PermissionManager,
-    private val markerExecutor: MarkerExecutor
+    private val markerExecutor: MarkerExecutor,
+    /* Wave-2: MCP tools in agent mode. */
+    private val mcpManager: McpManager? = null
 ) {
     companion object {
         private const val TAG = "AgentTaskRunner"
@@ -80,12 +82,14 @@ class AgentTaskRunner(
     /** Pola command berisiko yang tetap butuh approval manual walau mode otonom. */
     private val highRiskPatterns = listOf(
         Regex("""rm\s+-rf\s+/(?!root/workspace|home/)"""),  // rm -rf di luar workspace/home
-        Regex("""curl.*\|\s*(sh|bash)"""),                   // pipe ke shell dari internet
-        Regex("""wget.*\|\s*(sh|bash)"""),
+        Regex("""rm\s+-rf\s+\.(?:\s|$)"""),                 // rm -rf .
+        Regex("""curl.*\|\s*(sh|bash|python)"""),           // pipe ke shell/python dari internet
+        Regex("""wget.*\|\s*(sh|bash|python)"""),
         Regex("\\bdd\\b.*of="),                            // dd ke device
         Regex("""\bsudo\b"""),                               // sudo (tidak ada di proot, tapi jaga)
         Regex("mkfs\\."),  // format filesystem
         Regex(""">\s*/dev/sd[a-z]"""),                        // write langsung ke device
+        Regex("""chmod\s+-R\s+777"""),
         Regex(":\\(\\)\\s*\\{")  // fork bomb pattern
     )
 
@@ -210,7 +214,16 @@ class AgentTaskRunner(
                     return
                 }
 
-                // Risk assessment
+                /* Wave-2: Honor ALWAYS_DENY from PermissionManager. */
+                if (permissionManager.getPermission(call.tool) ==
+                    PermissionManager.PermissionState.ALWAYS_DENY
+                ) {
+                    history.add(StepRecord(call.displayText, "DITOLAK (Always Deny)", false, call.tool))
+                    events(AgentEvent.ToolResult(call.tool, call.displayText, "Ditolak (Always Deny)", false))
+                    continue
+                }
+
+                // Risk assessment + optional approval for high-risk actions
                 val riskReason = assessRisk(call)
                 if (riskReason != null) {
                     events(AgentEvent.NeedsApproval(call, riskReason))
@@ -225,17 +238,28 @@ class AgentTaskRunner(
                 }
 
                 /* Phase 52 fix (Bug #2): Eksekusi dengan success detection yang benar.
-                 * OLD BUG: success = !result.startsWith("Error") — tapi formatResultForAI()
-                 * selalu mulai dengan "Command: ", bukan "Error: ". Jadi success selalu true
-                 * bahkan untuk command yang gagal (exit code non-zero).
-                 * FIX: Untuk run_command, pakai CommandResult.isSuccess (exit code asli).
-                 * Untuk tool lain, tetap pakai string-match (mereka memang mulai dengan "Error:" kalau gagal). */
-                val (resultText, success) = if (call.tool == "run_command") {
-                    val execResult = executeViaMarker(call, session)
-                    execResult.text to execResult.success
-                } else {
-                    val text = toolExecutor.execute(call)
-                    text to (!text.startsWith("Error") && !text.startsWith("Ditolak"))
+                 * Wave-2: MCP tools routed via McpManager (not unknown tool). */
+                val (resultText, success) = when {
+                    call.tool == "run_command" -> {
+                        val execResult = executeViaMarker(call, session)
+                        execResult.text to execResult.success
+                    }
+                    call.tool.startsWith("mcp.") -> {
+                        val parts = call.tool.removePrefix("mcp.").split(".", limit = 2)
+                        if (parts.size != 2 || mcpManager == null) {
+                            "Error: MCP tool unavailable: ${call.tool}" to false
+                        } else {
+                            val argsJson = org.json.JSONObject()
+                            call.args.forEach { (k, v) -> argsJson.put(k, v) }
+                            val text = mcpManager.invokeTool(parts[0], parts[1], argsJson.toString())
+                            text to (!text.startsWith("Error") && !text.startsWith("MCP error") &&
+                                !text.startsWith("MCP invoke error"))
+                        }
+                    }
+                    else -> {
+                        val text = toolExecutor.execute(call)
+                        text to (!text.startsWith("Error") && !text.startsWith("Ditolak"))
+                    }
                 }
 
                 history.add(StepRecord(call.displayText, resultText.take(300), success, call.tool))
@@ -280,9 +304,17 @@ class AgentTaskRunner(
         }
         if (call.tool == "delete_file") {
             val path = call.args["path"] ?: ""
-            // Path relatif selalu di workspace (aman). Path absolut di luar workspace = berisiko.
-            if (path.startsWith("/") && !path.contains("workspace")) {
-                return "Menghapus file di luar workspace project: $path"
+            /* Wave-2: Prefer canonical sandbox check when path is absolute. */
+            if (path.startsWith("/")) {
+                try {
+                    val file = toolExecutor.resolvePathForAccess(path)
+                    val workspace = toolExecutor.workspaceRootFile().canonicalPath
+                    if (!SessionTargetResolver.isPathInside(file.canonicalPath, workspace)) {
+                        return "Menghapus file di luar workspace project: $path"
+                    }
+                } catch (e: Exception) {
+                    return "Menghapus file di luar workspace project: $path (${e.message})"
+                }
             }
         }
         return null

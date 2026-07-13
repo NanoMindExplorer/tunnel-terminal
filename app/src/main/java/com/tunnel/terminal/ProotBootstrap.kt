@@ -3,9 +3,11 @@ package com.tunnel.terminal
 import android.content.Context
 import android.util.Log
 import java.io.File
+import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.net.HttpURLConnection
 import java.net.URL
+import java.security.MessageDigest
 
 /**
  * ProotBootstrap — Mengelola instalasi Linux environment (proot + rootfs Ubuntu).
@@ -237,6 +239,12 @@ class ProotBootstrap(private val context: Context) {
             throw IllegalStateException(errorMsg)
         }
 
+        // 4.5 Wave-2: Verify SHA256 against official SHA256SUMS (fail closed).
+        // Try SHA256SUMS from each candidate release dir until one entry matches the file.
+        listener.onProgress("Memverifikasi integritas rootfs (SHA256)", 0)
+        verifyRootfsSha256(rootfsTarball, rootfsUrls, listener)
+        listener.onProgress("Memverifikasi integritas rootfs (SHA256)", 100)
+
         // 5. Ekstrak via tar bawaan Android (toybox).
         rootfsDir.mkdirs()
         listener.onProgress("Mengekstrak rootfs", 0)
@@ -361,6 +369,102 @@ class ProotBootstrap(private val context: Context) {
             Log.i(TAG, "Non-interactive apt environment setup: DEBIAN_FRONTEND=noninteractive, TZ=$tz")
         } catch (e: Exception) {
             Log.w(TAG, "Gagal setup non-interactive apt: ${e.message} — non-fatal, apt tetap jalan tapi mungkin prompt interaktif")
+        }
+    }
+
+    /**
+     * Wave-2: Download official SHA256SUMS for the release that produced [tarball],
+     * compute local digest, fail closed on mismatch or missing entry.
+     */
+    private fun verifyRootfsSha256(
+        tarball: File,
+        candidateUrls: List<String>,
+        listener: ProgressListener
+    ) {
+        if (!tarball.exists() || tarball.length() == 0L) {
+            throw IllegalStateException("Rootfs tarball kosong — tidak bisa verifikasi SHA256")
+        }
+        val actualHex = sha256Hex(tarball)
+        var lastVerifyError: Exception? = null
+
+        for (url in candidateUrls) {
+            val fileName = url.substringAfterLast('/')
+            val sumsUrl = url.substringBeforeLast('/') + "/SHA256SUMS"
+            try {
+                listener.onProgress("Mengunduh SHA256SUMS ($fileName)", 50)
+                val sumsText = downloadText(sumsUrl)
+                val expected = parseSha256Sums(sumsText, fileName)
+                    ?: throw IllegalStateException("Entry SHA256 untuk $fileName tidak ada di $sumsUrl")
+                if (!actualHex.equals(expected, ignoreCase = true)) {
+                    throw IllegalStateException(
+                        "SHA256 mismatch untuk $fileName.\n" +
+                            "Expected: $expected\n" +
+                            "Actual:   $actualHex\n" +
+                            "File ditolak (mungkin corrupt atau mirror tidak tepercaya)."
+                    )
+                }
+                Log.i(TAG, "SHA256 OK for $fileName ($actualHex)")
+                /* Persist which URL matched for debugging. */
+                File(baseDir, ".rootfs_sha256").writeText("$fileName $actualHex\n")
+                return
+            } catch (e: Exception) {
+                Log.w(TAG, "SHA256 verify via $sumsUrl gagal: ${e.message}")
+                lastVerifyError = e
+            }
+        }
+        try { tarball.delete() } catch (_: Exception) {}
+        throw IllegalStateException(
+            "Verifikasi SHA256 rootfs gagal (fail-closed). " +
+                (lastVerifyError?.message ?: "Tidak ada SHA256SUMS yang cocok.")
+        )
+    }
+
+    private fun sha256Hex(file: File): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+        FileInputStream(file).use { input ->
+            val buffer = ByteArray(64 * 1024)
+            var n: Int
+            while (input.read(buffer).also { n = it } != -1) {
+                digest.update(buffer, 0, n)
+            }
+        }
+        return digest.digest().joinToString("") { b -> "%02x".format(b) }
+    }
+
+    private fun parseSha256Sums(sumsText: String, fileName: String): String? {
+        for (line in sumsText.lineSequence()) {
+            val trimmed = line.trim()
+            if (trimmed.isEmpty() || trimmed.startsWith("#")) continue
+            /* Format: <hex>  <filename>  or  <hex> *<filename> */
+            val parts = trimmed.split(Regex("\\s+"), limit = 2)
+            if (parts.size < 2) continue
+            val hex = parts[0]
+            val name = parts[1].removePrefix("*").trim()
+            if (name == fileName || name.endsWith("/$fileName")) {
+                if (hex.matches(Regex("[0-9a-fA-F]{64}"))) return hex.lowercase()
+            }
+        }
+        return null
+    }
+
+    private fun downloadText(url: String): String {
+        val connection = (URL(url).openConnection() as HttpURLConnection).apply {
+            connectTimeout = 30000
+            readTimeout = 60000
+            instanceFollowRedirects = true
+            requestMethod = "GET"
+            setRequestProperty("User-Agent", "TunnelTerminal/7.2.3 (Android; Linux Environment)")
+            setRequestProperty("Accept", "text/plain, */*")
+        }
+        try {
+            connection.connect()
+            val code = connection.responseCode
+            if (code !in 200..299) {
+                throw IllegalStateException("HTTP $code saat download $url")
+            }
+            return connection.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
+        } finally {
+            connection.disconnect()
         }
     }
 

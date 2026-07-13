@@ -6,8 +6,11 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.unit.sp
+import android.util.Base64
 import com.jcraft.jsch.ChannelSftp
 import com.jcraft.jsch.ChannelShell
+import com.jcraft.jsch.HostKey
+import com.jcraft.jsch.HostKeyRepository
 import com.jcraft.jsch.JSch
 import com.jcraft.jsch.Session
 import com.jcraft.jsch.UserInfo
@@ -16,10 +19,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
-import java.io.BufferedReader
-import java.io.InputStreamReader
 import java.io.OutputStream
-import java.io.OutputStreamWriter
 import java.nio.ByteBuffer
 import java.nio.CharBuffer
 import java.nio.charset.CodingErrorAction
@@ -91,7 +91,10 @@ class SshShellExecutor(
 
     override val id: Int = globalIdCounter.incrementAndGet()
 
-    override var emulator = TerminalEmulator(themeHolder)
+    override var emulator = TerminalEmulator(themeHolder).also {
+        /* Wave-2: Wire DA/DSR responses back to SSH channel. */
+        it.writeCallback = { data -> writeRaw(data) }
+    }
 
     override var isAlive by mutableStateOf(false)
         private set
@@ -161,88 +164,91 @@ class SshShellExecutor(
                     session?.setPassword(config.password)
                 }
 
-                /* BUG-02 REAL FIX (Phase 34): Implementasi TOFU yang sebenarnya.
-                 * Phase 27 hanya ganti "no" → "ask" + baca knownHostKey tapi TIDAK PERNAH
-                 * membandingkan/menyimpan fingerprint. promptYesNo tetap return true.
+                /* Wave-2: Host key verification DURING key exchange (before password auth).
                  *
-                 * Fix sekarang:
-                 * 1. StrictHostKeyChecking="no" (JSch tidak block, kita verifikasi manual)
-                 * 2. Set connect, ambil host key dari session.getHostKey()
-                 * 3. Bandingkan dengan fingerprint tersimpan
-                 * 4. Jika baru → simpan. Jika berubah → disconnect + error (MITM).
+                 * OLD BUG: StrictHostKeyChecking=no + verify AFTER connect() — password/auth
+                 * already sent to a potentially MITM host before fingerprint check.
+                 *
+                 * FIX: Custom HostKeyRepository + StrictHostKeyChecking=ask so JSch checks
+                 * the server key in the KEX phase. promptYesNo handles TOFU (first connect)
+                 * and changed-key approval. Auth credentials are not sent until key accepted.
                  */
-                val hostKeyPrefs = context?.getSharedPreferences("TunnelSshHostKeys", Context.MODE_PRIVATE)
+                val hostKeyPrefs = context?.getSharedPreferences(
+                    SecureStorage.SSH_HOSTKEYS_PREFS, Context.MODE_PRIVATE
+                )
                 val hostKeyId = "${config.host}:${config.port}"
+                val knownFingerprint = hostKeyPrefs?.getString(hostKeyId, null)
+
+                if (hostKeyPrefs != null) {
+                    jsch.hostKeyRepository = PrefsHostKeyRepository(hostKeyPrefs, config.host, config.port)
+                }
 
                 session?.userInfo = object : UserInfo {
                     override fun getPassphrase(): String? = config.privateKeyPassphrase
                     override fun getPassword(): String? = config.password
                     override fun promptPassword(message: String?): Boolean = true
                     override fun promptPassphrase(message: String?): Boolean = true
-                    override fun promptYesNo(message: String?): Boolean = true
-                    override fun showMessage(message: String?) {}
+                    override fun promptYesNo(message: String?): Boolean {
+                        val msg = message ?: return false
+                        val looksLikeChange = msg.contains("changed", ignoreCase = true) ||
+                            msg.contains("mismatch", ignoreCase = true) ||
+                            msg.contains("WARNING", ignoreCase = true) ||
+                            (knownFingerprint != null && msg.contains("authenticity", ignoreCase = true).not()
+                                && msg.contains("changed", ignoreCase = true))
+                        /* Changed host key → blocking user dialog (default deny). */
+                        if (knownFingerprint != null && (
+                                msg.contains("changed", ignoreCase = true) ||
+                                    msg.contains("mismatch", ignoreCase = true)
+                                )
+                        ) {
+                            val approved = hostKeyChangeCallback?.invoke(
+                                knownFingerprint,
+                                msg.take(200)
+                            ) ?: false
+                            if (approved) {
+                                Log.w(tag, "SSH TOFU: User APPROVED host key change for $hostKeyId")
+                            }
+                            return approved
+                        }
+                        /* First connect (TOFU) — accept and let repository store the key. */
+                        if (knownFingerprint == null) {
+                            Log.i(tag, "SSH TOFU: First connect to $hostKeyId — accepting host key")
+                            return true
+                        }
+                        /* Unknown prompt with known host — deny by default. */
+                        return hostKeyChangeCallback?.invoke(knownFingerprint, msg.take(200)) ?: false
+                    }
+                    override fun showMessage(message: String?) {
+                        if (!message.isNullOrBlank()) {
+                            Log.i(tag, "SSH UserInfo: $message")
+                        }
+                    }
                 }
 
-                session?.setConfig("StrictHostKeyChecking", "no")
+                session?.setConfig("StrictHostKeyChecking", "ask")
                 session?.setConfig("PreferredAuthentications", "publickey,password,keyboard-interactive")
                 session?.connect(30000)
 
-                /* BUG-02 REAL FIX: Verifikasi host key SETELAH connect.
-                 * Phase 35 hotfix 2: getFingerPrint() di JSch 0.2.21 butuh parameter.
-                 * Pakai getKey() (raw key hex string) sebagai fingerprint alternatif. */
+                /* After successful KEX+auth, mirror fingerprint into prefs for UI/reset. */
                 val actualFingerprint = try {
-                    val hk = session?.getHostKey()
-                    /* getFingerPrint() butuh MessageDigest di JSch 0.2.21 — pakai getKey() saja. */
-                    "${hk?.getType() ?: ""}:${hk?.getKey() ?: ""}"
+                    val hk = session?.hostKey
+                    "${hk?.type ?: ""}:${hk?.key ?: ""}"
                 } catch (_: Exception) { "" }
 
-                if (actualFingerprint.isNotBlank()) {
-                    val knownFingerprint = hostKeyPrefs?.getString(hostKeyId, null)
-                    if (knownFingerprint == null) {
-                        /* First connect — simpan fingerprint. */
-                        hostKeyPrefs?.edit()?.putString(hostKeyId, actualFingerprint)?.apply()
-                        Log.i(tag, "SSH TOFU: First connect to $hostKeyId, fingerprint saved")
-                    } else if (knownFingerprint != actualFingerprint) {
-                        /* Phase 41 fix (CRIT-02): FINGERPRINT BERUBAH — tampilkan dialog blocking
-                         * ke user, BUKAN cuma throw exception yang di-log.
-                         *
-                         * OLD BUG: throw SecurityException → user lihat error message tapi
-                         * connection sudah di-disconnect sebelum user bisa konfirmasi. User
-                         * awam tidak akan sadar ada kemungkinan MITM.
-                         *
-                         * FIX: Panggil hostKeyChangeCallback (blocking) → UI tampilkan dialog
-                         * dengan fingerprint lama vs baru + tombol [Batalkan] (default) /
-                         * [Tetap lanjutkan — tidak disarankan]. User harus actively accept
-                         * risk sebelum connection diteruskan.
-                         *
-                         * Kalau callback tidak disediakan (backward compat), fallback ke
-                         * behavior lama (throw exception). */
-                        if (hostKeyChangeCallback != null) {
-                            val userApproved = hostKeyChangeCallback!!.invoke(knownFingerprint, actualFingerprint)
-                            if (!userApproved) {
-                                session?.disconnect()
-                                throw SecurityException(
-                                    "Koneksi dibatalkan oleh user — host key berubah untuk ${config.host}:${config.port}.\n" +
-                                    "Fingerprint lama: $knownFingerprint\n" +
-                                    "Fingerprint baru: $actualFingerprint\n" +
-                                    "Jika ini expected (mis. server reinstall), ketik 'ssh-reset-hostkeys' lalu connect ulang."
-                                )
-                            }
-                            /* User approved — update fingerprint stored. */
-                            hostKeyPrefs?.edit()?.putString(hostKeyId, actualFingerprint)?.apply()
-                            Log.w(tag, "SSH TOFU: User APPROVED host key change for $hostKeyId (potential MITM risk)")
-                            emulator.process("\u001B[33m[SSH] ⚠ Host key berubah — Anda memilih untuk melanjutkan. Fingerprint diperbarui.\u001B[0m\n")
-                        } else {
-                            /* Fallback: tidak ada callback → disconnect + throw (behavior lama). */
-                            session?.disconnect()
-                            throw SecurityException(
-                                "PERINGATAN KEAMANAN: Host key untuk ${config.host}:${config.port} telah berubah!\n" +
-                                "Ini bisa berarti server diganti, atau ada serangan Man-in-the-Middle.\n" +
-                                "Fingerprint sebelumnya: $knownFingerprint\n" +
-                                "Fingerprint sekarang: $actualFingerprint\n" +
-                                "Jika Anda yakin ini aman, ketik 'ssh-reset-hostkeys' di terminal untuk reset host keys."
-                            )
-                        }
+                if (actualFingerprint.isNotBlank() && hostKeyPrefs != null) {
+                    val previous = hostKeyPrefs.getString(hostKeyId, null)
+                    if (previous == null) {
+                        hostKeyPrefs.edit().putString(hostKeyId, actualFingerprint).apply()
+                        emulator.process(
+                            "\u001B[33m[SSH] TOFU: host key disimpan untuk $hostKeyId\u001B[0m\n" +
+                                "\u001B[33m  $actualFingerprint\u001B[0m\n"
+                        )
+                        Log.i(tag, "SSH TOFU: First connect fingerprint saved for $hostKeyId")
+                    } else if (previous != actualFingerprint) {
+                        hostKeyPrefs.edit().putString(hostKeyId, actualFingerprint).apply()
+                        emulator.process(
+                            "\u001B[33m[SSH] ⚠ Host key berubah — Anda memilih untuk melanjutkan. Fingerprint diperbarui.\u001B[0m\n"
+                        )
                     } else {
                         Log.i(tag, "SSH TOFU: Host key verified for $hostKeyId")
                     }
@@ -329,10 +335,15 @@ class SshShellExecutor(
         } catch (e: Exception) {
             Log.w(tag, "readLoop ended: ${e.message}")
         } finally {
-            /* BUG-14 fix: Clean up channel + session saat disconnect alami.
-             * Old code: hanya close inputStream — channel/session JSch leak. */
+            /* BUG-14 + Wave-2: Clean up channel + SFTP + session on natural disconnect. */
             try { inputStream.close() } catch (_: Exception) {}
+            try { sftpChannel?.disconnect() } catch (_: Exception) {}
+            sftpChannel = null
             try { channel?.disconnect() } catch (_: Exception) {}
+            channel = null
+            try { session?.disconnect() } catch (_: Exception) {}
+            session = null
+            channelOutputStream = null
             try { emulator.flush() } catch (_: Exception) {}
             isAlive = false
             emulator.process("\n\u001B[33m[SSH Disconnected. Tap screen to reconnect.]\u001B[0m\n")
@@ -342,7 +353,9 @@ class SshShellExecutor(
 
     override suspend fun restart() {
         destroy()
-        emulator = TerminalEmulator(themeHolder)
+        emulator = TerminalEmulator(themeHolder).also {
+            it.writeCallback = { data -> writeRaw(data) }
+        }
         start()
     }
 
@@ -512,4 +525,61 @@ class SshShellExecutor(
     companion object {
         private val globalIdCounter = java.util.concurrent.atomic.AtomicInteger(0)
     }
+}
+
+/**
+ * Wave-2: HostKeyRepository backed by SharedPreferences.
+ * Used so JSch verifies the server host key during KEX (before password auth).
+ */
+private class PrefsHostKeyRepository(
+    private val prefs: android.content.SharedPreferences,
+    private val configHost: String,
+    private val configPort: Int
+) : HostKeyRepository {
+
+    private fun storageId(host: String): String {
+        /* JSch may pass "host", "[host]:port", or "host:port". */
+        val cleaned = host.removePrefix("[").replace("]", "")
+        return if (cleaned.contains(":")) cleaned else "$cleaned:$configPort"
+    }
+
+    private fun encodeKey(key: ByteArray): String =
+        Base64.encodeToString(key, Base64.NO_WRAP)
+
+    override fun check(host: String?, key: ByteArray?): Int {
+        if (host == null || key == null) return HostKeyRepository.NOT_INCLUDED
+        val id = storageId(host)
+        val known = prefs.getString(id, null) ?: return HostKeyRepository.NOT_INCLUDED
+        val b64 = encodeKey(key)
+        val knownKey = known.substringAfter(':', known)
+        return if (knownKey == b64 || known.endsWith(b64) || known == b64) {
+            HostKeyRepository.OK
+        } else {
+            HostKeyRepository.CHANGED
+        }
+    }
+
+    override fun add(hostkey: HostKey?, ui: UserInfo?) {
+        if (hostkey == null) return
+        val id = storageId(hostkey.host ?: "$configHost:$configPort")
+        val value = "${hostkey.type}:${hostkey.key}"
+        prefs.edit().putString(id, value).apply()
+        /* Also store under config host:port for UI/reset helpers. */
+        prefs.edit().putString("$configHost:$configPort", value).apply()
+    }
+
+    override fun remove(host: String?, type: String?) {
+        if (host == null) return
+        prefs.edit().remove(storageId(host)).apply()
+    }
+
+    override fun remove(host: String?, type: String?, key: ByteArray?) {
+        remove(host, type)
+    }
+
+    override fun getHostKey(): Array<HostKey> = emptyArray()
+
+    override fun getHostKey(host: String?, type: String?): Array<HostKey> = emptyArray()
+
+    override fun getKnownHostsRepositoryID(): String = SecureStorage.SSH_HOSTKEYS_PREFS
 }
