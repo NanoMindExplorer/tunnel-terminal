@@ -53,16 +53,38 @@ object ModelFetcher {
         if (settings.baseUrl.isBlank()) {
             return@withContext Result.failure(IllegalArgumentException("Base URL kosong"))
         }
-        /* Local providers tidak butuh API key. */
-        val isLocal = settings.baseUrl.contains("localhost") || settings.baseUrl.contains("127.0.0.1")
+        /* Local providers tidak butuh API key — parse host, not substring. */
+        val base = settings.baseUrl.trimEnd('/')
+        val parsed = try { URL(if (base.contains("://")) base else "https://$base") } catch (e: Exception) {
+            return@withContext Result.failure(IllegalArgumentException("Base URL invalid: ${e.message}"))
+        }
+        val host = parsed.host.lowercase()
+        val isLocal = host == "localhost" || host == "127.0.0.1" || host == "10.0.2.2" || host == "::1"
         if (!isLocal && settings.apiKey.isBlank()) {
             return@withContext Result.failure(IllegalArgumentException("API Key kosong"))
         }
 
         var connection: HttpURLConnection? = null
         try {
-            val apiUrl = "${settings.baseUrl.trimEnd('/')}/models"
+            /* Wave-5: Anthropic native has no OpenAI /models — skip gracefully. */
+            if (settings.isAnthropicNative) {
+                return@withContext Result.success(
+                    listOf(
+                        ModelInfo("claude-3-5-sonnet-latest", "Claude 3.5 Sonnet", "anthropic", true),
+                        ModelInfo("claude-3-5-haiku-latest", "Claude 3.5 Haiku", "anthropic", true),
+                        ModelInfo("claude-3-opus-latest", "Claude 3 Opus", "anthropic", true),
+                        ModelInfo("claude-sonnet-4-20250514", "Claude Sonnet 4", "anthropic", true)
+                    )
+                )
+            }
+            val apiUrl = "$base/models"
             val url = URL(apiUrl)
+            /* Wave-5: same HTTPS policy as chat completions. */
+            if (!url.protocol.equals("https", ignoreCase = true) && !isLocal) {
+                return@withContext Result.failure(
+                    IllegalArgumentException("Security: only HTTPS allowed for external model list")
+                )
+            }
             connection = (url.openConnection() as HttpURLConnection).apply {
                 requestMethod = "GET"
                 setRequestProperty("Accept", "application/json")
@@ -71,7 +93,7 @@ object ModelFetcher {
                 }
                 setRequestProperty("HTTP-Referer", "https://github.com/NanoMindExplorer/tunnel-terminal")
                 setRequestProperty("X-Title", "Tunnel Terminal")
-                setRequestProperty("User-Agent", "TunnelTerminal/4.8.0 (Android)")
+                setRequestProperty("User-Agent", "TunnelTerminal/${BuildConfig.VERSION_NAME} (Android)")
                 connectTimeout = 15000
                 readTimeout = 15000
             }

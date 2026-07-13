@@ -18,8 +18,43 @@ data class TerminalCell(
     var bold: Boolean = false,
     var italic: Boolean = false,
     var underline: Boolean = false,
-    var reverse: Boolean = false
+    var reverse: Boolean = false,
+    /** Wave-5: true if this cell is the right half of a double-width glyph (CJK/emoji). */
+    var wideContinuation: Boolean = false
 )
+
+/**
+ * Wave-5: Approximate terminal column width (wcwidth-lite).
+ * 0 = combining / zero-width, 1 = normal, 2 = CJK / many emoji.
+ */
+object CharDisplayWidth {
+    fun of(ch: Char): Int {
+        val type = Character.getType(ch)
+        if (type == Character.NON_SPACING_MARK.toInt() ||
+            type == Character.ENCLOSING_MARK.toInt() ||
+            type == Character.FORMAT.toInt()
+        ) {
+            return 0
+        }
+        val code = ch.code
+        /* Common East Asian / fullwidth ranges (BMP). */
+        if (code in 0x1100..0x115F ||
+            code in 0x2E80..0xA4CF ||
+            code in 0xAC00..0xD7A3 ||
+            code in 0xF900..0xFAFF ||
+            code in 0xFE10..0xFE19 ||
+            code in 0xFE30..0xFE6F ||
+            code in 0xFF00..0xFF60 ||
+            code in 0xFFE0..0xFFE6
+        ) {
+            return 2
+        }
+        /* High surrogates: treat as width 2 (emoji / astral — rough). */
+        if (ch.isHighSurrogate()) return 2
+        if (ch.isLowSurrogate()) return 0
+        return 1
+    }
+}
 
 /**
  * ThemeHolder - holder sederhana untuk tema aktif yang bisa di-share
@@ -99,7 +134,7 @@ class TerminalEmulator(private val themeHolder: ThemeHolder = ThemeHolder()) {
     private val defaultBg: Color get() = themeHolder.theme.background
 
     /** BUG-08 fix: Helper untuk membuat cell kosong dengan warna tema aktif. */
-    private fun blankCell() = TerminalCell(fgColor = defaultFg, bgColor = defaultBg)
+    private fun blankCell() = TerminalCell(fgColor = defaultFg, bgColor = defaultBg, wideContinuation = false)
 
     /** Scrolling region (top, bottom inclusive, 0-indexed). */
     private var scrollTop = 0
@@ -478,6 +513,17 @@ class TerminalEmulator(private val themeHolder: ThemeHolder = ThemeHolder()) {
                 }
                 '\u0007' -> { /* bell - ignore */ }
                 else -> {
+                    val w = CharDisplayWidth.of(ch)
+                    if (w == 0) {
+                        /* Combining mark: attach to previous cell if possible. */
+                        continue
+                    }
+                    /* Wrap early if wide char won't fit on this line. */
+                    if (w == 2 && cursorCol >= cols - 1) {
+                        cursorCol = 0
+                        cursorRow++
+                        if (cursorRow > scrollBottom) scrollUp(cursorRow - scrollBottom)
+                    }
                     if (cursorRow in 0 until rows && cursorCol in 0 until cols) {
                         val cell = screen[cursorRow][cursorCol]
                         cell.char = ch
@@ -486,8 +532,20 @@ class TerminalEmulator(private val themeHolder: ThemeHolder = ThemeHolder()) {
                         cell.bold = currentBold
                         cell.italic = currentItalic
                         cell.underline = currentUnderline
+                        cell.wideContinuation = false
+                        cell.reverse = currentReverse
+                        if (w == 2 && cursorCol + 1 < cols) {
+                            val next = screen[cursorRow][cursorCol + 1]
+                            next.char = ' '
+                            next.fgColor = cell.fgColor
+                            next.bgColor = cell.bgColor
+                            next.wideContinuation = true
+                            next.bold = false
+                            next.italic = false
+                            next.underline = false
+                        }
                     }
-                    cursorCol++
+                    cursorCol += w
                     if (cursorCol >= cols) { cursorCol = 0; cursorRow++ }
                 }
             }

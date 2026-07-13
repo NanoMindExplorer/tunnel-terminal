@@ -25,6 +25,13 @@ import java.io.File
 class ContextManager(private val context: Context) {
     private val tag = "ContextManager"
 
+    /** Wave-5: Optional path resolver for sandboxed @file: mentions. */
+    private var pathResolver: ((String) -> File)? = null
+
+    fun setPathResolver(resolver: ((String) -> File)?) {
+        pathResolver = resolver
+    }
+
     /** Representasi satu mention yang di-resolve. */
     data class ResolvedMention(
         val mention: String,        // "@file:/sdcard/test.txt"
@@ -97,12 +104,42 @@ class ContextManager(private val context: Context) {
 
     private fun resolveFileMention(mention: String): ResolvedMention {
         val path = mention.removePrefix("@file:").trim()
-        val file = File(path)
-        return if (file.exists() && file.canRead()) {
+        /* Wave-5: Prefer sandboxed resolve (workspace / SAF); fall back to raw File. */
+        val file = try {
+            pathResolver?.invoke(path) ?: run {
+                val f = File(path)
+                if (!path.startsWith("/")) {
+                    File(context.filesDir, "workspace/$path")
+                } else f
+            }
+        } catch (e: Exception) {
+            return ResolvedMention(
+                mention, MentionType.FILE,
+                "Error: path not allowed or unreadable: $path (${e.message})", path
+            )
+        }
+        return if (file.exists() && file.canRead() && file.isFile) {
+            val content = try {
+                file.bufferedReader().use { r ->
+                    val sb = StringBuilder()
+                    val buf = CharArray(4096)
+                    var total = 0
+                    while (total < 5000) {
+                        val n = r.read(buf, 0, minOf(buf.size, 5000 - total))
+                        if (n < 0) break
+                        sb.append(buf, 0, n)
+                        total += n
+                    }
+                    if (r.read() != -1) sb.append("\n... (truncated)")
+                    sb.toString()
+                }
+            } catch (e: Exception) {
+                "Error reading file: ${e.message}"
+            }
             ResolvedMention(
                 mention = mention,
                 type = MentionType.FILE,
-                content = file.readText().take(5000),
+                content = content,
                 displayName = file.name
             )
         } else {
