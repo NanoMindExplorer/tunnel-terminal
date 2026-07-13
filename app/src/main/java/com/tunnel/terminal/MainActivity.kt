@@ -830,10 +830,24 @@ class MainActivity : ComponentActivity() {
      * Parse working dir dari prompt shell (best-effort).
      * Format prompt: "tunnel@android:/path/to/dir$ "
      */
+    /**
+     * Wave-7: Parse cwd from local, Ubuntu, or generic user@host prompts.
+     * Formats: tunnel@android:/path$  |  root@ubuntu:~/proj#  |  user@host:/var$
+     */
     private fun parseWorkingDir(prompt: String): String {
-        val regex = Regex("""tunnel@android:([^\$]+)\$\s*$""")
-        val match = regex.find(prompt) ?: return ""
-        return match.groupValues[1].trim()
+        val patterns = listOf(
+            Regex("""tunnel@android:([^\s\$#]+)[\$#]\s*$"""),
+            Regex("""[\w.-]+@[\w.-]+:([^\s\$#]+)[\$#]\s*$""")
+        )
+        for (regex in patterns) {
+            val match = regex.find(prompt.trim()) ?: continue
+            var path = match.groupValues[1].trim()
+            if (path.startsWith("~")) {
+                /* Best-effort: leave ~ for shell; restore uses cd as-is. */
+            }
+            return path
+        }
+        return ""
     }
 
     /** Save workspace session. */
@@ -1415,6 +1429,18 @@ class MainActivity : ComponentActivity() {
                 },
                 onDeny = {
                     chatMessages.add(ChatMessage("assistant", "Permission denied for: ${call.displayText}", false, isError = true))
+                    pendingToolCall = null
+                },
+                onNeverAllow = {
+                    permissionManager.setPermission(call.tool, PermissionManager.PermissionState.ALWAYS_DENY)
+                    chatMessages.add(
+                        ChatMessage(
+                            "assistant",
+                            "Never allow set for ${call.tool} (this session tab).",
+                            false,
+                            isError = true
+                        )
+                    )
                     pendingToolCall = null
                 }
             )
@@ -2452,7 +2478,8 @@ class MainActivity : ComponentActivity() {
                     ExtraKeysBar(
                         isCtrlActive = isCtrlActive,
                         isAltActive = isAltActive,
-                        onKeyPressed = { handleExtraKey(it) }
+                        onKeyPressed = { handleExtraKey(it) },
+                        theme = currentTheme
                     )
                 }
 

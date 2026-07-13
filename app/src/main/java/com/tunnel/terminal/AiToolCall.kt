@@ -600,17 +600,22 @@ class PermissionManager(context: Context) {
     /** Check if tool call needs permission prompt. */
     fun needsPrompt(call: AiToolCall): Boolean {
         if (call.isReadOnly) return false
-        // BUG-01 fix: run_command dan delete_file SELALU butuh prompt
+        val state = getPermission(call.tool)
+        /* Wave-7: ALWAYS_DENY skips prompt (caller should treat as denied). */
+        if (state == PermissionState.ALWAYS_DENY) return false
+        // BUG-01 fix: run_command dan delete_file SELALU butuh prompt (unless denied)
         if (call.tool in alwaysDenyAlwaysAllow) return true
-        return getPermission(call.tool) == PermissionState.ASK
+        return state == PermissionState.ASK
     }
 
     /** Check if tool call is pre-approved. */
     fun isApproved(call: AiToolCall): Boolean {
         if (call.isReadOnly) return true
+        val state = getPermission(call.tool)
+        if (state == PermissionState.ALWAYS_DENY) return false
         // BUG-01 fix: run_command dan delete_file tidak pernah pre-approved
         if (call.tool in alwaysDenyAlwaysAllow) return false
-        return getPermission(call.tool) == PermissionState.ALWAYS_ALLOW
+        return state == PermissionState.ALWAYS_ALLOW
     }
 
     /** BUG-01 fix: Check apakah tool boleh di-"Always Allow". */
@@ -637,7 +642,9 @@ fun PermissionDialog(
     theme: TerminalTheme,
     onAllow: () -> Unit,
     onAlwaysAllow: () -> Unit,
-    onDeny: () -> Unit
+    onDeny: () -> Unit,
+    /* Wave-7: Optional Never allow → ALWAYS_DENY for this session. */
+    onNeverAllow: (() -> Unit)? = null
 ) {
     /* BUG-01 fix: Sembunyikan "Always Allow" untuk run_command/delete_file. */
     val canAlwaysAllow = call.tool !in setOf("run_command", "delete_file")
@@ -714,8 +721,16 @@ fun PermissionDialog(
                     }
                 }
                 Spacer(modifier = Modifier.height(4.dp))
-                TextButton(onClick = onDeny) {
-                    Text("Deny", color = Color(0xFFFF5252), fontSize = 11.sp)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TextButton(onClick = onDeny) {
+                        Text("Deny once", color = Color(0xFFFF5252), fontSize = 11.sp)
+                    }
+                    /* Wave-7: Never allow works for all destructive tools including run_command. */
+                    if (onNeverAllow != null) {
+                        TextButton(onClick = onNeverAllow) {
+                            Text("Never allow", color = Color(0xFFFF8A80), fontSize = 11.sp)
+                        }
+                    }
                 }
             }
         }

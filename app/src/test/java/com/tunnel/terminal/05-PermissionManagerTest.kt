@@ -80,6 +80,29 @@ class PermissionManagerTest {
     }
 
     @Test
+    fun `never allow can be set for write_file`() {
+        permissionManager.setPermission("write_file", PermissionManager.PermissionState.ALWAYS_DENY)
+        assertEquals(
+            PermissionManager.PermissionState.ALWAYS_DENY,
+            permissionManager.getPermission("write_file")
+        )
+        // Session isolation: other session still ASK
+        permissionManager.setActiveSession(99)
+        assertEquals(
+            PermissionManager.PermissionState.ASK,
+            permissionManager.getPermission("write_file")
+        )
+    }
+
+    @Test
+    fun `always deny for run_command skips prompt and is not approved`() {
+        permissionManager.setPermission("run_command", PermissionManager.PermissionState.ALWAYS_DENY)
+        val call = AiToolCall("run_command", mapOf("cmd" to "ls"))
+        assertFalse(permissionManager.isApproved(call))
+        assertFalse(permissionManager.needsPrompt(call))
+    }
+
+    @Test
     fun `resetAll clears all permissions`() {
         permissionManager.setPermission("write_file", PermissionManager.PermissionState.ALWAYS_ALLOW)
         permissionManager.resetAll()

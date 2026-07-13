@@ -166,23 +166,31 @@ fun TabBar(
 fun ExtraKeysBar(
     isCtrlActive: Boolean,
     isAltActive: Boolean,
-    onKeyPressed: (String) -> Unit
+    onKeyPressed: (String) -> Unit,
+    /* Wave-7: Theme-aware colors (was hardcoded dark grays). */
+    theme: TerminalTheme = ThemeManager.defaultTheme
 ) {
     /* Dua baris: simbol + kontrol. Tambah HOME, END, PGUP, PGDN. */
     /* Phase 34 (A4): Tambah "PASTE" key untuk paste dari clipboard. */
     val controlKeys = listOf("ESC", "TAB", "CTRL", "ALT", "↑", "↓", "←", "→", "HOME", "END", "PGUP", "PGDN", "BKSP", "DEL", "PASTE")
     val symbolKeys = listOf("~", "*", "$", "\"", "'", ";", "&", "|", "-", "/", "(", ")", "<", ">", "=", "{", "}", "[", "]", "#", "!", "?", "\\", "@", "`")
 
-    Column(modifier = Modifier.fillMaxWidth().background(Color(0xFF2B2B2B))) {
+    val barBg = theme.uiBg
+    val keyBg = theme.uiSurface
+    val accent = theme.uiAccent
+    val symbolColor = theme.ansi.getOrElse(6) { Color(0xFF00BCD4) }
+    val textColor = theme.uiText
+
+    Column(modifier = Modifier.fillMaxWidth().background(barBg)) {
         LazyRow(
             modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
             horizontalArrangement = Arrangement.spacedBy(4.dp), contentPadding = PaddingValues(horizontal = 4.dp)
         ) {
             items(symbolKeys) { key ->
                 Box(
-                    modifier = Modifier.background(Color(0xFF2A2A2A), RoundedCornerShape(4.dp)).clickable { onKeyPressed(key) }.padding(horizontal = 10.dp, vertical = 6.dp),
+                    modifier = Modifier.background(keyBg, RoundedCornerShape(4.dp)).clickable { onKeyPressed(key) }.padding(horizontal = 10.dp, vertical = 6.dp),
                     contentAlignment = Alignment.Center
-                ) { Text(key, color = Color(0xFF00BCD4), fontSize = 14.sp, fontFamily = FontFamily.Monospace) }
+                ) { Text(key, color = symbolColor, fontSize = 14.sp, fontFamily = FontFamily.Monospace) }
             }
         }
 
@@ -192,14 +200,14 @@ fun ExtraKeysBar(
         ) {
             items(controlKeys) { key ->
                 val bgColor = when {
-                    (key == "CTRL" && isCtrlActive) -> Color(0xFF6200EE)
-                    (key == "ALT" && isAltActive) -> Color(0xFF6200EE)
-                    else -> Color(0xFF3A3A3A)
+                    (key == "CTRL" && isCtrlActive) -> accent
+                    (key == "ALT" && isAltActive) -> accent
+                    else -> keyBg
                 }
                 Box(
                     modifier = Modifier.background(bgColor, RoundedCornerShape(4.dp)).clickable { onKeyPressed(key) }.padding(horizontal = 10.dp, vertical = 8.dp),
                     contentAlignment = Alignment.Center
-                ) { Text(key, color = Color.White, fontSize = 11.sp, fontFamily = FontFamily.Monospace) }
+                ) { Text(key, color = textColor, fontSize = 11.sp, fontFamily = FontFamily.Monospace) }
             }
         }
     }
@@ -233,17 +241,13 @@ fun TerminalScreenView(
     var lastSize by remember { mutableStateOf(androidx.compose.ui.unit.IntSize.Zero) }
     val density = androidx.compose.ui.platform.LocalDensity.current
 
-    /* Auto-scroll ke bawah saat output baru.
-     * Phase 32: Juga scroll saat cursor berubah (user mengetik) agar tetap terlihat. */
+    /* Wave-7: Auto-scroll only when user is already near the bottom.
+     * OLD: always pin to bottom on every screenDirty → fighting selection/history scroll.
+     * Also removed duplicate LaunchedEffect(screenDirty). */
     LaunchedEffect(screenDirty) {
-        if (scrollState.maxValue > 0) {
-            scrollState.scrollTo(scrollState.maxValue)
-        }
-    }
-    /* Phase 32: Auto-scroll saat cursor bergerak (user mengetik dengan keyboard fisik).
-     * Phase 48 fix (F-1): cursorState sekarang dari renderState atomic snapshot (line ~275). */
-    LaunchedEffect(screenDirty) {
-        if (scrollState.maxValue > 0) {
+        if (scrollState.maxValue <= 0) return@LaunchedEffect
+        val nearBottom = scrollState.value >= scrollState.maxValue - 80
+        if (nearBottom) {
             scrollState.scrollTo(scrollState.maxValue)
         }
     }
