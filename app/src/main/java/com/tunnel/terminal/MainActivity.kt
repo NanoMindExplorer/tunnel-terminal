@@ -2796,9 +2796,15 @@ class MainActivity : ComponentActivity() {
                             Box(modifier = Modifier.weight(1f)) {
                                 val focusRequester = remember { FocusRequester() }
                                 val keyboardController = LocalSoftwareKeyboardController.current
+                                /* Wave-13: Do NOT clear IME when only re-focusing same tab;
+                                 * clear only when active session id actually changes. */
+                                var lastFocusedId by remember { mutableStateOf(-1) }
                                 LaunchedEffect(activeExecutorId) {
-                                    imeFieldLast = ""
-                                    imeFieldText = ""
+                                    if (lastFocusedId != activeExecutorId && lastFocusedId != -1) {
+                                        imeFieldLast = ""
+                                        imeFieldText = ""
+                                    }
+                                    lastFocusedId = activeExecutorId
                                     try { focusRequester.requestFocus(); if (!hasPhysicalKeyboard) keyboardController?.show() } catch (_: Exception) {}
                                 }
                                 BasicTextField(
@@ -2821,6 +2827,7 @@ class MainActivity : ComponentActivity() {
                                     onResize = { r, c, f -> activeExecutor.resizeTerminal(r, c, f) },
                                     theme = currentTheme,
                                     onTap = { try { focusRequester.requestFocus(); if (!hasPhysicalKeyboard) keyboardController?.show() } catch (_: Exception) {} },
+                                    onPasteRequested = { pasteFromClipboard(activeExecutor) },
                                     fontSizeState = terminalFontSize,
                                     onFontSizeChange = {
                                         terminalFontSize = it
@@ -2831,10 +2838,9 @@ class MainActivity : ComponentActivity() {
                             }
                             /* Divider. */
                             Box(modifier = Modifier.width(2.dp).fillMaxHeight().background(currentTheme.uiSurface))
-                            /* Right pane: second terminal. */
-                            Box(modifier = Modifier.weight(1f).clickable {
-                                splitExecutor?.let { activeExecutorId = it.id }
-                            }) {
+                            /* Right pane: second terminal — Wave-13: tap focuses + becomes active
+                             * (left pane always shows activeExecutor after swap). */
+                            Box(modifier = Modifier.weight(1f)) {
                                 splitExecutor?.let { exec ->
                                     val sd by exec.screenDirty.collectAsState()
                                     TerminalScreenView(
@@ -2843,13 +2849,19 @@ class MainActivity : ComponentActivity() {
                                         onRestartSession = { scope.launch { exec.restart() } },
                                         onResize = { r, c, f -> exec.resizeTerminal(r, c, f) },
                                         theme = currentTheme,
+                                        onTap = {
+                                            /* Activate this session so ExtraKeys/IME target it. */
+                                            if (activeExecutorId != exec.id) {
+                                                activeExecutorId = exec.id
+                                            }
+                                        },
+                                        onPasteRequested = { pasteFromClipboard(exec) },
                                         fontSizeState = terminalFontSize,
                                         onFontSizeChange = {
-                                        terminalFontSize = it
-                                        /* Phase 26: Persist fontSize. */
-                                        getSharedPreferences("TunnelUI", Context.MODE_PRIVATE)
-                                            .edit().putFloat("fontSize", it).apply()
-                                    }
+                                            terminalFontSize = it
+                                            getSharedPreferences("TunnelUI", Context.MODE_PRIVATE)
+                                                .edit().putFloat("fontSize", it).apply()
+                                        }
                                     )
                                 }
                             }

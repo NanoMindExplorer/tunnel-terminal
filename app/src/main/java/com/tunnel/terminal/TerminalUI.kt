@@ -7,6 +7,7 @@ import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -200,6 +201,8 @@ fun ExtraKeysBar(
     /* Wave-12: One-shot control + F5–F12 for mobile TUI (vim/htop/less). */
     val quickCtrlKeys = listOf("^C", "^D", "^Z", "^L", "^U", "^W", "F5", "F6", "F7", "F8", "F9", "F10", "F11", "F12")
     val symbolKeys = listOf("~", "*", "$", "\"", "'", ";", "&", "|", "-", "/", "(", ")", "<", ">", "=", "{", "}", "[", "]", "#", "!", "?", "\\", "@", "`")
+    /* Wave-13: Keys that repeat while held (arrows, backspace, page). */
+    val repeatableKeys = setOf("↑", "↓", "←", "→", "BKSP", "DEL", "PGUP", "PGDN")
 
     val barBg = theme.uiBg
     val keyBg = theme.uiSurface
@@ -214,10 +217,13 @@ fun ExtraKeysBar(
             horizontalArrangement = Arrangement.spacedBy(4.dp), contentPadding = PaddingValues(horizontal = 4.dp)
         ) {
             items(symbolKeys) { key ->
-                Box(
-                    modifier = Modifier.background(keyBg, RoundedCornerShape(4.dp)).clickable { onKeyPressed(key) }.padding(horizontal = 10.dp, vertical = 6.dp),
-                    contentAlignment = Alignment.Center
-                ) { Text(key, color = symbolColor, fontSize = 14.sp, fontFamily = FontFamily.Monospace) }
+                ExtraKeyChip(
+                    label = key,
+                    color = symbolColor,
+                    bg = keyBg,
+                    onPress = { onKeyPressed(key) },
+                    repeat = false
+                )
             }
         }
 
@@ -231,10 +237,14 @@ fun ExtraKeysBar(
                     (key == "ALT" && isAltActive) -> accent
                     else -> keyBg
                 }
-                Box(
-                    modifier = Modifier.background(bgColor, RoundedCornerShape(4.dp)).clickable { onKeyPressed(key) }.padding(horizontal = 10.dp, vertical = 8.dp),
-                    contentAlignment = Alignment.Center
-                ) { Text(key, color = textColor, fontSize = 11.sp, fontFamily = FontFamily.Monospace) }
+                ExtraKeyChip(
+                    label = key,
+                    color = textColor,
+                    bg = bgColor,
+                    onPress = { onKeyPressed(key) },
+                    repeat = key in repeatableKeys,
+                    compact = false
+                )
             }
         }
 
@@ -245,22 +255,63 @@ fun ExtraKeysBar(
         ) {
             items(quickCtrlKeys) { key ->
                 val isCtrlChip = key.startsWith("^")
-                Box(
-                    modifier = Modifier
-                        .background(if (isCtrlChip) accent.copy(alpha = 0.35f) else keyBg, RoundedCornerShape(4.dp))
-                        .clickable { onKeyPressed(key) }
-                        .padding(horizontal = 10.dp, vertical = 6.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        key,
-                        color = if (isCtrlChip) ctrlChipColor else textColor,
-                        fontSize = 11.sp,
-                        fontFamily = FontFamily.Monospace
-                    )
-                }
+                ExtraKeyChip(
+                    label = key,
+                    color = if (isCtrlChip) ctrlChipColor else textColor,
+                    bg = if (isCtrlChip) accent.copy(alpha = 0.35f) else keyBg,
+                    onPress = { onKeyPressed(key) },
+                    repeat = false
+                )
             }
         }
+    }
+}
+
+/**
+ * Wave-13: Extra key chip with optional long-press key-repeat (Termux-style).
+ */
+@Composable
+private fun ExtraKeyChip(
+    label: String,
+    color: Color,
+    bg: Color,
+    onPress: () -> Unit,
+    repeat: Boolean,
+    compact: Boolean = true
+) {
+    val scope = rememberCoroutineScope()
+    Box(
+        modifier = Modifier
+            .background(bg, RoundedCornerShape(4.dp))
+            .pointerInput(label, repeat) {
+                if (!repeat) {
+                    detectTapGestures(onTap = { onPress() })
+                } else {
+                    awaitEachGesture {
+                        awaitFirstDown(requireUnconsumed = false)
+                        onPress()
+                        val job = scope.launch {
+                            kotlinx.coroutines.delay(400)
+                            while (true) {
+                                onPress()
+                                kotlinx.coroutines.delay(50)
+                            }
+                        }
+                        try {
+                            waitForUpOrCancellation()
+                        } finally {
+                            job.cancel()
+                        }
+                    }
+                }
+            }
+            .padding(
+                horizontal = if (compact) 10.dp else 10.dp,
+                vertical = if (compact) 6.dp else 8.dp
+            ),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(label, color = color, fontSize = if (compact) 14.sp else 11.sp, fontFamily = FontFamily.Monospace)
     }
 }
 
@@ -356,16 +407,23 @@ fun TerminalScreenView(
         else emulator.getScrollbackLines(0, count).asReversed()
     }
 
+    /* Wave-13: Content grid = scrollback (top) + live screen (bottom).
+     * Selection coordinates are content-row based (0 = oldest visible scrollback). */
+    val sbCount = scrollbackSnapshot.size
+    val totalContentRows = sbCount + renderRows
+
     /* Phase 53: Selection toolbar helpers. */
     fun selectionBoundsToRect(start: Pair<Int, Int>, end: Pair<Int, Int>): androidx.compose.ui.geometry.Rect {
         val charW = with(density) { fontSize.sp.toPx() * 0.6f }
         val charH = with(density) { fontSize.sp.toPx() * 1.2f }
         val (sRow, sCol) = if (start.first < end.first || (start.first == end.first && start.second <= end.second)) start else end
         val (eRow, eCol) = if (start.first < end.first || (start.first == end.first && start.second <= end.second)) end else start
-        val left = sCol * charW
-        val top = sRow * charH
-        val right = (eCol + 1) * charW
-        val bottom = (eRow + 1) * charH
+        val paddingPx = with(density) { 4.dp.toPx() }
+        /* Wave-13: Toolbar rect relative to viewport (compensate scroll). */
+        val left = sCol * charW + paddingPx
+        val top = sRow * charH + paddingPx - scrollState.value
+        val right = (eCol + 1) * charW + paddingPx
+        val bottom = (eRow + 1) * charH + paddingPx - scrollState.value
         return androidx.compose.ui.geometry.Rect(left, top, right, bottom)
     }
 
@@ -376,7 +434,11 @@ fun TerminalScreenView(
         textToolbar.showMenu(
             rect = rect,
             onCopyRequested = {
-                val text = getSelectedText(screenSnapshot, selectionStart, selectionEnd, renderCols)
+                /* Wave-13: Copy across scrollback + live screen. */
+                val text = getSelectedTextFromContent(
+                    scrollbackSnapshot, screenSnapshot,
+                    selectionStart, selectionEnd, renderCols, sbCount
+                )
                 if (text.isNotEmpty()) {
                     clipboardManager.setText(AnnotatedString(text))
                     android.widget.Toast.makeText(context, "Copied ${text.length} chars", android.widget.Toast.LENGTH_SHORT).show()
@@ -465,18 +527,13 @@ fun TerminalScreenView(
                     fun posToCell(pos: androidx.compose.ui.geometry.Offset): Pair<Int, Int> {
                         val charW = with(density) { fontSize.sp.toPx() * 0.6f }
                         val charH = with(density) { fontSize.sp.toPx() * 1.2f }
-                        /* Formula: content row R ada di Box y = paddingPx - scrollState.value
-                         * + R * charH. Maka R = (pos.y + scrollState.value - paddingPx) / charH.
-                         * - pos.y: touch position relatif ke Box (pointerInput attached ke Box)
-                         * - scrollState.value: jumlah pixel yang di-scroll ke bawah (content
-                         *   bergerak ke atas sebanyak ini)
-                         * - paddingPx: offset 4dp dari top Column ke content */
+                        /* Wave-13: Content rows include scrollback above live screen.
+                         * R = (pos.y + scrollState.value - paddingPx) / charH, clamped to totalContentRows. */
                         val adjustedY = pos.y + scrollState.value - paddingPx
                         val adjustedX = pos.x - paddingPx
-                        val col = (adjustedX / charW).toInt().coerceIn(0, renderCols - 1)
-                        val row = (adjustedY / charH).toInt().coerceIn(0, renderRows - 1)
-                        android.util.Log.d("Selection", "touch=(${pos.x.toInt()},${pos.y.toInt()}) " +
-                            "scroll=${scrollState.value} pad=$paddingPx charH=$charH -> row=$row col=$col")
+                        val col = (adjustedX / charW).toInt().coerceIn(0, (renderCols - 1).coerceAtLeast(0))
+                        val maxRow = (totalContentRows - 1).coerceAtLeast(0)
+                        val row = (adjustedY / charH).toInt().coerceIn(0, maxRow)
                         return Pair(row, col)
                     }
 
@@ -549,16 +606,17 @@ fun TerminalScreenView(
         ) {
             /* Wave-1: Scrollback history (oldest first), then live screen rows.
              * Selection still maps to live-screen coordinates only. */
-            for (sbLine in scrollbackSnapshot) {
+            scrollbackSnapshot.forEachIndexed { sbIndex, sbLine ->
+                val contentRow = sbIndex
                 val annotatedString = buildTerminalRowAnnotated(
                     rowCells = sbLine,
                     cols = renderCols,
                     cursorCol = -1,
                     cursorVisible = false,
-                    isSelecting = false,
-                    selectionStart = null,
-                    selectionEnd = null,
-                    rowIndex = -1,
+                    isSelecting = isSelecting,
+                    selectionStart = selectionStart,
+                    selectionEnd = selectionEnd,
+                    rowIndex = contentRow,
                     theme = theme
                 )
                 Text(
@@ -573,6 +631,7 @@ fun TerminalScreenView(
             }
             for (row in 0 until renderRows) {
                 val rowCells = screenSnapshot.getOrElse(row) { arrayOf() }
+                val contentRow = sbCount + row
                 val annotatedString = buildTerminalRowAnnotated(
                     rowCells = rowCells,
                     cols = renderCols,
@@ -581,7 +640,7 @@ fun TerminalScreenView(
                     isSelecting = isSelecting,
                     selectionStart = selectionStart,
                     selectionEnd = selectionEnd,
-                    rowIndex = row,
+                    rowIndex = contentRow,
                     theme = theme
                 )
                 Text(
@@ -645,7 +704,7 @@ private fun isCellInSelection(row: Int, col: Int, start: Pair<Int, Int>, end: Pa
     }
 }
 
-/** Extract text dari selection range di screen snapshot. */
+/** Extract text dari selection range di screen snapshot (live only). */
 private fun getSelectedText(
     screen: Array<Array<TerminalCell>>,
     start: Pair<Int, Int>?,
@@ -676,6 +735,42 @@ private fun getSelectedText(
         if (row < endRow) sb.append('\n')
     }
     return sb.toString()
+}
+
+/**
+ * Wave-13: Copy selection across scrollback + live content rows.
+ * [start]/[end] use content coordinates (scrollback first, then live).
+ */
+internal fun getSelectedTextFromContent(
+    scrollback: List<Array<TerminalCell>>,
+    live: Array<Array<TerminalCell>>,
+    start: Pair<Int, Int>?,
+    end: Pair<Int, Int>?,
+    cols: Int,
+    sbCount: Int
+): String {
+    if (start == null || end == null) return ""
+    val (startRow, startCol) = if (start.first < end.first || (start.first == end.first && start.second <= end.second)) start else end
+    val (endRow, endCol) = if (start.first < end.first || (start.first == end.first && start.second <= end.second)) end else start
+    val sbOut = StringBuilder()
+    for (row in startRow..endRow) {
+        val rowCells: Array<TerminalCell> = when {
+            row < sbCount -> scrollback.getOrNull(row) ?: emptyArray()
+            else -> live.getOrElse(row - sbCount) { emptyArray() }
+        }
+        val rowStart = if (row == startRow) startCol else 0
+        val rowEnd = if (row == endRow) endCol else cols - 1
+        val lineBuilder = StringBuilder()
+        for (col in rowStart..rowEnd) {
+            if (col < rowCells.size) {
+                val cell = rowCells[col]
+                if (!cell.wideContinuation) lineBuilder.append(cell.char)
+            }
+        }
+        sbOut.append(lineBuilder.toString().trimEnd())
+        if (row < endRow) sbOut.append('\n')
+    }
+    return sbOut.toString()
 }
 
 /**

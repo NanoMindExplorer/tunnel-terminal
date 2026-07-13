@@ -262,9 +262,11 @@ class SshShellExecutor(
                     throw Exception("Failed to open shell channel")
                 }
 
-                /* Set PTY type + size. */
+                /* Wave-13: PTY size from display metrics (was hard-coded 80×24). */
                 channel?.setPtyType("xterm-256color")
-                channel?.setPtySize(80, 24, 80 * 8, 24 * 12)
+                val geo = TerminalSize.fromDisplay(context, fontSizeSp = 12f)
+                channel?.setPtySize(geo.cols, geo.rows, geo.cols * 8, geo.rows * 12)
+                Log.i(tag, "SSH PTY size=${geo.rows}x${geo.cols}")
 
                 /* Connect channel. */
                 channel?.connect(10000)

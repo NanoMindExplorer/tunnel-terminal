@@ -49,6 +49,9 @@ import java.security.MessageDigest
  */
 class ProotBootstrap(private val context: Context) {
 
+    /** Wave-13: Expose context for PTY geometry helpers without leaking mutability. */
+    val appContext: Context get() = context.applicationContext
+
     companion object {
         private const val TAG = "ProotBootstrap"
 
