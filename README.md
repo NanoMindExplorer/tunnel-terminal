@@ -5,7 +5,7 @@
 ![Architecture](https://img.shields.io/badge/Architecture-NDK%20%2B%20Jetpack%20Compose-purple)
 ![AI](https://img.shields.io/badge/AI-Multi%20Provider%20%2B%20Vision%20%2B%20MCP-cyan)
 ![Linux](https://img.shields.io/badge/Linux-Ubuntu%2024.04%20via%20proot-orange)
-![Version](https://img.shields.io/badge/version-8.0.0-blue)
+![Version](https://img.shields.io/badge/version-8.0.1-blue)
 ![Stability](https://img.shields.io/badge/stability-production-green)
 
 ## Quick Links
@@ -89,6 +89,8 @@ Terminal Android konvensional hanya menampilkan teks dan mengeksekusi command. T
 **UX Wave 14:** `find <query>` di scrollback, `open-url` / Open URL chip, mouse wheel + mode 1000/1006, restart session **tanpa hapus history**, ExtraKeys F1–F4 + `^A`/`^E`.
 
 **UX Wave 15 (v8.0):** LazyColumn virtualized scrollback (hingga 2000 baris), Unicode code-point + combining marks, ExtraKeys compact (toggle ▴/▾).
+
+**UX Wave 16:** Fix pinch-zoom font (gesture-local size, snap 0.5sp, range 8–28sp), ExtraKeys `A+`/`A−`, palette zoom, debounce persist.
 
 ## 🐧 Linux Environment (Ubuntu via proot)
 

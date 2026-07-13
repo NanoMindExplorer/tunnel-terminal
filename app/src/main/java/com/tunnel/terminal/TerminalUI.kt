@@ -41,6 +41,7 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.launch
+import kotlin.math.abs
 import kotlin.math.roundToInt
 
 /**
@@ -203,7 +204,9 @@ fun ExtraKeysBar(
     /* Phase 34 (A4): Tambah "PASTE" key untuk paste dari clipboard. */
     val controlKeys = listOf(
         "ESC", "TAB", "CTRL", "ALT", "↑", "↓", "←", "→",
-        "HOME", "END", "PGUP", "PGDN", "BKSP", "DEL", "PASTE"
+        "HOME", "END", "PGUP", "PGDN", "BKSP", "DEL", "PASTE",
+        /* Wave-16: Discrete font zoom (pinch still works on the screen). */
+        "A−", "A+"
     )
     /* Wave-12/14: One-shot control + F1–F12 + readline chips for mobile TUI. */
     val quickCtrlKeys = listOf(
@@ -375,6 +378,17 @@ fun TerminalScreenView(
 ) {
     /* Phase 24: fontSize dari external state (persist antar recompose + tab switch). */
     val fontSize = fontSizeState
+    /**
+     * Wave-16: Gesture-local font size. Pinch multiplies THIS every frame so zoom
+     * is not stuck on a stale composition capture (pointerInput(Unit) bug).
+     * Synced from parent whenever external fontSizeState changes (buttons / palette).
+     */
+    var gestureFontSp by remember { mutableFloatStateOf(fontSize) }
+    LaunchedEffect(fontSize) {
+        if (abs(gestureFontSp - fontSize) > 0.01f) {
+            gestureFontSp = fontSize
+        }
+    }
     var lastResizeTime by remember { mutableStateOf(0L) }
     /* Wave-15: LazyListState for virtualized scrollback (only compose visible rows). */
     val listState = rememberLazyListState()
@@ -632,15 +646,16 @@ fun TerminalScreenView(
                     }
                 }
             }
-            /* Phase 24: Pinch-to-zoom — pakai external state via onFontSizeChange.
-             * Old code: fontSize local, tidak persist, tidak trigger resize.
-             * Fix: onFontSizeChange(newFont) → parent update state → re-render + resize. */
+            /* Phase 24 + Wave-16: Pinch-to-zoom.
+             * OLD BUG: pointerInput(Unit) captured stale fontSize → zoom stuck / jumped.
+             * FIX: multiply gesture-local [gestureFontSp] every frame, then notify parent. */
             .pointerInput(Unit) {
                 detectTransformGestures { _, _, zoom, _ ->
-                    val newFont = (fontSize * zoom).coerceIn(8f, 24f)
-                    if (newFont != fontSize) {
-                        onFontSizeChange(newFont)
-                        lastResizeTime = 0L  /* Force onSizeChanged to re-trigger onResize */
+                    val next = TerminalFontZoom.applyPinch(gestureFontSp, zoom)
+                    if (next != gestureFontSp) {
+                        gestureFontSp = next
+                        onFontSizeChange(next)
+                        lastResizeTime = 0L
                     }
                 }
             }
@@ -681,8 +696,9 @@ fun TerminalScreenView(
                 }
             }
     ) {
-        /* Wave-15: Virtualized content rows (scrollback + live). */
-        val rowHeight = with(density) { (fontSize.sp.toPx() * 1.2f) }
+        /* Wave-15/16: Virtualized rows; use gestureFontSp so pinch paints immediately. */
+        val displaySp = gestureFontSp
+        val rowHeight = with(density) { (displaySp.sp.toPx() * 1.2f) }
         LazyColumn(
             state = listState,
             modifier = Modifier
@@ -713,7 +729,7 @@ fun TerminalScreenView(
                 Text(
                     text = annotatedString,
                     fontFamily = FontFamily.Monospace,
-                    fontSize = fontSize.sp,
+                    fontSize = displaySp.sp,
                     softWrap = false,
                     maxLines = 1,
                     overflow = androidx.compose.ui.text.style.TextOverflow.Clip,

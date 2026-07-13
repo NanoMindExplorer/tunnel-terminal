@@ -324,11 +324,13 @@ class MainActivity : ComponentActivity() {
         /* C1 fix: Load fontSize di onCreate (bukan di property initializer). */
         try {
             val uiPrefs = getSharedPreferences("TunnelUI", Context.MODE_PRIVATE)
-            terminalFontSize = uiPrefs.getFloat("fontSize", 12f)
+            terminalFontSize = TerminalFontZoom.snap(
+                uiPrefs.getFloat("fontSize", TerminalFontZoom.DEFAULT_SP)
+            )
             /* Wave-15: Compact ExtraKeys by default; expand state persisted. */
             extraKeysExpanded = uiPrefs.getBoolean("extraKeysExpanded", false)
         } catch (_: Exception) {
-            terminalFontSize = 12f
+            terminalFontSize = TerminalFontZoom.DEFAULT_SP
             extraKeysExpanded = false
         }
 
@@ -432,20 +434,49 @@ class MainActivity : ComponentActivity() {
         Toast.makeText(this, "Inserted into terminal (not executed)", Toast.LENGTH_SHORT).show()
     }
 
-    /** Wave-9: Reset font size to density-aware default and persist. */
+    /** Wave-9 + Wave-16: Reset font size to density-aware default and persist. */
     private fun resetFontSize() {
         val dm = resources.displayMetrics
-        val density = dm.density.takeIf { it > 0f } ?: 2f
-        /* Prefer slightly larger on high-density phones. */
-        val defaultSp = when {
-            density >= 3f -> 13f
-            density >= 2.5f -> 12.5f
-            else -> 12f
+        val defaultSp = TerminalFontZoom.defaultForDensity(dm.density)
+        applyTerminalFontSize(defaultSp, persistImmediately = true, toast = true)
+    }
+
+    /**
+     * Wave-16: Single path for font size changes (pinch / A+ A− / palette / reset).
+     * Debounces SharedPreferences writes during continuous pinch.
+     */
+    private var fontPersistRunnable: Runnable? = null
+    private val fontPersistHandler by lazy { android.os.Handler(mainLooper) }
+
+    private fun applyTerminalFontSize(
+        sp: Float,
+        persistImmediately: Boolean = false,
+        toast: Boolean = false
+    ) {
+        val next = TerminalFontZoom.snap(sp)
+        if (next == terminalFontSize && !toast) return
+        terminalFontSize = next
+        val prefs = getSharedPreferences("TunnelUI", Context.MODE_PRIVATE)
+        if (persistImmediately) {
+            fontPersistRunnable?.let { fontPersistHandler.removeCallbacks(it) }
+            prefs.edit().putFloat("fontSize", next).apply()
+        } else {
+            fontPersistRunnable?.let { fontPersistHandler.removeCallbacks(it) }
+            val r = Runnable { prefs.edit().putFloat("fontSize", terminalFontSize).apply() }
+            fontPersistRunnable = r
+            fontPersistHandler.postDelayed(r, 350)
         }
-        terminalFontSize = defaultSp
-        getSharedPreferences("TunnelUI", Context.MODE_PRIVATE)
-            .edit().putFloat("fontSize", defaultSp).apply()
-        Toast.makeText(this, "Font size reset to ${defaultSp}sp", Toast.LENGTH_SHORT).show()
+        if (toast) {
+            Toast.makeText(this, "Font ${TerminalFontZoom.formatLabel(next)}", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun stepTerminalFont(direction: Int) {
+        applyTerminalFontSize(
+            TerminalFontZoom.step(terminalFontSize, direction),
+            persistImmediately = true,
+            toast = true
+        )
     }
 
     /* ─── Phase 22: AI Tool Call Execution ─── */
@@ -1604,6 +1635,12 @@ class MainActivity : ComponentActivity() {
                 })
                 add(PaletteItem("export_chat", "Export AI chat", "AI", Icons.Default.Save, PaletteCategory.AI) { exportChat() })
                 add(PaletteItem("clear_chat", "Clear AI chat", "AI", Icons.Default.Delete, PaletteCategory.AI) { clearChat() })
+                add(PaletteItem("font_zoom_in", "Font size + (zoom in)", "Setting", Icons.Default.ZoomIn, PaletteCategory.SETTING) {
+                    stepTerminalFont(+1)
+                })
+                add(PaletteItem("font_zoom_out", "Font size − (zoom out)", "Setting", Icons.Default.ZoomOut, PaletteCategory.SETTING) {
+                    stepTerminalFont(-1)
+                })
                 add(PaletteItem("font_reset", "Reset font size", "Setting", Icons.Default.FormatSize, PaletteCategory.SETTING) { resetFontSize() })
                 add(PaletteItem("ssh_list_keys", "List SSH host keys (TOFU)", "Setting", Icons.Default.VpnKey, PaletteCategory.SETTING) {
                     val list = SshHostKeyStore.formatList(this@MainActivity)
@@ -2257,6 +2294,15 @@ class MainActivity : ComponentActivity() {
                     "F10" -> emu.functionKey(10)
                     "F11" -> emu.functionKey(11)
                     "F12" -> emu.functionKey(12)
+                    /* Wave-16: Font zoom chips (also pinch on screen). */
+                    "A+", "A＋" -> {
+                        stepTerminalFont(+1)
+                        ""
+                    }
+                    "A−", "A-", "A–" -> {
+                        stepTerminalFont(-1)
+                        ""
+                    }
                     else -> {
                         /* Sticky CTRL + symbol/letter from ExtraKeys. */
                         if (isCtrlActive && key.length == 1) {
@@ -2910,11 +2956,7 @@ class MainActivity : ComponentActivity() {
                                     onOpenUrl = { openExternalUrl(it) },
                                     deadSessionMessage = deadSessionLabel(activeExecutor),
                                     fontSizeState = terminalFontSize,
-                                    onFontSizeChange = {
-                                        terminalFontSize = it
-                                        getSharedPreferences("TunnelUI", Context.MODE_PRIVATE)
-                                            .edit().putFloat("fontSize", it).apply()
-                                    }
+                                    onFontSizeChange = { applyTerminalFontSize(it) }
                                 )
                             }
                             /* Divider. */
@@ -2940,11 +2982,7 @@ class MainActivity : ComponentActivity() {
                                         onOpenUrl = { openExternalUrl(it) },
                                         deadSessionMessage = deadSessionLabel(exec),
                                         fontSizeState = terminalFontSize,
-                                        onFontSizeChange = {
-                                            terminalFontSize = it
-                                            getSharedPreferences("TunnelUI", Context.MODE_PRIVATE)
-                                                .edit().putFloat("fontSize", it).apply()
-                                        }
+                                        onFontSizeChange = { applyTerminalFontSize(it) }
                                     )
                                 }
                             }
@@ -2989,11 +3027,7 @@ class MainActivity : ComponentActivity() {
                                 onToggleCollapse = { id -> blockManager.toggleCollapse(id) },
                                 /* Phase 44 fix (MED-02): Pinch-to-zoom sekarang jalan di Block Mode. */
                                 fontSizeState = terminalFontSize,
-                                onFontSizeChange = {
-                                    terminalFontSize = it
-                                    getSharedPreferences("TunnelUI", Context.MODE_PRIVATE)
-                                        .edit().putFloat("fontSize", it).apply()
-                                }
+                                onFontSizeChange = { applyTerminalFontSize(it) }
                             )
                         }
                     } else {
@@ -3061,11 +3095,7 @@ class MainActivity : ComponentActivity() {
                             /* Wave-14: Wheel handled inside TerminalScreenView. */
                             onScroll = { },
                             fontSizeState = terminalFontSize,
-                            onFontSizeChange = {
-                                terminalFontSize = it
-                                getSharedPreferences("TunnelUI", Context.MODE_PRIVATE)
-                                    .edit().putFloat("fontSize", it).apply()
-                            },
+                            onFontSizeChange = { applyTerminalFontSize(it) },
                             onPasteRequested = { pasteFromClipboard(activeExecutor) },
                             onOpenUrl = { openExternalUrl(it) },
                             deadSessionMessage = deadSessionLabel(activeExecutor)
@@ -3215,7 +3245,8 @@ class MainActivity : ComponentActivity() {
         - Long-press tab : Rename tab label
         - ExtraKeys      : ^C ^D ^Z ^L ^U ^W, F5–F12, PASTE (safe)
         - CTRL + C       : Hentikan proses yang berjalan
-        - Pinch Screen   : Zoom In/Out ukuran font terminal
+        - Pinch Screen   : Zoom In/Out ukuran font (8–28sp)
+        - ExtraKeys A+ A−: Zoom font per 1sp (atau palette)
         - Scroll ↑ + ↓ FAB: Jump to live bottom
         ==========================================
     """.trimIndent()
