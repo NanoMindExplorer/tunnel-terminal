@@ -970,23 +970,35 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun saveAISettings(newSettings: AISettings) {
-        aiSettings = newSettings
+        /* Wave-8: Validate base URL before persisting (allow blank Custom draft). */
+        var toSave = newSettings
+        if (newSettings.baseUrl.isNotBlank()) {
+            val v = UrlValidator.validateAiBaseUrl(newSettings.baseUrl)
+            if (!v.ok) {
+                Toast.makeText(this, "Base URL: ${v.message}", Toast.LENGTH_LONG).show()
+                return
+            }
+            if (v.message.isNotBlank() && v.message != newSettings.baseUrl.trimEnd('/')) {
+                toSave = newSettings.copy(baseUrl = v.message)
+            }
+        }
+        aiSettings = toSave
         /* Phase 41 fix (CRIT-01): apiKey disimpan di encrypted prefs, sisanya plaintext. */
         val prefs = getSharedPreferences("TunnelAIPrefs", Context.MODE_PRIVATE).edit()
-        prefs.putString("providerName", newSettings.providerName)
-        prefs.putString("baseUrl", newSettings.baseUrl)
-        prefs.putString("modelName", newSettings.modelName)
-        prefs.putDouble("temperature", newSettings.temperature)
-        prefs.putInt("maxTokens", newSettings.maxTokens)
-        prefs.putInt("requestTimeoutMs", newSettings.requestTimeoutMs)
-        prefs.putBoolean("supportsVision", newSettings.supportsVision)
-        prefs.putBoolean("supportsToolCalling", newSettings.supportsToolCalling)
-        prefs.putString("apiStyle", newSettings.apiStyle)
+        prefs.putString("providerName", toSave.providerName)
+        prefs.putString("baseUrl", toSave.baseUrl)
+        prefs.putString("modelName", toSave.modelName)
+        prefs.putDouble("temperature", toSave.temperature)
+        prefs.putInt("maxTokens", toSave.maxTokens)
+        prefs.putInt("requestTimeoutMs", toSave.requestTimeoutMs)
+        prefs.putBoolean("supportsVision", toSave.supportsVision)
+        prefs.putBoolean("supportsToolCalling", toSave.supportsToolCalling)
+        prefs.putString("apiStyle", toSave.apiStyle)
         prefs.apply()
 
         try {
             val securePrefs = SecureStorage.getAIPrefs(this).edit()
-            securePrefs.putString("apiKey", newSettings.apiKey)
+            securePrefs.putString("apiKey", toSave.apiKey)
             securePrefs.apply()
         } catch (e: Exception) {
             Log.e("MainActivity", "Cannot save API key — secure storage unavailable: ${e.message}")
@@ -1028,6 +1040,8 @@ class MainActivity : ComponentActivity() {
          * Fix: add first, then start, then set active. */
         shellExecutors.add(newExecutor)
         activeExecutorId = newExecutor.id
+        /* Wave-8: Seed persisted command history into new tab. */
+        CommandHistoryStore.seedInto(newExecutor, this)
         newExecutor.start()
 
         /* Tampilkan MOTD dinamis. */
@@ -1068,6 +1082,7 @@ class MainActivity : ComponentActivity() {
         )
         shellExecutors.add(sshExecutor)
         activeExecutorId = sshExecutor.id
+        CommandHistoryStore.seedInto(sshExecutor, this)
         sshExecutor.start()
     }
 
@@ -1110,6 +1125,7 @@ class MainActivity : ComponentActivity() {
         )
         shellExecutors.add(executor)
         activeExecutorId = executor.id
+        CommandHistoryStore.seedInto(executor, this)
         executor.start()
 
         // Beri MOTD khusus Ubuntu.
@@ -1383,6 +1399,25 @@ class MainActivity : ComponentActivity() {
                 add(PaletteItem("cmd_pwd", "Run: pwd", "Command", Icons.Default.Terminal, PaletteCategory.COMMAND) { shellExecutors.find { it.id == activeExecutorId }?.executeCommand("pwd") })
                 add(PaletteItem("cmd_clear", "Run: clear", "Command", Icons.Default.Clear, PaletteCategory.COMMAND) { shellExecutors.find { it.id == activeExecutorId }?.clearScreen() })
                 add(PaletteItem("cmd_help", "Run: help", "Command", Icons.Default.Help, PaletteCategory.COMMAND) { shellExecutors.find { it.id == activeExecutorId }?.executeCommand("help") })
+                /* Wave-8: History / export / metrics / permissions. */
+                add(PaletteItem("cmd_history", "Show command history", "Command", Icons.Default.History, PaletteCategory.COMMAND) {
+                    shellExecutors.find { it.id == activeExecutorId }?.let { exec ->
+                        val lines = exec.commandHistory.mapIndexed { i, c -> "${i + 1}. $c" }.joinToString("\n").ifBlank { "(empty)" }
+                        exec.emulator.process("\u001B[36m$lines\u001B[0m\n"); exec.triggerScreenUpdate()
+                    }
+                })
+                add(PaletteItem("export_transcript", "Export terminal transcript", "Command", Icons.Default.Save, PaletteCategory.COMMAND) {
+                    val exec = shellExecutors.find { it.id == activeExecutorId } ?: return@PaletteItem
+                    val r = TranscriptExporter.exportSession(this@MainActivity, exec)
+                    Toast.makeText(this@MainActivity, if (r.ok) "Exported: ${r.path}" else r.message, Toast.LENGTH_LONG).show()
+                })
+                add(PaletteItem("ai_metrics", "Show AI metrics", "AI", Icons.Default.Speed, PaletteCategory.AI) {
+                    Toast.makeText(this@MainActivity, AiMetrics.summaryLine(), Toast.LENGTH_LONG).show()
+                })
+                add(PaletteItem("reset_permissions", "Reset AI permissions (this tab)", "Setting", Icons.Default.Lock, PaletteCategory.SETTING) {
+                    permissionManager.resetAll()
+                    Toast.makeText(this@MainActivity, "Permissions reset for active session", Toast.LENGTH_SHORT).show()
+                })
                 /* Phase 23: MCP discovery. */
                 add(PaletteItem("mcp_discover", "Discover MCP Tools", "AI", Icons.Default.CloudSync, PaletteCategory.AI) { discoverMcpTools() })
                 /* Phase 23: Voice input. */
@@ -1852,6 +1887,8 @@ class MainActivity : ComponentActivity() {
                 val isLocalOnly = cmd == "help" || cmd == "clear" || cmd == "setup-storage" ||
                     cmd == "storage-status" || cmd == "storage-reset" ||
                     cmd == "ssh-reset-hostkeys" || cmd == "system-info" ||
+                    cmd == "history" || cmd == "history-clear" ||
+                    cmd == "export-output" || cmd == "ai-metrics" ||
                     cmd.startsWith("open ") ||
                     (activeExecutor.sessionType == "ubuntu" &&
                         (cmd.startsWith("systemctl ") || cmd.startsWith("service ")))
@@ -1866,6 +1903,8 @@ class MainActivity : ComponentActivity() {
                     val h = activeExecutor.commandHistory
                     if (h.isEmpty() || h.last() != cmd) h.add(cmd)
                     if (h.size > 500) h.removeAt(0)
+                    /* Wave-8: Persist global history for autocomplete across restarts. */
+                    CommandHistoryStore.append(this@MainActivity, cmd)
                     /* Phase 26: Add block ke BlockManager saat command dijalankan. */
                     if (blockMode) {
                         blockManager.addBlock(cmd)
@@ -1918,6 +1957,47 @@ class MainActivity : ComponentActivity() {
                     cmd == "system-info" -> {
                         val info = SystemInfo.buildMotd(this@MainActivity)
                         activeExecutor.emulator.process(info)
+                        activeExecutor.emulator.process("\u001B[36m${AiMetrics.summaryLine()}\u001B[0m\n")
+                        activeExecutor.triggerScreenUpdate()
+                    }
+                    cmd == "history" -> {
+                        val lines = activeExecutor.commandHistory.mapIndexed { i, c ->
+                            "${(i + 1).toString().padStart(4)}  $c"
+                        }.joinToString("\n").ifBlank { "(empty history)" }
+                        activeExecutor.emulator.process("\u001B[36m$lines\u001B[0m\n")
+                        activeExecutor.triggerScreenUpdate()
+                        if (blockMode) {
+                            blockManager.completeRunning(lines, CommandBlock.BlockStatus.SUCCESS)
+                        }
+                    }
+                    cmd == "history-clear" -> {
+                        activeExecutor.commandHistory.clear()
+                        CommandHistoryStore.clear(this@MainActivity)
+                        activeExecutor.emulator.process("\u001B[33m[History] Cleared (session + persisted).\u001B[0m\n")
+                        activeExecutor.triggerScreenUpdate()
+                        if (blockMode) {
+                            blockManager.completeRunning("history cleared", CommandBlock.BlockStatus.SUCCESS)
+                        }
+                    }
+                    cmd == "export-output" -> {
+                        val result = TranscriptExporter.exportSession(this@MainActivity, activeExecutor)
+                        val msg = if (result.ok) {
+                            "\u001B[32m[Export] ${result.message}\n${result.path}\u001B[0m\n"
+                        } else {
+                            "\u001B[31m[Export] ${result.message}\u001B[0m\n"
+                        }
+                        activeExecutor.emulator.process(msg)
+                        activeExecutor.triggerScreenUpdate()
+                        if (blockMode) {
+                            blockManager.completeRunning(result.message, if (result.ok) CommandBlock.BlockStatus.SUCCESS else CommandBlock.BlockStatus.ERROR)
+                        }
+                    }
+                    cmd == "ai-metrics" -> {
+                        val line = AiMetrics.summaryLine()
+                        val recent = AiMetrics.recent(5).joinToString("\n") {
+                            "  ${it.provider}/${it.model} ${it.latencyMs}ms ok=${it.success} style=${it.apiStyle}"
+                        }.ifBlank { "  (no recent requests)" }
+                        activeExecutor.emulator.process("\u001B[36m$line\nRecent:\n$recent\u001B[0m\n")
                         activeExecutor.triggerScreenUpdate()
                     }
                     cmd.startsWith("open ") -> {
@@ -2525,33 +2605,34 @@ class MainActivity : ComponentActivity() {
 
     private fun buildHelpText(): String = """
         ==========================================
-        TUNNEL TERMINAL - AI NATIVE DEV ENVIRONMENT
+        TUNNEL TERMINAL v${BuildConfig.VERSION_NAME} - AI NATIVE DEV ENVIRONMENT
         ==========================================
         Built-in Commands (ditangani lokal):
         - help              Tampilkan menu bantuan ini
         - clear             Bersihkan layar terminal
+        - history           Tampilkan riwayat perintah tab ini
+        - history-clear     Hapus history (tab + storage)
+        - export-output     Export transcript ke filesDir/exports/
+        - ai-metrics        Latency / size request AI terakhir
         - setup-storage     Bridge ke /sdcard via Storage Access Framework
         - storage-status    Cek status konfigurasi storage
         - storage-reset     Reset konfigurasi storage
         - system-info       Tampilkan info sistem (MOTD)
         - open <file>       Edit file di Tunnel Editor UI
+        - ssh-reset-hostkeys Reset TOFU host key fingerprints
 
-        Shell Commands (dilempar ke /system/bin/sh):
-        - ls, cd, cat, echo, mkdir, rm, cp, mv, pwd
-        - ps, kill, df, du, head, tail, grep, sed, awk
-        - wget, curl (jika tersedia di system)
+        Shell / Ubuntu / SSH:
+        - Local: toybox sh | Ubuntu: apt/git/python via proot | SSH: remote shell
 
-        AI Copilot Features (Klik tombol AI di kanan atas):
-        - Multi-Provider (OpenAI, Claude, Gemini, DeepSeek, Groq, Ollama)
-        - Auto-Debug     : Klik tombol 🛠 untuk minta AI baca error
-        - Auto-Pilot     : Minta AI menyelesaikan tugas berurutan
-        - Workflows      : Simpan perintah AI ke Snippet Vault
+        AI Copilot:
+        - Multi-Provider (OpenAI, Anthropic Native, Gemini, DeepSeek, Groq, Ollama)
+        - Tool calling, Agent Mode, MCP HTTP bridge, vision (model-dependent)
 
         Shortcuts & UX:
         - Volume Up/Down : Navigasi riwayat perintah (per-tab)
+        - Ctrl+K         : Command palette
         - CTRL + C       : Hentikan proses yang berjalan
         - Pinch Screen   : Zoom In/Out ukuran font terminal
-        - HOME/END/PGUP/PGDN : Navigasi untuk less/vim
         ==========================================
     """.trimIndent()
 
