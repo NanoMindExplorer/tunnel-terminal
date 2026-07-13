@@ -1262,6 +1262,14 @@ fun AIChatPanel(
                             fontSize = 11.sp,
                             fontFamily = FontFamily.Monospace
                         )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        /* Wave-5: last AI request metrics. */
+                        Text(
+                            AiMetrics.summaryLine(),
+                            color = theme.uiTextMuted,
+                            fontSize = 10.sp,
+                            fontFamily = FontFamily.Monospace
+                        )
                         Spacer(modifier = Modifier.height(16.dp))
 
                         /* Creator Credit. */

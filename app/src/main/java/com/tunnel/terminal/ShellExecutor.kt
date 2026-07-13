@@ -1,132 +1,36 @@
 package com.tunnel.terminal
 
-import android.os.ParcelFileDescriptor
 import android.util.Log
-import androidx.compose.runtime.getValue
-import java.util.concurrent.atomic.AtomicInteger
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.setValue
-import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
-import java.io.FileInputStream
-import java.nio.ByteBuffer
-import java.nio.CharBuffer
-import java.nio.charset.CodingErrorAction
-import java.nio.charset.StandardCharsets
 
 /**
- * ShellExecutor - Manages a single PTY shell session.
+ * ShellExecutor - Local Android PTY shell (/system/bin/sh).
  *
- * Perubahan Phase 17 (Major Bug Fix):
- * - Track child pid untuk kill yang benar di destroy() (no more zombie)
- * - Reset outputBuffer di restart() (no bleed antar session)
- * - Strip ANSI codes dari lastCommandOutput untuk AI context
- * - Per-executor command history (tidak shared antar tab)
- * - Tunggu shell siap setelah start() sebelum kirim PS1
- * - Thread readLoop di-set sebagai daemon
- *
- * Phase 18: Accept themeHolder untuk TerminalEmulator (theme-aware rendering).
+ * Wave-5: Shared I/O lifecycle lives in [PtySessionBase]; this class only
+ * spawns the local shell and sets PS1.
  */
 class ShellExecutor(
-    private val themeHolder: ThemeHolder = ThemeHolder(),
-    /* Phase 44 fix (MED-04): Context untuk display metrics — dipakai menghitung
-     * ukuran PTY awal yang lebih akurat dari hardcode 80x24. */
+    themeHolder: ThemeHolder = ThemeHolder(),
     private val context: android.content.Context? = null
-) : TerminalSession {
+) : PtySessionBase(themeHolder, "ShellExecutor") {
+
     private val tag = "ShellExecutor"
 
-    private var masterFd: Int = -1
-    private var childPid: Int = -1
-    private var pfd: ParcelFileDescriptor? = null
-    /** Track readLoop thread untuk interrupt saat destroy. */
-    @Volatile
-    private var readThread: Thread? = null
-    /* BUG-25 fix: AtomicInteger companion untuk ID unik global (bukan timestamp). */
-    override val id: Int = globalIdCounter.incrementAndGet()
-
-    /* BUG-26 fix: Guard untuk mencegah double-close fd antara readLoop exit vs destroy(). */
-    private val fdClosed = java.util.concurrent.atomic.AtomicBoolean(false)
-
-    override var emulator = TerminalEmulator(themeHolder).also {
-        /* BUG-09 fix: Wire writeCallback untuk DA/DSR responses. */
-        it.writeCallback = { data -> writeRaw(data) }
-    }
-
-    override var isAlive by mutableStateOf(true)
-        private set
-
-    private val _screenDirty = MutableStateFlow(0)
-    override val screenDirty: StateFlow<Int> = _screenDirty.asStateFlow()
-
-    /** Phase 48 fix (F-5): Throttle screenDirty ke ~30fps (33ms min interval).
-     * OLD BUG: triggerScreenUpdate() dipanggil di setiap chunk dari readLoop →
-     * output sangat cepat (yes, find /) memicu recomposition lebih cepat dari
-     * kemampuan render → glitch visual "bergeser".
-     * FIX: Batasi minimal 33ms antara trigger. Output tetap diproses ke emulator,
-     * hanya Compose recomposition yang di-throttle. */
-    @Volatile
-    private var lastScreenDirtyTime: Long = 0
-    override fun triggerScreenUpdate() {
-        val now = System.currentTimeMillis()
-        if (now - lastScreenDirtyTime >= 33) {  // ~30fps
-            lastScreenDirtyTime = now
-            _screenDirty.value++
-        }
-    }
-
-    private val _lastCommandOutput = MutableStateFlow("")
-    override val lastCommandOutput: StateFlow<String> = _lastCommandOutput.asStateFlow()
-    /** Phase 21: outputBuffer diakses dari readLoop (write) + main (read di getCleanOutput).
-     *  Synchronize dengan lock untuk thread safety. */
-    private val outputLock = Any()
-    private var outputBuffer = StringBuilder()
-
-    /** Riwayat perintah per-executor (per-tab). Per-tab command history. */
-    override val commandHistory = mutableListOf<String>()
-
-    /** Per-tab current input line buffer (Phase 19.5: was global in MainActivity).
-     * Wave-4: Compose mutableState so autocomplete recomposes while typing. */
-    override var currentCommandBuffer by mutableStateOf("")
-
-    /** Per-tab history navigation index (-1 = tidak browsing history). */
-    @Volatile
-    override var historyIndex: Int = -1
-
-    /** Prompt saat ini (dideteksi dari output shell). Current prompt. */
-    @Volatile
     override var currentPrompt: String = "tunnel@android:~$ "
 
     override val sessionType: String = "local"
 
-    /** Phase 46 (Pilar 2): Deskripsi lingkungan untuk AI context. */
     override val environmentDescription: String
-        get() = "Android shell lokal (toybox/mksh) — TIDAK ADA package manager (bukan apt, bukan pkg). Command tersedia: ls, cd, cat, echo, mkdir, rm, cp, mv, pwd, ps, kill, df, du, head, tail, grep, sed, awk. Tidak ada sudo."
+        get() = "Android shell lokal (toybox/mksh) — TIDAK ADA package manager (bukan apt, bukan pkg). " +
+            "Command tersedia: ls, cd, cat, echo, mkdir, rm, cp, mv, pwd, ps, kill, df, du, head, tail, " +
+            "grep, sed, awk. Tidak ada sudo."
 
-    /**
-     * Mulai sesi PTY baru.
-     * Start a new PTY session.
-     */
     override suspend fun start() {
         withContext(Dispatchers.IO) {
             isAlive = true
-            /* Wave-1: Reset FD close guard so restart can close the new master fd. */
-            fdClosed.set(false)
-            synchronized(outputLock) {
-                outputBuffer.setLength(0)
-            }
-            _lastCommandOutput.value = ""
+            resetSessionBuffers()
 
-            /* Phase 44 fix (MED-04): Hitung ukuran PTY awal dari display metrics
-             * alih-alih hardcode 80x24. Compose layout belum tersedia saat start()
-             * dipanggil, tapi display metrics sudah. Ini mengurangi flicker saat
-             * tab baru dibuka (sebelumnya: 80x24 → onSizeChanged → resize ke actual).
-             *
-             * Asumsi: fontSize default 12sp, char width ≈ 0.6 × fontSize, char height ≈ 1.2 × fontSize.
-             * Density from resources. */
             val displayMetrics = android.util.DisplayMetrics()
             try {
                 @Suppress("DEPRECATION")
@@ -142,239 +46,37 @@ class ShellExecutor(
             val initialCols = (screenWidthPx / charWidthPx).toInt().coerceIn(20, 200)
             val initialRows = (screenHeightPx / charHeightPx).toInt().coerceIn(10, 100)
 
-            val outFd = IntArray(1)
-            /* M2 fix: Check apakah native library berhasil di-load. */
             if (!TerminalJni.isLoaded) {
-                isAlive = false
-                Log.e(tag, "Native library tidak ter-load — tidak bisa buat PTY session")
-                emulator.process("\u001B[31m[ERROR] Native library (libtunnel_terminal.so) tidak dapat dimuat.\u001B[0m\n")
+                failStart("Native library (libtunnel_terminal.so) tidak dapat dimuat.")
                 emulator.process("\u001B[33mCoba reinstall APK atau cek ABI compatibility.\u001B[0m\n")
-                triggerScreenUpdate()
                 return@withContext
             }
-            /* Wave-1: Pass real app home path (multi-user / work profile safe). */
+
             val homePath = java.io.File(
                 context?.filesDir ?: java.io.File("/data/data/com.tunnel.terminal/files"),
                 "home"
             ).absolutePath
-            childPid = TerminalJni.createSession(initialRows, initialCols, outFd, homePath)
-            masterFd = outFd.getOrElse(0) { -1 }
+            val outFd = IntArray(1)
+            val pid = TerminalJni.createSession(initialRows, initialCols, outFd, homePath)
+            val fd = outFd.getOrElse(0) { -1 }
 
-            if (childPid <= 0 || masterFd < 0) {
-                isAlive = false
-                Log.e(tag, "createSession gagal: pid=$childPid, fd=$masterFd")
-                emulator.process("\u001B[31m[ERROR] Gagal membuat sesi PTY. Coba restart app.\u001B[0m\n")
-                triggerScreenUpdate()
+            if (pid <= 0 || fd < 0) {
+                failStart("Gagal membuat sesi PTY. Coba restart app.")
                 return@withContext
             }
 
-            pfd = ParcelFileDescriptor.adoptFd(masterFd)
-            Log.i(tag, "Sesi dimulai: pid=$childPid, fd=$masterFd, id=$id, size=${initialRows}x${initialCols}")
+            adoptMasterAndStartReader(pid, fd, "pty-read-$id")
+            Log.i(tag, "Local shell size=${initialRows}x${initialCols}")
 
-            /* Thread pembaca output shell - set sebagai daemon agar tidak block JVM exit.
-             * Shell output reader thread - daemon so it never blocks JVM exit. */
-            readThread = Thread({ readLoop() }, "pty-read-$id").apply {
-                isDaemon = true
-                start()
-            }
-
-            /* Beri waktu singkat untuk shell siap, lalu set PS1.
-             * Brief delay for shell readiness, then set PS1. */
             Thread.sleep(150)
             writeRaw("export PS1='tunnel@android:\$PWD\$ '\n")
-            /* Kirim resize awal agar shell tahu ukuran terminal.
-             * Send initial resize so shell knows terminal size. */
             TerminalJni.resize(masterFd, initialRows, initialCols)
         }
     }
 
-    /**
-     * Restart sesi yang sudah mati. Destroy lalu start ulang.
-     * Restart a dead session: destroy then start fresh.
-     */
     override suspend fun restart() {
         destroy()
-        /* Wave-1: Re-wire DA/DSR writeCallback after creating a new emulator. */
-        emulator = TerminalEmulator(themeHolder).also {
-            it.writeCallback = { data -> writeRaw(data) }
-        }
+        rewireEmulator()
         start()
-    }
-
-    private fun readLoop() {
-        val pfdRef = pfd
-        if (pfdRef == null) {
-            Log.e(tag, "pfd null di readLoop, abort")
-            return
-        }
-        val inputStream = FileInputStream(pfdRef.fileDescriptor)
-        val buffer = ByteArray(4096)
-        val decoder = StandardCharsets.UTF_8.newDecoder()
-            .onMalformedInput(CodingErrorAction.REPLACE)
-            .onUnmappableCharacter(CodingErrorAction.REPLACE)
-        val byteBuffer = ByteBuffer.wrap(buffer)
-        val charBuffer = CharBuffer.allocate(8192)
-
-        var bytesRead: Int = 0
-        try {
-            while (isAlive && inputStream.read(buffer).also { bytesRead = it } != -1) {
-                if (!isAlive) break
-                if (bytesRead <= 0) continue
-
-                byteBuffer.position(0)
-                byteBuffer.limit(bytesRead)
-                decoder.decode(byteBuffer, charBuffer, false)
-                charBuffer.flip()
-                val text = charBuffer.toString()
-                charBuffer.clear()
-
-                emulator.process(text)
-                /* Phase 21: Synchronize outputBuffer access (readLoop writes, main reads). */
-                val outputStr = synchronized(outputLock) {
-                    outputBuffer.append(text)
-                    /* Wave-4: larger ring so MarkerExecutor markers survive long apt logs. */
-                    if (outputBuffer.length > 16000) {
-                        outputBuffer = StringBuilder(outputBuffer.substring(outputBuffer.length - 16000))
-                    }
-                    outputBuffer.toString()
-                }
-                _lastCommandOutput.value = outputStr
-                triggerScreenUpdate()
-            }
-        } catch (e: InterruptedException) {
-            /* Thread di-interrupt saat destroy() — exit gracefully. */
-            Log.i(tag, "readLoop interrupted (destroy)")
-        } catch (e: Exception) {
-            Log.w(tag, "readLoop berakhir: ${e.message}")
-        } finally {
-            /* Phase 19.5: Close FileInputStream untuk hindari fd leak. */
-            try { inputStream.close() } catch (_: Exception) {}
-            try { emulator.flush() } catch (_: Exception) {}
-            /* Wave-3: Reap zombie child on natural shell exit (not only destroy()). */
-            try {
-                if (childPid > 1) {
-                    TerminalJni.killSession(childPid, 0) // maps to safe reap/kill path
-                    childPid = -1
-                }
-            } catch (e: Exception) {
-                Log.w(tag, "reap on exit: ${e.message}")
-            }
-            isAlive = false
-            emulator.process("\n\u001B[33m[Process Exited. Tap screen to restart session.]\u001B[0m\n")
-            triggerScreenUpdate()
-        }
-    }
-
-    override fun resizeTerminal(newRows: Int, newCols: Int, fontSize: Float) {
-        if (masterFd < 0) return
-        TerminalJni.resize(masterFd, newRows, newCols)
-        emulator.resize(newRows, newCols, fontSize.sp)
-        triggerScreenUpdate()
-    }
-
-    /** Phase 21: writeLock untuk serialize concurrent JNI writes dari multiple threads.
-     *  Tanpa ini, write dari main + write dari Auto-Pilot bisa interleave -> corrupt input. */
-    private val writeLock = Any()
-
-    override fun executeCommand(command: String) {
-        if (isAlive) writeRaw(command + "\n")
-    }
-
-    override fun writeRaw(data: String) {
-        if (masterFd < 0 || !isAlive) return
-        synchronized(writeLock) {
-            if (masterFd >= 0 && isAlive) {
-                TerminalJni.write(masterFd, data.toByteArray(StandardCharsets.UTF_8))
-            }
-        }
-    }
-
-    /**
-     * Bersihkan layar terminal (lokal, tidak kirim ke shell).
-     * Clear terminal screen locally (does NOT send to shell).
-     * Phase 21: Synchronized outputBuffer access.
-     */
-    override fun clearScreen() {
-        emulator.process("\u001B[2J\u001B[H")
-        /* Phase 49 fix (E-1): Clear scrollback juga saat user ketik 'clear'. */
-        emulator.clearScrollback()
-        synchronized(outputLock) {
-            outputBuffer.setLength(0)
-        }
-        _lastCommandOutput.value = ""
-        triggerScreenUpdate()
-    }
-
-    /**
-     * Ambil output terminal yang sudah dibersihkan dari ANSI escape codes.
-     * Get ANSI-stripped terminal output (clean for AI context).
-     * Phase 21: Synchronized outputBuffer access (thread-safe read).
-     */
-    override fun getCleanOutput(): String {
-        val raw = synchronized(outputLock) { outputBuffer.toString() }
-        val sb = StringBuilder(raw.length)
-        val regex = Regex("\u001B\\[[;?\\d]*[A-Za-z]|\u001B\\][^\\u0007]*\\u0007|\u001B\\[[0-9;]*[A-Za-z]")
-        var lastEnd = 0
-        regex.findAll(raw).forEach { m ->
-            sb.append(raw, lastEnd, m.range.first)
-            lastEnd = m.range.last + 1
-        }
-        sb.append(raw, lastEnd, raw.length)
-        /* Wave-4: expose more clean output for AI markers / get_terminal_output. */
-        return sb.toString().trim().take(8000)
-    }
-
-    /**
-     * Hancurkan sesi: kill child process, close fd, reap zombie.
-     * Destroy session: kill child, close fd, reap zombie.
-     *
-     * Phase 20: Fix double-close fd. pfd owns the fd via adoptFd,
-     * so ONLY close pfd (not TerminalJni.close + pfd.close).
-     * Also: make destroy non-blocking by closing pfd FIRST to unblock
-     * readLoop's inputStream.read(), then interrupt thread.
-     */
-    override fun destroy() {
-        if (!isAlive && masterFd < 0 && childPid < 0 && readThread == null) return
-        isAlive = false
-
-        /* Phase 20: Close pfd FIRST to unblock readLoop's inputStream.read().
-         * When pfd is closed, read() returns -1, readLoop exits naturally.
-         * This is more reliable than Thread.interrupt() which doesn't unblock
-         * FileInputStream.read() on all platforms. */
-        /* BUG-26 fix: Gunakan AtomicBoolean compareAndSet untuk mencegah double-close. */
-        try {
-            if (fdClosed.compareAndSet(false, true)) {
-                pfd?.close()
-            }
-        } catch (_: Exception) {}
-        pfd = null
-
-        /* Now interrupt + join readLoop thread (should exit quickly since pfd closed). */
-        try {
-            readThread?.interrupt()
-            readThread?.join(300)  /* Reduced from 500ms since pfd close should unblock */
-        } catch (_: Exception) {}
-        readThread = null
-
-        /* Kill child process. */
-        try {
-            if (childPid > 1) {
-                TerminalJni.killSession(childPid, 15) // SIGTERM
-                Thread.sleep(50)  /* Reduced from 100ms */
-                TerminalJni.killSession(childPid, 9)  // SIGKILL + reap
-                childPid = -1
-            }
-        } catch (e: Exception) {
-            Log.w(tag, "killSession error: ${e.message}")
-        }
-
-        /* Phase 20: fd already closed via pfd.close() above. Just reset state.
-         * Don't call TerminalJni.close(masterFd) — pfd owns it, double-close bug. */
-        masterFd = -1
-    }
-
-    companion object {
-        /* BUG-25 fix: Global counter untuk ID unik (bukan timestamp yang bisa collision). */
-        private val globalIdCounter = AtomicInteger(0)
     }
 }

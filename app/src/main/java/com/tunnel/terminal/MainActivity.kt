@@ -277,6 +277,10 @@ class MainActivity : ComponentActivity() {
         }
         permissionManager = PermissionManager(this)
         contextManager = ContextManager(this)
+        /* Wave-5: Sandbox @file: mentions via ToolExecutor path resolver. */
+        contextManager.setPathResolver { raw ->
+            toolExecutor.resolvePathForAccess(raw)
+        }
         mcpManager = McpManager(this)
         /* Phase 60 fix (audit B-2): Set mcpManager ke aiAgent supaya MCP tools
          * bisa di-inject dinamis ke TOOL_SCHEMA di setiap request AI. */
@@ -920,7 +924,8 @@ class MainActivity : ComponentActivity() {
             maxTokens = prefs.getInt("maxTokens", 2000),
             requestTimeoutMs = prefs.getInt("requestTimeoutMs", 30000),
             supportsVision = prefs.getBoolean("supportsVision", false),
-            supportsToolCalling = prefs.getBoolean("supportsToolCalling", false)
+            supportsToolCalling = prefs.getBoolean("supportsToolCalling", false),
+            apiStyle = prefs.getString("apiStyle", "openai") ?: "openai"
         )
     }
 
@@ -936,6 +941,7 @@ class MainActivity : ComponentActivity() {
         prefs.putInt("requestTimeoutMs", newSettings.requestTimeoutMs)
         prefs.putBoolean("supportsVision", newSettings.supportsVision)
         prefs.putBoolean("supportsToolCalling", newSettings.supportsToolCalling)
+        prefs.putString("apiStyle", newSettings.apiStyle)
         prefs.apply()
 
         try {

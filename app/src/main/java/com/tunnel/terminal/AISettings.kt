@@ -19,9 +19,20 @@ data class AISettings(
     val supportsVision: Boolean = false,
     /** Phase 59 fix (B-1): True jika provider mendukung native tool_calling API.
      * OpenAI, DeepSeek, Groq, OpenRouter, Together AI, Fireworks AI, Mistral mendukung.
-     * Anthropic (via OpenAI-compat) dan local (Ollama/LM Studio) mungkin tidak — fallback ke text-tag. */
-    val supportsToolCalling: Boolean = false
-)
+     * Anthropic native Messages API juga (Wave-5). */
+    val supportsToolCalling: Boolean = false,
+    /**
+     * Wave-5: API wire format.
+     * - "openai": OpenAI-compatible /chat/completions
+     * - "anthropic": Anthropic Messages API /v1/messages
+     */
+    val apiStyle: String = "openai"
+) {
+    /** True when using Anthropic Messages API (not OpenAI-compat proxy).
+     * Driven only by apiStyle so "Anthropic (OpenAI Compat)" stays on chat/completions. */
+    val isAnthropicNative: Boolean
+        get() = apiStyle.equals("anthropic", ignoreCase = true)
+}
 
 /**
  * Preset provider untuk memudahkan konfigurasi.
@@ -40,7 +51,17 @@ object AIProviders {
         AISettings("Groq (Llama 3)", "https://api.groq.com/openai/v1", "", "llama3-8b-8192", supportsToolCalling = true),
         AISettings("OpenRouter (Multi)", "https://openrouter.ai/api/v1", "", "anthropic/claude-3-haiku", supportsVision = true, supportsToolCalling = true),
         AISettings("Gemini (OpenAI Compat)", "https://generativelanguage.googleapis.com/v1beta/openai", "", "gemini-1.5-flash", supportsVision = true, supportsToolCalling = true),
-        AISettings("Anthropic (OpenAI Compat)", "https://api.anthropic.com/v1", "", "claude-3-5-sonnet-latest", supportsVision = true),
+        /* Wave-5: Native Anthropic Messages API (x-api-key + /v1/messages). */
+        AISettings(
+            "Anthropic (Native)",
+            "https://api.anthropic.com",
+            "",
+            "claude-3-5-sonnet-latest",
+            supportsVision = true,
+            supportsToolCalling = true,
+            apiStyle = "anthropic"
+        ),
+        AISettings("Anthropic (OpenAI Compat)", "https://api.anthropic.com/v1", "", "claude-3-5-sonnet-latest", supportsVision = true, apiStyle = "openai"),
         AISettings("Mistral", "https://api.mistral.ai/v1", "", "mistral-small-latest", supportsToolCalling = true),
         AISettings("Together AI", "https://api.together.xyz/v1", "", "meta-llama/Llama-3-8b-chat-hf", supportsToolCalling = true),
         AISettings("Fireworks AI", "https://api.fireworks.ai/inference/v1", "", "accounts/fireworks/models/llama-v3-8b", supportsToolCalling = true),

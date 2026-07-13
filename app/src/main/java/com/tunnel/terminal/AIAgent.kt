@@ -219,14 +219,30 @@ class AIAgent(
             return@callbackFlow
         }
 
+        val t0 = System.currentTimeMillis()
+        var responseChars = 0
+        var requestChars = 0
+        var success = false
+        var errorMsg: String? = null
+        val apiStyle = if (settings.isAnthropicNative) "anthropic" else "openai"
+
         var connection: HttpURLConnection? = null
         try {
             connection = openConnection(settings, streaming = true)
-            val requestBody = buildRequestBody(
-                settings, conversation, terminalContext, streaming = true,
-                sessionType = sessionType, environmentDescription = environmentDescription,
-                projectContext = projectContext, taskPlan = taskPlan
-            )
+            val requestBody = if (settings.isAnthropicNative) {
+                buildAnthropicRequestBody(
+                    settings, conversation, terminalContext, streaming = true,
+                    sessionType = sessionType, environmentDescription = environmentDescription,
+                    projectContext = projectContext, taskPlan = taskPlan
+                )
+            } else {
+                buildRequestBody(
+                    settings, conversation, terminalContext, streaming = true,
+                    sessionType = sessionType, environmentDescription = environmentDescription,
+                    projectContext = projectContext, taskPlan = taskPlan
+                )
+            }
+            requestChars = requestBody.length
             writeRequest(connection, requestBody)
 
             val responseCode = connection.responseCode
@@ -235,27 +251,24 @@ class AIAgent(
             if (responseCode !in 200..299) {
                 val errBody = readAll(inputStream).take(800)
                 Log.e(tag, "API error $responseCode (streaming): $errBody")
+                errorMsg = "HTTP $responseCode"
                 trySend(formatHttpError(responseCode, errBody))
                 channel.close()
                 return@callbackFlow
             }
 
-            /* Parse SSE stream baris demi baris.
-             * Parse SSE stream line by line. */
             val reader = BufferedReader(InputStreamReader(inputStream, Charsets.UTF_8))
             var line: String?
-
-            /* Phase 59 fix (B-1): Accumulator untuk native tool_calls deltas.
-             * API mengirim tool_calls dalam chunks — index, id, name (first chunk),
-             * arguments (accumulated across chunks). Kumpulkan semua, lalu di akhir
-             * stream convert ke <tool_call> tags supaya compatible dengan parser lama. */
             val toolCallAccumulator = mutableMapOf<Int, org.json.JSONObject>()
+            /* Wave-5: Anthropic tool_use partial JSON by content block index. */
+            val anthropicToolBlocks = mutableMapOf<Int, Pair<String, StringBuilder>>()
 
             while (reader.readLine().also { line = it } != null) {
-                if (!isActive) break  // consumer cancelled
+                if (!isActive) break
 
                 val raw = line ?: continue
-                if (raw.isEmpty() || raw.startsWith(":")) continue  // SSE comment/heartbeat
+                if (raw.isEmpty() || raw.startsWith(":")) continue
+                if (raw.startsWith("event:")) continue // Anthropic SSE event lines
                 if (!raw.startsWith("data:")) continue
 
                 val data = raw.removePrefix("data:").trim()
@@ -263,58 +276,97 @@ class AIAgent(
 
                 try {
                     val json = JSONObject(data)
-                    val choices = json.optJSONArray("choices") ?: continue
-                    if (choices.length() == 0) continue
-                    val choiceObj = choices.getJSONObject(0)
-                    val delta = choiceObj.optJSONObject("delta")
 
-                    // Phase 59: Cek native tool_calls di delta
-                    val toolCalls = delta?.optJSONArray("tool_calls")
-                    if (toolCalls != null) {
-                        for (i in 0 until toolCalls.length()) {
-                            val tc = toolCalls.getJSONObject(i)
-                            val idx = tc.optInt("index", 0)
-                            val existing = toolCallAccumulator[idx] ?: org.json.JSONObject()
-                            // First chunk has id + function.name
-                            tc.optString("id", "").takeIf { it.isNotEmpty() }?.let { existing.put("id", it) }
-                            tc.optJSONObject("function")?.let { fn ->
-                                fn.optString("name", "").takeIf { it.isNotEmpty() }?.let {
-                                    existing.put("name", it)
+                    if (settings.isAnthropicNative) {
+                        when (json.optString("type")) {
+                            "content_block_delta" -> {
+                                val delta = json.optJSONObject("delta")
+                                when (delta?.optString("type")) {
+                                    "text_delta" -> {
+                                        val t = delta.optString("text", "")
+                                        if (t.isNotEmpty()) {
+                                            responseChars += t.length
+                                            trySend(t)
+                                        }
+                                    }
+                                    "input_json_delta" -> {
+                                        val idx = json.optInt("index", 0)
+                                        val partial = delta.optString("partial_json", "")
+                                        anthropicToolBlocks[idx]?.second?.append(partial)
+                                    }
                                 }
-                                // Arguments are accumulated across chunks
-                                val prevArgs = existing.optString("arguments", "")
-                                val newArgs = fn.optString("arguments", "")
-                                existing.put("arguments", prevArgs + newArgs)
                             }
-                            toolCallAccumulator[idx] = existing
+                            "content_block_start" -> {
+                                val block = json.optJSONObject("content_block")
+                                if (block?.optString("type") == "tool_use") {
+                                    val idx = json.optInt("index", 0)
+                                    val name = block.optString("name", "")
+                                    anthropicToolBlocks[idx] = name to StringBuilder()
+                                }
+                            }
+                            "message_stop", "error" -> { /* end handled after loop */ }
+                        }
+                    } else {
+                        val choices = json.optJSONArray("choices") ?: continue
+                        if (choices.length() == 0) continue
+                        val choiceObj = choices.getJSONObject(0)
+                        val delta = choiceObj.optJSONObject("delta")
+
+                        val toolCalls = delta?.optJSONArray("tool_calls")
+                        if (toolCalls != null) {
+                            for (i in 0 until toolCalls.length()) {
+                                val tc = toolCalls.getJSONObject(i)
+                                val idx = tc.optInt("index", 0)
+                                val existing = toolCallAccumulator[idx] ?: org.json.JSONObject()
+                                tc.optString("id", "").takeIf { it.isNotEmpty() }?.let { existing.put("id", it) }
+                                tc.optJSONObject("function")?.let { fn ->
+                                    fn.optString("name", "").takeIf { it.isNotEmpty() }?.let {
+                                        existing.put("name", it)
+                                    }
+                                    val prevArgs = existing.optString("arguments", "")
+                                    val newArgs = fn.optString("arguments", "")
+                                    existing.put("arguments", prevArgs + newArgs)
+                                }
+                                toolCallAccumulator[idx] = existing
+                            }
+                        }
+
+                        val content = delta?.optString("content") ?: ""
+                        if (content.isNotEmpty()) {
+                            responseChars += content.length
+                            trySend(content)
                         }
                     }
-
-                    // Text content (normal streaming)
-                    val content = delta?.optString("content") ?: ""
-                    if (content.isNotEmpty()) {
-                        trySend(content)
-                    }
                 } catch (e: Exception) {
-                    /* Partial JSON atau format lain - skip, jangan crash stream. */
                     Log.w(tag, "Skip SSE line: ${e.message}")
                 }
             }
             reader.close()
 
-            /* Phase 59 fix (B-1): Setelah stream selesai, kalau ada tool_calls
-             * yang terakumulasi, convert ke <tool_call> tags dan emit sebagai text.
-             * Ini "bridge" approach — native tool_calls di-convert ke format yang
-             * sudah bisa di-parse oleh AiToolCall.parseFromResponse().
-             *
-             * Keuntungan: arguments sudah di-decode oleh API provider sebagai JSON
-             * yang valid — TIDAK ADA risiko escaping/parsing error seperti text-tag. */
-            if (toolCallAccumulator.isNotEmpty()) {
+            /* Emit accumulated tool calls as <tool_call> tags (OpenAI + Anthropic). */
+            if (settings.isAnthropicNative && anthropicToolBlocks.isNotEmpty()) {
+                val sb = StringBuilder()
+                for ((_, pair) in anthropicToolBlocks.toSortedMap()) {
+                    val name = pair.first
+                    val argsStr = pair.second.toString().ifBlank { "{}" }
+                    try {
+                        val argsJson = org.json.JSONObject(argsStr)
+                        val toolCallJson = org.json.JSONObject().put("tool", name).put("args", argsJson)
+                        sb.append("<tool_call>").append(toolCallJson.toString()).append("</tool_call>\n")
+                    } catch (e: Exception) {
+                        sb.append("<tool_call>{\"tool\":\"$name\",\"args\":$argsStr}</tool_call>\n")
+                    }
+                }
+                if (sb.isNotEmpty()) {
+                    responseChars += sb.length
+                    trySend(sb.toString())
+                    Log.i(tag, "Anthropic tool_use converted: ${anthropicToolBlocks.size}")
+                }
+            } else if (toolCallAccumulator.isNotEmpty()) {
                 val sb = StringBuilder()
                 for ((_, tc) in toolCallAccumulator.toSortedMap()) {
                     val name = tc.optString("name", "")
                     val argsStr = tc.optString("arguments", "{}")
-                    // Parse arguments JSON, lalu rebuild sebagai tool_call tag
                     try {
                         val argsJson = org.json.JSONObject(argsStr)
                         val toolCallJson = org.json.JSONObject()
@@ -323,31 +375,48 @@ class AIAgent(
                         sb.append("<tool_call>").append(toolCallJson.toString()).append("</tool_call>\n")
                     } catch (e: Exception) {
                         Log.w(tag, "Gagal parse accumulated tool_call args: ${e.message}")
-                        // Fallback: emit as-is
                         sb.append("<tool_call>{\"tool\":\"$name\",\"args\":$argsStr}</tool_call>\n")
                     }
                 }
                 if (sb.isNotEmpty()) {
+                    responseChars += sb.length
                     trySend(sb.toString())
                     Log.i(tag, "Native tool_calls converted to text-tag: ${toolCallAccumulator.size} calls")
                 }
             }
+            success = true
         } catch (e: java.net.SocketTimeoutException) {
+            errorMsg = "timeout"
             trySend("Timeout (${settings.requestTimeoutMs}ms). Provider lambat atau unreachable.")
         } catch (e: java.net.UnknownHostException) {
+            errorMsg = "dns"
             trySend("DNS gagal: ${e.message}. Cek koneksi internet atau Base URL.")
         } catch (e: javax.net.ssl.SSLException) {
+            errorMsg = "ssl"
             trySend("SSL/TLS error: ${e.message}.")
         } catch (e: Exception) {
+            errorMsg = e.javaClass.simpleName
             Log.e(tag, "Streaming error: ${e.javaClass.simpleName}: ${e.message}")
             trySend("Kesalahan streaming (${e.javaClass.simpleName}): ${e.message ?: "tidak diketahui"}")
         } finally {
+            AiMetrics.record(
+                AiMetrics.RequestStat(
+                    timestampMs = System.currentTimeMillis(),
+                    provider = settings.providerName,
+                    model = settings.modelName,
+                    latencyMs = System.currentTimeMillis() - t0,
+                    requestChars = requestChars,
+                    responseChars = responseChars,
+                    apiStyle = apiStyle,
+                    success = success,
+                    error = errorMsg
+                )
+            )
             connection?.disconnect()
             channel.close()
         }
 
         awaitClose {
-            /* Consumer cancelled - disconnect. */
             try { connection?.disconnect() } catch (_: Exception) {}
         }
     }.flowOn(Dispatchers.IO)
@@ -366,40 +435,49 @@ class AIAgent(
     }
 
     private fun openConnection(settings: AISettings, streaming: Boolean): HttpURLConnection {
-        val apiUrl = "${settings.baseUrl.trimEnd('/')}/chat/completions"
-        val url = URL(apiUrl)
-
-        /* Phase 60 fix (audit Bug #2): Enforce HTTPS untuk provider eksternal. */
-        if (!url.protocol.equals("https", ignoreCase = true)) {
-            val host = url.host.lowercase()
-            val isLocal = host == "localhost" || host == "127.0.0.1" ||
-                          host == "10.0.2.2" || host == "::1"
-            if (!isLocal) {
-                throw java.io.IOException(
-                    "Security: Hanya HTTPS yang didukung untuk provider eksternal. " +
-                    "URL '" + host + "' menggunakan HTTP tidak aman. " +
-                    "Gunakan HTTPS, atau localhost untuk local AI (Ollama/LM Studio)."
-                )
-            }
+        val base = settings.baseUrl.trimEnd('/')
+        val apiUrl = if (settings.isAnthropicNative) {
+            /* Wave-5: Anthropic Messages endpoint. */
+            if (base.endsWith("/v1")) "$base/messages" else "$base/v1/messages"
+        } else {
+            "$base/chat/completions"
         }
+        val url = URL(apiUrl)
+        enforceHttpsOrLocal(url)
 
         return (url.openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"
             setRequestProperty("Content-Type", "application/json; charset=utf-8")
-            setRequestProperty("Authorization", "Bearer ${settings.apiKey}")
+            if (settings.isAnthropicNative) {
+                setRequestProperty("x-api-key", settings.apiKey)
+                setRequestProperty("anthropic-version", "2023-06-01")
+            } else {
+                setRequestProperty("Authorization", "Bearer ${settings.apiKey}")
+            }
             setRequestProperty("HTTP-Referer", "https://github.com/NanoMindExplorer/tunnel-terminal")
             setRequestProperty("X-Title", "Tunnel Terminal")
             setRequestProperty("User-Agent", "TunnelTerminal/${com.tunnel.terminal.BuildConfig.VERSION_NAME} (Android)")
-            /* Accept: text/event-stream penting untuk SSE. */
             if (streaming) {
                 setRequestProperty("Accept", "text/event-stream")
             }
             connectTimeout = settings.requestTimeoutMs
-            /* Streaming: read timeout 0 = unlimited (chunked). */
-            /* BUG-35 fix: Beri readTimeout terbatas (120s) untuk streaming, bukan 0 (unlimited).
-             * Jika provider macet di tengah stream, koneksi akan timeout, bukan hang selamanya. */
             readTimeout = if (streaming) 120000 else settings.requestTimeoutMs
             doOutput = true
+        }
+    }
+
+    /** Shared HTTPS check for OpenAI + Anthropic + ModelFetcher. */
+    internal fun enforceHttpsOrLocal(url: URL) {
+        if (!url.protocol.equals("https", ignoreCase = true)) {
+            val host = url.host.lowercase()
+            val isLocal = host == "localhost" || host == "127.0.0.1" ||
+                host == "10.0.2.2" || host == "::1"
+            if (!isLocal) {
+                throw java.io.IOException(
+                    "Security: Hanya HTTPS yang didukung untuk provider eksternal. " +
+                        "URL '$host' menggunakan HTTP tidak aman."
+                )
+            }
         }
     }
 
@@ -646,6 +724,140 @@ class AIAgent(
         }
 
         return requestBody.toString()
+    }
+
+    /**
+     * Wave-5: Anthropic Messages API body.
+     * system is a top-level string; messages only user/assistant; tools use input_schema.
+     */
+    private fun buildAnthropicRequestBody(
+        settings: AISettings,
+        conversation: List<ChatMessage>,
+        terminalContext: String,
+        streaming: Boolean,
+        sessionType: String,
+        environmentDescription: String,
+        projectContext: String,
+        taskPlan: String
+    ): String {
+        /* Reuse system prompt construction via OpenAI builder's shell section logic. */
+        val openAiBody = JSONObject(buildRequestBody(
+            settings, conversation, terminalContext, streaming,
+            sessionType, environmentDescription, projectContext, taskPlan
+        ))
+        val messagesIn = openAiBody.getJSONArray("messages")
+        val systemParts = mutableListOf<String>()
+        val anthropicMessages = JSONArray()
+
+        for (i in 0 until messagesIn.length()) {
+            val m = messagesIn.getJSONObject(i)
+            val role = m.optString("role")
+            when (role) {
+                "system" -> {
+                    val c = m.opt("content")
+                    when (c) {
+                        is String -> if (c.isNotBlank()) systemParts.add(c)
+                        is JSONArray -> {
+                            /* Multimodal system rare — flatten text parts. */
+                            for (j in 0 until c.length()) {
+                                val part = c.optJSONObject(j)
+                                if (part?.optString("type") == "text") {
+                                    systemParts.add(part.optString("text"))
+                                }
+                            }
+                        }
+                    }
+                }
+                "user", "assistant" -> {
+                    val content = m.opt("content")
+                    val out = JSONObject().put("role", role)
+                    when (content) {
+                        is String -> out.put("content", content)
+                        is JSONArray -> {
+                            /* Convert OpenAI image parts to Anthropic image blocks. */
+                            val blocks = JSONArray()
+                            for (j in 0 until content.length()) {
+                                val part = content.getJSONObject(j)
+                                when (part.optString("type")) {
+                                    "text" -> blocks.put(
+                                        JSONObject().put("type", "text").put("text", part.optString("text"))
+                                    )
+                                    "image_url" -> {
+                                        val url = part.optJSONObject("image_url")?.optString("url") ?: ""
+                                        val b64 = url.substringAfter("base64,", "")
+                                        if (b64.isNotBlank()) {
+                                            blocks.put(
+                                                JSONObject()
+                                                    .put("type", "image")
+                                                    .put("source", JSONObject()
+                                                        .put("type", "base64")
+                                                        .put("media_type", "image/jpeg")
+                                                        .put("data", b64)
+                                                    )
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                            out.put("content", blocks)
+                        }
+                        else -> out.put("content", content?.toString() ?: "")
+                    }
+                    anthropicMessages.put(out)
+                }
+            }
+        }
+
+        /* Anthropic requires at least one message and alternating roles — ensure first is user. */
+        if (anthropicMessages.length() == 0) {
+            anthropicMessages.put(JSONObject().put("role", "user").put("content", "(empty)"))
+        }
+
+        val body = JSONObject()
+            .put("model", settings.modelName)
+            .put("max_tokens", settings.maxTokens)
+            .put("temperature", settings.temperature)
+            .put("stream", streaming)
+            .put("messages", anthropicMessages)
+        if (systemParts.isNotEmpty()) {
+            body.put("system", systemParts.joinToString("\n\n"))
+        }
+
+        if (settings.supportsToolCalling) {
+            val tools = JSONArray()
+            for (i in 0 until TOOL_SCHEMA.length()) {
+                val item = TOOL_SCHEMA.getJSONObject(i)
+                val fn = item.optJSONObject("function") ?: continue
+                tools.put(
+                    JSONObject()
+                        .put("name", fn.optString("name"))
+                        .put("description", fn.optString("description"))
+                        .put("input_schema", fn.optJSONObject("parameters") ?: JSONObject().put("type", "object"))
+                )
+            }
+            /* MCP tools */
+            try {
+                mcpManager?.discoveredTools?.forEach { (serverName, mcpTools) ->
+                    mcpTools.forEach { mcpTool ->
+                        val params = try {
+                            JSONObject(mcpTool.inputSchema.ifBlank { "{}" })
+                        } catch (_: Exception) {
+                            JSONObject().put("type", "object")
+                        }
+                        if (!params.has("type")) params.put("type", "object")
+                        tools.put(
+                            JSONObject()
+                                .put("name", "mcp.$serverName.${mcpTool.name}")
+                                .put("description", mcpTool.description.ifBlank { mcpTool.name })
+                                .put("input_schema", params)
+                        )
+                    }
+                }
+            } catch (_: Exception) {}
+            if (tools.length() > 0) body.put("tools", tools)
+        }
+
+        return body.toString()
     }
 
     private fun writeRequest(connection: HttpURLConnection, body: String) {
