@@ -23,6 +23,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.key.*
 import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.awaitPointerEventScope
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.layout.onSizeChanged
@@ -198,8 +199,11 @@ fun ExtraKeysBar(
         "ESC", "TAB", "CTRL", "ALT", "↑", "↓", "←", "→",
         "HOME", "END", "PGUP", "PGDN", "BKSP", "DEL", "PASTE"
     )
-    /* Wave-12: One-shot control + F5–F12 for mobile TUI (vim/htop/less). */
-    val quickCtrlKeys = listOf("^C", "^D", "^Z", "^L", "^U", "^W", "F5", "F6", "F7", "F8", "F9", "F10", "F11", "F12")
+    /* Wave-12/14: One-shot control + F1–F12 + readline chips for mobile TUI. */
+    val quickCtrlKeys = listOf(
+        "^C", "^D", "^Z", "^L", "^U", "^W", "^A", "^E",
+        "F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8", "F9", "F10", "F11", "F12"
+    )
     val symbolKeys = listOf("~", "*", "$", "\"", "'", ";", "&", "|", "-", "/", "(", ")", "<", ">", "=", "{", "}", "[", "]", "#", "!", "?", "\\", "@", "`")
     /* Wave-13: Keys that repeat while held (arrows, backspace, page). */
     val repeatableKeys = setOf("↑", "↓", "←", "→", "BKSP", "DEL", "PGUP", "PGDN")
@@ -330,7 +334,11 @@ fun TerminalScreenView(
     fontSizeState: Float = 12f,
     onFontSizeChange: (Float) -> Unit = {},
     /* Phase 53: Paste callback for floating toolbar. */
-    onPasteRequested: () -> Unit = {}
+    onPasteRequested: () -> Unit = {},
+    /* Wave-14: Open URL from selection (http/https). */
+    onOpenUrl: (String) -> Unit = {},
+    /* Wave-14: Dead-session overlay label override. */
+    deadSessionMessage: String = "Session exited.\nTap anywhere to restart\n(history preserved)."
 ) {
     /* Phase 24: fontSize dari external state (persist antar recompose + tab switch). */
     val fontSize = fontSizeState
@@ -402,7 +410,8 @@ fun TerminalScreenView(
     /* Wave-1: Actually render scrollback history above the live screen.
      * getScrollbackLines(0, n) returns newest-first; reverse for oldest-at-top. */
     val scrollbackSnapshot = remember(screenDirty) {
-        val count = emulator.getScrollbackCount().coerceAtMost(500)
+        /* Wave-14: Raise visible scrollback to 1200 (virtualization deferred). */
+        val count = emulator.getScrollbackCount().coerceAtMost(1200)
         if (count <= 0) emptyList()
         else emulator.getScrollbackLines(0, count).asReversed()
     }
@@ -427,26 +436,30 @@ fun TerminalScreenView(
         return androidx.compose.ui.geometry.Rect(left, top, right, bottom)
     }
 
+    /* Wave-14: URL under selection (for Open chip). */
+    var selectedUrl by remember { mutableStateOf<String?>(null) }
+
     fun showSelectionToolbar() {
         val start = selectionStart ?: return
         val end = selectionEnd ?: return
         val rect = selectionBoundsToRect(start, end)
+        val selectedText = getSelectedTextFromContent(
+            scrollbackSnapshot, screenSnapshot,
+            selectionStart, selectionEnd, renderCols, sbCount
+        )
+        selectedUrl = UrlOpenUtils.firstUrl(selectedText)
         textToolbar.showMenu(
             rect = rect,
             onCopyRequested = {
-                /* Wave-13: Copy across scrollback + live screen. */
-                val text = getSelectedTextFromContent(
-                    scrollbackSnapshot, screenSnapshot,
-                    selectionStart, selectionEnd, renderCols, sbCount
-                )
-                if (text.isNotEmpty()) {
-                    clipboardManager.setText(AnnotatedString(text))
-                    android.widget.Toast.makeText(context, "Copied ${text.length} chars", android.widget.Toast.LENGTH_SHORT).show()
+                if (selectedText.isNotEmpty()) {
+                    clipboardManager.setText(AnnotatedString(selectedText))
+                    android.widget.Toast.makeText(context, "Copied ${selectedText.length} chars", android.widget.Toast.LENGTH_SHORT).show()
                 }
                 textToolbar.hide()
                 isSelecting = false
                 selectionStart = null
                 selectionEnd = null
+                selectedUrl = null
             },
             onPasteRequested = {
                 onPasteRequested()
@@ -454,6 +467,7 @@ fun TerminalScreenView(
                 isSelecting = false
                 selectionStart = null
                 selectionEnd = null
+                selectedUrl = null
             }
         )
     }
@@ -463,6 +477,7 @@ fun TerminalScreenView(
         isSelecting = false
         selectionStart = null
         selectionEnd = null
+        selectedUrl = null
     }
 
     Box(
@@ -595,6 +610,37 @@ fun TerminalScreenView(
                     }
                 }
             }
+            /* Wave-14: Mouse wheel / trackpad scroll → history scroll, or mouse report if app mode.
+             * Uses Initial pass + only reacts to non-zero scrollDelta so tap/selection still work. */
+            .pointerInput(renderCols, renderRows, isSelecting) {
+                awaitPointerEventScope {
+                    while (true) {
+                        val event = awaitPointerEvent(PointerEventPass.Initial)
+                        val change = event.changes.firstOrNull { ch ->
+                            ch.scrollDelta.y != 0f || ch.scrollDelta.x != 0f
+                        } ?: continue
+                        val scroll = change.scrollDelta
+                        change.consume()
+                        if (isSelecting) continue
+                        val mouseOn = emulator.mouseTracking || emulator.mouseSgr
+                        if (mouseOn) {
+                            val btn = if (scroll.y < 0) 64 else 65
+                            val charW = with(density) { fontSize.sp.toPx() * 0.6f }
+                            val charH = with(density) { fontSize.sp.toPx() * 1.2f }
+                            val col = (change.position.x / charW).toInt().coerceIn(1, renderCols.coerceAtLeast(1))
+                            val row = (change.position.y / charH).toInt().coerceIn(1, renderRows.coerceAtLeast(1))
+                            emulator.encodeMouseEvent(btn, col, row, press = true)?.let { seq ->
+                                emulator.writeCallback?.invoke(seq)
+                            }
+                        } else if (scrollState.maxValue > 0) {
+                            val dy = (scroll.y * 48f).toInt()
+                            val target = (scrollState.value - dy).coerceIn(0, scrollState.maxValue)
+                            scope.launch { scrollState.scrollTo(target) }
+                        }
+                        onScroll(scroll.y)
+                    }
+                }
+            }
     ) {
         /* Phase 35: Selection state + snapshot + dims already declared before Box. */
 
@@ -672,16 +718,39 @@ fun TerminalScreenView(
             }
         }
 
+        /* Wave-14: Open URL chip when selection contains http(s). */
+        selectedUrl?.let { url ->
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(12.dp)
+                    .background(Color(0xFF1565C0).copy(alpha = 0.95f), RoundedCornerShape(8.dp))
+                    .clickable {
+                        onOpenUrl(url)
+                        hideSelectionToolbar()
+                    }
+                    .padding(horizontal = 12.dp, vertical = 8.dp)
+            ) {
+                Text(
+                    "Open URL ↗",
+                    color = Color.White,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 11.sp,
+                    maxLines = 1
+                )
+            }
+        }
+
         if (!isAlive) {
             Box(
                 modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.8f)).clickable { onRestartSession() },
                 contentAlignment = Alignment.Center
             ) {
                 Text(
-                    "Session Exited.\nTap anywhere to restart.",
+                    deadSessionMessage,
                     color = Color.White,
                     fontFamily = FontFamily.Monospace,
-                    fontSize = 16.sp
+                    fontSize = 14.sp
                 )
             }
         }

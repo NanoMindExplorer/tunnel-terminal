@@ -161,10 +161,46 @@ class TerminalEmulator(private val themeHolder: ThemeHolder = ThemeHolder()) {
     var bracketedPaste: Boolean = false
         private set
 
+    /**
+     * Wave-14: Xterm mouse tracking.
+     * 1000 = click, 1002 = drag, 1003 = any motion; 1006 = SGR encoding.
+     */
+    @Volatile
+    var mouseTracking: Boolean = false
+        private set
+    @Volatile
+    var mouseSgr: Boolean = false
+        private set
+    @Volatile
+    private var mouseButtonMode: Boolean = false // 1002
+    @Volatile
+    private var mouseAnyMode: Boolean = false // 1003
+
     /** Wave-12: Arrow key sequence for current DECCKM mode. dir: A=up B=down C=right D=left */
     fun cursorKey(dir: Char): String {
         val d = dir.uppercaseChar()
         return if (applicationCursorKeys) "\u001BO$d" else "\u001B[$d"
+    }
+
+    /**
+     * Wave-14: Encode a mouse event for the active mode (1-based x/y screen coords).
+     * button: 0=left, 1=middle, 2=right, 3=release (legacy), 64/65 = wheel up/down.
+     */
+    fun encodeMouseEvent(button: Int, x: Int, y: Int, press: Boolean): String? {
+        if (!mouseTracking && !mouseButtonMode && !mouseAnyMode) return null
+        val cx = x.coerceIn(1, cols.coerceAtLeast(1))
+        val cy = y.coerceIn(1, rows.coerceAtLeast(1))
+        return if (mouseSgr) {
+            val b = if (press) button else button // release uses same button + 'm'
+            val final = if (press) 'M' else 'm'
+            "\u001B[<$b;$cx;$cy$final"
+        } else {
+            /* Legacy X10-style limited to 223. */
+            val b = (32 + if (press) button else 3).toChar()
+            val cxC = (32 + cx).toChar()
+            val cyC = (32 + cy).toChar()
+            "\u001B[M$b$cxC$cyC"
+        }
     }
 
     /** Wave-12: Function key sequences (xterm). F1–F4 SS3, F5–F12 CSI. */
@@ -358,6 +394,30 @@ class TerminalEmulator(private val themeHolder: ThemeHolder = ThemeHolder()) {
 
     /** Jumlah baris scrollback yang tersimpan. */
     fun getScrollbackCount(): Int = synchronized(lock) { scrollbackLines.size }
+
+    /**
+     * Wave-14: Plain-text lines oldest-first: scrollback then live screen.
+     * Used by find-in-scrollback and export helpers.
+     */
+    fun exportPlainLines(maxScrollback: Int = 2000): List<String> = synchronized(lock) {
+        val out = ArrayList<String>(scrollbackLines.size + rows)
+        val from = (scrollbackLines.size - maxScrollback).coerceAtLeast(0)
+        for (i in from until scrollbackLines.size) {
+            out.add(lineToPlain(scrollbackLines[i]))
+        }
+        for (r in 0 until rows) {
+            out.add(lineToPlain(screen[r]))
+        }
+        out
+    }
+
+    private fun lineToPlain(line: Array<TerminalCell>): String {
+        val sb = StringBuilder(line.size)
+        for (cell in line) {
+            if (!cell.wideContinuation) sb.append(cell.char)
+        }
+        return sb.toString().trimEnd()
+    }
 
     /** Ambil baris scrollback untuk ditampilkan saat user scroll ke atas.
      *  @param offset 0 = baris paling baru di scrollback (terakhir keluar dari layar) */
@@ -1008,6 +1068,23 @@ class TerminalEmulator(private val themeHolder: ThemeHolder = ThemeHolder()) {
                 1 -> applicationCursorKeys = set
                 /* Wave-12: Bracketed paste — prevent multi-line paste from auto-running. */
                 2004 -> bracketedPaste = set
+                /* Wave-14: Mouse tracking (xterm). */
+                1000 -> {
+                    mouseTracking = set
+                    if (!set) {
+                        mouseButtonMode = false
+                        mouseAnyMode = false
+                    }
+                }
+                1002 -> {
+                    mouseButtonMode = set
+                    if (set) mouseTracking = true
+                }
+                1003 -> {
+                    mouseAnyMode = set
+                    if (set) mouseTracking = true
+                }
+                1006 -> mouseSgr = set
                 /* Auto-wrap (7) - kita selalu wrap; reverse video (5); origin (6) — simplify. */
                 7, 5, 6 -> { /* ignore - simplifikasi */ }
                 else -> { /* unhandled private mode */ }

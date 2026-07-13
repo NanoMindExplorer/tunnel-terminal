@@ -348,16 +348,22 @@ class SshShellExecutor(
             channelOutputStream = null
             try { emulator.flush() } catch (_: Exception) {}
             isAlive = false
-            emulator.process("\n\u001B[33m[SSH Disconnected. Tap screen to reconnect.]\u001B[0m\n")
+            emulator.process(
+                "\n\u001B[33m[SSH disconnected: ${config.username}@${config.host}:${config.port}. " +
+                    "Tap screen to reconnect — history kept.]\u001B[0m\n"
+            )
             triggerScreenUpdate()
         }
     }
 
     override suspend fun restart() {
         destroy()
-        emulator = TerminalEmulator(themeHolder).also {
-            it.writeCallback = { data -> writeRaw(data) }
-        }
+        /* Wave-14: Keep scrollback; re-bind DA/DSR callback and reconnect. */
+        emulator.writeCallback = { data -> writeRaw(data) }
+        emulator.process(
+            "\n\u001B[33m[SSH reconnecting ${config.username}@${config.host}:${config.port}…]\u001B[0m\n"
+        )
+        triggerScreenUpdate()
         start()
     }
 

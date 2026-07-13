@@ -66,7 +66,10 @@ class ShellExecutor(
 
     override suspend fun restart() {
         destroy()
-        rewireEmulator()
+        /* Wave-14: Keep emulator/scrollback; only rebind callback + respawn shell. */
+        rebindEmulatorCallback()
+        emulator.process(reconnectBanner())
+        triggerScreenUpdate()
         start()
     }
 }
