@@ -5,7 +5,7 @@
 ![Architecture](https://img.shields.io/badge/Architecture-NDK%20%2B%20Jetpack%20Compose-purple)
 ![AI](https://img.shields.io/badge/AI-Multi%20Provider%20%2B%20Vision%20%2B%20MCP-cyan)
 ![Linux](https://img.shields.io/badge/Linux-Ubuntu%2024.04%20via%20proot-orange)
-![Version](https://img.shields.io/badge/version-7.5.0-blue)
+![Version](https://img.shields.io/badge/version-7.6.0-blue)
 ![Stability](https://img.shields.io/badge/stability-production-green)
 
 ## Quick Links
@@ -69,11 +69,18 @@ Terminal Android konvensional hanya menampilkan teks dan mengeksekusi command. T
 |---|---|
 | `help` | Tampilkan menu bantuan |
 | `clear` | Bersihkan layar (lokal) |
+| `history` / `history-clear` | Riwayat perintah (persist) |
+| `export-output` / `export-chat` | Export transcript / chat AI |
+| `copy-output` | Salin output terminal ke clipboard |
+| `bookmark list\|add\|go\|remove` | Bookmark direktori + quick `cd` |
 | `setup-storage` | Bridge ke /sdcard via SAF |
 | `storage-status` | Status konfigurasi storage |
 | `storage-reset` | Reset storage |
 | `system-info` | Info sistem (MOTD) |
 | `open <file>` | Edit file di Tunnel Editor |
+| `ssh-list-hostkeys` / `ssh-reset-hostkeys` | TOFU host keys |
+
+**UX Wave 10:** long-press tab untuk rename label; keep-screen-on (default on); command palette items untuk bookmark/copy/rename.
 
 ## 🐧 Linux Environment (Ubuntu via proot)
 
