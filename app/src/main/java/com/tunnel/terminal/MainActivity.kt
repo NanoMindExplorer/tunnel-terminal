@@ -2037,6 +2037,8 @@ class MainActivity : ComponentActivity() {
                 )
             }
             var hiddenInput by remember { mutableStateOf("") }
+            /* Wave-11: Shared IME tracking (was per-pane local — stale after Enter/tab switch). */
+            var lastImeValue by remember { mutableStateOf("") }
 
             /* Phase 33 (A2 fix): Deteksi keyboard fisik — jangan paksa soft keyboard muncul.
              * Old code: if (!hasPhysicalKeyboard) keyboardController?.show() selalu dipanggil → soft keyboard muncul
@@ -2370,8 +2372,17 @@ class MainActivity : ComponentActivity() {
             }
 
             /**
-             * Wave-3: Unified soft-IME / BasicTextField handler for normal, split, and block modes.
-             * Handles: append, equal-length single-char replace (some IMEs), backspace, Enter flag.
+             * Wave-3 + Wave-11: Unified soft-IME / BasicTextField handler.
+             *
+             * Wave-11 fix (text disappears while typing):
+             * BasicTextField is controlled by [hiddenInput]. Previously we only updated
+             * [lastInputValue] on each keystroke and left hiddenInput as "" until Enter.
+             * When the shell echoed a char → screenDirty → recompose, Compose forced the
+             * field back to "" and IME fired onValueChange(""), which was interpreted as
+             * "delete all" → backspaces wiped the just-typed (and echoed) characters.
+             *
+             * Fix: always keep hiddenInput in sync with the tracked IME string via setHidden.
+             * Text stays transparent (color Transparent) so the user still sees only PTY echo.
              */
             fun applyImeValueChange(
                 newValue: String,
@@ -2380,6 +2391,14 @@ class MainActivity : ComponentActivity() {
                 setHidden: (String) -> Unit
             ) {
                 if (newValue == lastInputValue) return
+
+                fun sendBackspace() {
+                    if (activeExecutor.currentCommandBuffer.isNotEmpty()) {
+                        activeExecutor.currentCommandBuffer =
+                            activeExecutor.currentCommandBuffer.dropLast(1)
+                    }
+                    activeExecutor.writeRaw("\u007F")
+                }
 
                 fun processChar(ch: Char) {
                     when (ch) {
@@ -2392,13 +2411,7 @@ class MainActivity : ComponentActivity() {
                             setHidden("")
                             setLast("")
                         }
-                        '\u007F', '\b' -> {
-                            if (activeExecutor.currentCommandBuffer.isNotEmpty()) {
-                                activeExecutor.currentCommandBuffer =
-                                    activeExecutor.currentCommandBuffer.dropLast(1)
-                            }
-                            activeExecutor.writeRaw("\u007F")
-                        }
+                        '\u007F', '\b' -> sendBackspace()
                         else -> {
                             val translated = handleChar(ch)
                             activeExecutor.currentCommandBuffer += translated
@@ -2407,40 +2420,36 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
+                /** Commit IME tracking state (never leave hiddenInput stale). */
+                fun syncField(value: String) {
+                    setLast(value)
+                    setHidden(value)
+                }
+
                 when {
                     newValue.startsWith(lastInputValue) -> {
                         val added = newValue.substring(lastInputValue.length)
                         for (ch in added) processChar(ch)
+                        /* processChar already cleared both on Enter; only sync if still typing. */
                         if (!added.contains('\n') && !added.contains('\r')) {
-                            setLast(newValue)
+                            syncField(newValue)
                         }
                     }
                     lastInputValue.startsWith(newValue) -> {
                         val deleted = lastInputValue.length - newValue.length
-                        repeat(deleted.coerceAtLeast(0)) {
-                            if (activeExecutor.currentCommandBuffer.isNotEmpty()) {
-                                activeExecutor.currentCommandBuffer =
-                                    activeExecutor.currentCommandBuffer.dropLast(1)
-                            }
-                            activeExecutor.writeRaw("\u007F")
-                        }
-                        setLast(newValue)
+                        repeat(deleted.coerceAtLeast(0)) { sendBackspace() }
+                        syncField(newValue)
                     }
                     else -> {
-                        if (newValue.length == 1 && lastInputValue.length == 1) {
-                            if (activeExecutor.currentCommandBuffer.isNotEmpty()) {
-                                activeExecutor.currentCommandBuffer =
-                                    activeExecutor.currentCommandBuffer.dropLast(1)
-                            }
-                            activeExecutor.writeRaw("\u007F")
-                            processChar(newValue[0])
-                            if (newValue[0] != '\n' && newValue[0] != '\r') setLast(newValue)
-                        } else {
-                            for (ch in newValue) processChar(ch)
-                            if (!newValue.contains('\n') && !newValue.contains('\r')) {
-                                setLast(newValue)
-                            }
+                        /* IME replaced the field (composition, autocorrect, suggestion).
+                         * Delete what we previously sent, then type the new content. */
+                        repeat(lastInputValue.length) { sendBackspace() }
+                        var sawEnter = false
+                        for (ch in newValue) {
+                            if (ch == '\n' || ch == '\r') sawEnter = true
+                            processChar(ch)
                         }
+                        if (!sawEnter) syncField(newValue)
                     }
                 }
             }
@@ -2544,7 +2553,9 @@ class MainActivity : ComponentActivity() {
                         enterHandledByKeyEvent = true
                         processInput(activeExecutor.currentCommandBuffer + "\n")
                         activeExecutor.currentCommandBuffer = ""
+                        /* Wave-11: Clear both controlled field and IME tracker. */
                         hiddenInput = ""
+                        lastImeValue = ""
                         return true
                     }
                     Key.Backspace -> {
@@ -2552,6 +2563,11 @@ class MainActivity : ComponentActivity() {
                             activeExecutor.currentCommandBuffer = activeExecutor.currentCommandBuffer.dropLast(1)
                         }
                         activeExecutor.writeRaw("\u007F")
+                        /* Wave-11: Keep IME field tracker aligned with shell line buffer. */
+                        if (hiddenInput.isNotEmpty()) {
+                            hiddenInput = hiddenInput.dropLast(1)
+                            lastImeValue = hiddenInput
+                        }
                         return true
                     }
                     Key.Tab -> { activeExecutor.writeRaw("\t"); return true }
@@ -2680,15 +2696,16 @@ class MainActivity : ComponentActivity() {
                                 val focusRequester = remember { FocusRequester() }
                                 val keyboardController = LocalSoftwareKeyboardController.current
                                 LaunchedEffect(activeExecutorId) {
+                                    lastImeValue = ""
+                                    hiddenInput = ""
                                     try { focusRequester.requestFocus(); if (!hasPhysicalKeyboard) keyboardController?.show() } catch (_: Exception) {}
                                 }
-                                var lastInputValue by remember { mutableStateOf("") }
                                 BasicTextField(
                                     value = hiddenInput,
                                     onValueChange = { newValue ->
                                         applyImeValueChange(
-                                            newValue, lastInputValue,
-                                            setLast = { lastInputValue = it },
+                                            newValue, lastImeValue,
+                                            setLast = { lastImeValue = it },
                                             setHidden = { hiddenInput = it }
                                         )
                                     },
@@ -2743,15 +2760,16 @@ class MainActivity : ComponentActivity() {
                             val focusRequester = remember { FocusRequester() }
                             val keyboardController = LocalSoftwareKeyboardController.current
                             LaunchedEffect(activeExecutorId, blockMode) {
+                                lastImeValue = ""
+                                hiddenInput = ""
                                 try { focusRequester.requestFocus(); if (!hasPhysicalKeyboard) keyboardController?.show() } catch (_: Exception) {}
                             }
-                            var lastInputValue by remember { mutableStateOf("") }
                             BasicTextField(
                                 value = hiddenInput,
                                 onValueChange = { newValue ->
                                     applyImeValueChange(
-                                        newValue, lastInputValue,
-                                        setLast = { lastInputValue = it },
+                                        newValue, lastImeValue,
+                                        setLast = { lastImeValue = it },
                                         setHidden = { hiddenInput = it }
                                     )
                                 },
@@ -2796,6 +2814,10 @@ class MainActivity : ComponentActivity() {
                              * OLD BUG: flag tidak di-reset → Enter di tab B tidak jalan setelah
                              * physical keyboard Enter di tab A (flag masih true dari tab A). */
                             enterHandledByKeyEvent = false
+                            /* Wave-11: Drop stale IME buffer when switching tabs so the next
+                             * keystroke is not treated as a replace/delete of another tab. */
+                            lastImeValue = ""
+                            hiddenInput = ""
                             try {
                                 focusRequester.requestFocus()
                                 if (!hasPhysicalKeyboard) keyboardController?.show()
@@ -2804,17 +2826,12 @@ class MainActivity : ComponentActivity() {
                             }
                         }
 
-                        /* Phase 36 fix: Soft keyboard Enter tidak trigger Key.Enter di
-                         * onPreviewKeyEvent — hanya trigger onValueChange dengan \n.
-                         * enterHandledByKeyEvent declared di scope luar. */
-                        var lastInputValue by remember { mutableStateOf("") }
-
                         BasicTextField(
                             value = hiddenInput,
                             onValueChange = { newValue ->
                                 applyImeValueChange(
-                                    newValue, lastInputValue,
-                                    setLast = { lastInputValue = it },
+                                    newValue, lastImeValue,
+                                    setLast = { lastImeValue = it },
                                     setHidden = { hiddenInput = it }
                                 )
                             },
@@ -2879,6 +2896,9 @@ class MainActivity : ComponentActivity() {
                                 repeat(old.length) { activeExecutor.writeRaw("\u007F") }
                                 activeExecutor.currentCommandBuffer = suggestion
                                 activeExecutor.writeRaw(suggestion)
+                                /* Wave-11: Keep transparent IME field aligned after autocomplete. */
+                                hiddenInput = suggestion
+                                lastImeValue = suggestion
                             }
                         )
                     }
