@@ -1132,7 +1132,7 @@ fun AIChatPanel(
                     when {
                         autoPilotRunning -> "● Auto-Pilot $autoPilotStep/$autoPilotTotal"
                         isProcessingAI -> "● Streaming…"
-                        else -> "${messages.size} pesan · ${settings.modelName.ifBlank { settings.provider }}"
+                        else -> "${messages.size} pesan · ${settings.modelName.ifBlank { settings.providerName }}"
                     },
                     color = when {
                         autoPilotRunning || isProcessingAI -> theme.uiAccent
