@@ -111,6 +111,11 @@ class MainActivity : ComponentActivity() {
     private var showWorkspaceDrawer by mutableStateOf(false)
     /** Phase 21: SSH connect dialog visibility. */
     private var showSshDialog by mutableStateOf(false)
+    /** Wave-10: Custom tab labels (id → name). */
+    private val tabLabels = mutableStateMapOf<Int, String>()
+    /** Wave-10: Rename dialog target tab id. */
+    private var renameTabId by mutableStateOf<Int?>(null)
+    private var renameTabDraft by mutableStateOf("")
     /** Phase 47 (Bagian 2): Agent Mode screen visibility. */
     private var showAgentScreen by mutableStateOf(false)
     /** Phase 49 (D-4): MCP server management dialog visibility. */
@@ -257,6 +262,13 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        /* Wave-10: Keep screen on while using the terminal (optional, default on). */
+        val keepOn = getSharedPreferences("TunnelUI", Context.MODE_PRIVATE)
+            .getBoolean("keepScreenOn", true)
+        if (keepOn) {
+            window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
 
         /* Phase 49 fix (F-3): Ambil shellExecutors dari Application scope.
          * Survive Activity recreate — screen buffer tidak hilang saat rotasi/low-memory. */
@@ -1288,6 +1300,12 @@ class MainActivity : ComponentActivity() {
             Thread { executor.destroy() }.start()
         }
         shellExecutors.removeAll { it.id == id }
+        /* Wave-10: Drop custom label when tab closes. */
+        tabLabels.remove(id)
+        if (renameTabId == id) {
+            renameTabId = null
+            renameTabDraft = ""
+        }
         /* Phase 24.5: Fix activeExecutorId=0 invalid state.
          * Old code: set to 0 if no tabs, but 0 is not a valid session id.
          * Fix: set to first available tab, atau biarkan 0 sementara (createNewTab akan set). */
@@ -1303,6 +1321,76 @@ class MainActivity : ComponentActivity() {
             blockManager.clear()
             blockMode = false
         }
+    }
+
+    /** Wave-10: Default tab label from session type + 1-based index. */
+    private fun defaultTabLabel(executor: TerminalSession, index1Based: Int): String {
+        return when (executor.sessionType) {
+            "ubuntu" -> "Ubuntu $index1Based"
+            "ssh" -> "SSH $index1Based"
+            else -> "Tab $index1Based"
+        }
+    }
+
+    /** Wave-10: Copy terminal output (last command if known, else clean buffer tail). */
+    private fun copyLastOutput(executor: TerminalSession): String {
+        val last = executor.lastCommandOutput.value.trim()
+        val text = if (last.isNotEmpty()) last else executor.getCleanOutput().takeLast(12_000)
+        if (text.isBlank()) {
+            Toast.makeText(this, "No output to copy", Toast.LENGTH_SHORT).show()
+            return "empty"
+        }
+        val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+        clipboard.setPrimaryClip(android.content.ClipData.newPlainText("terminal-output", text))
+        Toast.makeText(this, "Copied ${text.length} chars", Toast.LENGTH_SHORT).show()
+        return "copied ${text.length} chars"
+    }
+
+    /** Wave-10: Handle `bookmark …` pseudo-commands. Returns message for terminal. */
+    private fun handleBookmarkCommand(raw: String, executor: TerminalSession): String {
+        val parts = raw.trim().split(Regex("\\s+"), limit = 4)
+        val sub = parts.getOrNull(1)?.lowercase() ?: "list"
+        return when (sub) {
+            "list", "ls" -> BookmarkStore.formatList(this)
+            "add" -> {
+                val name = parts.getOrNull(2)?.takeIf { it.isNotBlank() }
+                    ?: return "Usage: bookmark add <name> [path]"
+                val path = parts.getOrNull(3)?.takeIf { it.isNotBlank() }
+                    ?: File(filesDir, "home").absolutePath
+                BookmarkStore.add(this, name, path)
+                "Bookmarked: $name → $path"
+            }
+            "go", "cd" -> {
+                val key = parts.getOrNull(2)?.takeIf { it.isNotBlank() }
+                    ?: return "Usage: bookmark go <name|index>"
+                val bm = key.toIntOrNull()?.let { BookmarkStore.getByIndex(this, it) }
+                    ?: BookmarkStore.list(this).firstOrNull { it.name == key || it.path == key }
+                    ?: return "Bookmark not found: $key"
+                executor.executeCommand("cd ${shellQuote(bm.path)}")
+                "cd ${bm.path}"
+            }
+            "remove", "rm", "delete" -> {
+                val key = parts.getOrNull(2)?.takeIf { it.isNotBlank() }
+                    ?: return "Usage: bookmark remove <name|path|index>"
+                val byIndex = key.toIntOrNull()?.let { BookmarkStore.getByIndex(this, it) }
+                val target = byIndex?.name ?: key
+                if (BookmarkStore.remove(this, target) ||
+                    (byIndex != null && BookmarkStore.remove(this, byIndex.path))
+                ) {
+                    "Removed bookmark: $target"
+                } else {
+                    "Bookmark not found: $key"
+                }
+            }
+            else -> "Usage: bookmark list|add <name> [path]|go <name|n>|remove <name|n>"
+        }
+    }
+
+    private fun shellQuote(path: String): String {
+        if (path.none { it.isWhitespace() || it == '\'' || it == '"' || it == '$' || it == '`' }) {
+            return path
+        }
+        return "'" + path.replace("'", "'\\''") + "'"
     }
 
     override fun onDestroy() {
@@ -1472,6 +1560,57 @@ class MainActivity : ComponentActivity() {
                         exec.emulator.process("\u001B[36m[SSH known hosts]\n$list\u001B[0m\n")
                         exec.triggerScreenUpdate()
                     }
+                })
+                /* Wave-10: Copy output, bookmarks, rename tab, keep screen on. */
+                add(PaletteItem("copy_output", "Copy last terminal output", "Command", Icons.Default.ContentCopy, PaletteCategory.COMMAND) {
+                    shellExecutors.find { it.id == activeExecutorId }?.let { copyLastOutput(it) }
+                })
+                add(PaletteItem("bookmark_list", "List directory bookmarks", "Command", Icons.Default.Bookmarks, PaletteCategory.COMMAND) {
+                    shellExecutors.find { it.id == activeExecutorId }?.let { exec ->
+                        val list = BookmarkStore.formatList(this@MainActivity)
+                        exec.emulator.process("\u001B[36m$list\u001B[0m\n")
+                        exec.triggerScreenUpdate()
+                    }
+                })
+                add(PaletteItem("bookmark_add_home", "Bookmark app home", "Command", Icons.Default.Star, PaletteCategory.COMMAND) {
+                    val path = File(filesDir, "home").absolutePath
+                    BookmarkStore.add(this@MainActivity, "home", path)
+                    Toast.makeText(this@MainActivity, "Bookmarked home → $path", Toast.LENGTH_SHORT).show()
+                })
+                BookmarkStore.list(this@MainActivity).take(8).forEach { bm ->
+                    add(PaletteItem(
+                        "bookmark_go_${bm.name}",
+                        "Go: ${bm.name}",
+                        "Command",
+                        Icons.Default.FolderSpecial,
+                        PaletteCategory.COMMAND
+                    ) {
+                        shellExecutors.find { it.id == activeExecutorId }
+                            ?.executeCommand("cd ${shellQuote(bm.path)}")
+                    })
+                }
+                add(PaletteItem("rename_tab", "Rename current tab", "Navigation", Icons.Default.Edit, PaletteCategory.NAVIGATION) {
+                    val id = activeExecutorId
+                    renameTabId = id
+                    val exec = shellExecutors.find { it.id == id }
+                    renameTabDraft = tabLabels[id]
+                        ?: exec?.let { defaultTabLabel(it, shellExecutors.indexOf(it) + 1) }
+                        ?: "Tab"
+                })
+                add(PaletteItem("toggle_keep_screen", "Toggle keep screen on", "Setting", Icons.Default.Visibility, PaletteCategory.SETTING) {
+                    val prefs = getSharedPreferences("TunnelUI", Context.MODE_PRIVATE)
+                    val next = !prefs.getBoolean("keepScreenOn", true)
+                    prefs.edit().putBoolean("keepScreenOn", next).apply()
+                    if (next) {
+                        window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                    } else {
+                        window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                    }
+                    Toast.makeText(
+                        this@MainActivity,
+                        if (next) "Keep screen on: ON" else "Keep screen on: OFF",
+                        Toast.LENGTH_SHORT
+                    ).show()
                 })
                 /* Wave-9: Snippets in palette for quick type/run. */
                 snippetsState.take(10).forEach { sn ->
@@ -1730,6 +1869,67 @@ class MainActivity : ComponentActivity() {
             )
         }
 
+        /* Wave-10: Rename tab dialog (long-press tab). */
+        renameTabId?.let { tabId ->
+            AlertDialog(
+                onDismissRequest = {
+                    renameTabId = null
+                    renameTabDraft = ""
+                },
+                title = {
+                    Text(
+                        "Rename tab",
+                        color = currentTheme.uiText,
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 14.sp
+                    )
+                },
+                text = {
+                    OutlinedTextField(
+                        value = renameTabDraft,
+                        onValueChange = { renameTabDraft = it.take(32) },
+                        singleLine = true,
+                        label = {
+                            Text("Label", fontFamily = FontFamily.Monospace, fontSize = 11.sp)
+                        },
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedTextColor = currentTheme.uiText,
+                            unfocusedTextColor = currentTheme.uiText,
+                            focusedBorderColor = currentTheme.uiAccent,
+                            unfocusedBorderColor = currentTheme.uiSurface,
+                            focusedLabelColor = currentTheme.uiTextMuted,
+                            unfocusedLabelColor = currentTheme.uiTextMuted,
+                            cursorColor = currentTheme.uiAccent
+                        ),
+                        textStyle = TextStyle(fontFamily = FontFamily.Monospace, fontSize = 13.sp)
+                    )
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        val label = renameTabDraft.trim()
+                        if (label.isNotEmpty()) {
+                            tabLabels[tabId] = label
+                        } else {
+                            tabLabels.remove(tabId)
+                        }
+                        renameTabId = null
+                        renameTabDraft = ""
+                    }) {
+                        Text("Save", color = currentTheme.uiAccent, fontFamily = FontFamily.Monospace)
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = {
+                        renameTabId = null
+                        renameTabDraft = ""
+                    }) {
+                        Text("Cancel", color = currentTheme.uiTextMuted, fontFamily = FontFamily.Monospace)
+                    }
+                },
+                containerColor = currentTheme.uiBg
+            )
+        }
+
         /* Phase 19: File Explorer Dialog. */
         if (showFileExplorer) {
             AlertDialog(
@@ -1829,7 +2029,13 @@ class MainActivity : ComponentActivity() {
             }
 
             val screenDirty by activeExecutor.screenDirty.collectAsState()
-            val tabsData = shellExecutors.mapIndexed { index, executor -> Pair(executor.id, index + 1) }
+            val tabsData = shellExecutors.mapIndexed { index, executor ->
+                TabUiItem(
+                    id = executor.id,
+                    index = index + 1,
+                    label = tabLabels[executor.id] ?: defaultTabLabel(executor, index + 1)
+                )
+            }
             var hiddenInput by remember { mutableStateOf("") }
 
             /* Phase 33 (A2 fix): Deteksi keyboard fisik — jangan paksa soft keyboard muncul.
@@ -1970,6 +2176,8 @@ class MainActivity : ComponentActivity() {
                     cmd == "history" || cmd == "history-clear" ||
                     cmd == "export-output" || cmd == "export-chat" || cmd == "ai-metrics" ||
                     cmd == "font-reset" ||
+                    cmd == "copy-output" ||
+                    cmd == "bookmark" || cmd.startsWith("bookmark ") ||
                     cmd.startsWith("open ") ||
                     (activeExecutor.sessionType == "ubuntu" &&
                         (cmd.startsWith("systemctl ") || cmd.startsWith("service ")))
@@ -2095,6 +2303,22 @@ class MainActivity : ComponentActivity() {
                         }.ifBlank { "  (no recent requests)" }
                         activeExecutor.emulator.process("\u001B[36m$line\nRecent:\n$recent\u001B[0m\n")
                         activeExecutor.triggerScreenUpdate()
+                    }
+                    cmd == "copy-output" -> {
+                        val result = copyLastOutput(activeExecutor)
+                        activeExecutor.emulator.process("\u001B[32m[Clipboard] $result\u001B[0m\n")
+                        activeExecutor.triggerScreenUpdate()
+                        if (blockMode) {
+                            blockManager.completeRunning(result, CommandBlock.BlockStatus.SUCCESS)
+                        }
+                    }
+                    cmd == "bookmark" || cmd.startsWith("bookmark ") -> {
+                        val msg = handleBookmarkCommand(cmd, activeExecutor)
+                        activeExecutor.emulator.process("\u001B[36m$msg\u001B[0m\n")
+                        activeExecutor.triggerScreenUpdate()
+                        if (blockMode) {
+                            blockManager.completeRunning(msg, CommandBlock.BlockStatus.SUCCESS)
+                        }
                     }
                     cmd.startsWith("open ") -> {
                         val fileName = cmd.removePrefix("open ").trim()
@@ -2427,6 +2651,13 @@ class MainActivity : ComponentActivity() {
                         },
                         isSplitMode = splitMode,
                         onOpenPalette = { showCommandPalette = true },
+                        onTabRename = { id ->
+                            renameTabId = id
+                            val exec = shellExecutors.find { it.id == id }
+                            renameTabDraft = tabLabels[id]
+                                ?: exec?.let { defaultTabLabel(it, shellExecutors.indexOf(it) + 1) }
+                                ?: "Tab"
+                        },
                         onToggleBlockMode = {
                             blockMode = !blockMode
                             if (blockMode) {
@@ -2710,6 +2941,11 @@ class MainActivity : ComponentActivity() {
         - history-clear     Hapus history (tab + storage)
         - export-output     Export terminal transcript ke filesDir/exports/
         - export-chat       Export percakapan AI
+        - copy-output       Salin output terminal ke clipboard
+        - bookmark list     Daftar bookmark direktori
+        - bookmark add <n> [path]  Simpan bookmark (default: app home)
+        - bookmark go <n|#>        cd ke bookmark
+        - bookmark remove <n|#>    Hapus bookmark
         - ai-metrics        Latency / size request AI terakhir
         - font-reset        Reset ukuran font terminal
         - setup-storage     Bridge ke /sdcard via Storage Access Framework
@@ -2730,6 +2966,7 @@ class MainActivity : ComponentActivity() {
         Shortcuts & UX:
         - Volume Up/Down : Navigasi riwayat perintah (per-tab)
         - Ctrl+K         : Command palette
+        - Long-press tab : Rename tab label
         - CTRL + C       : Hentikan proses yang berjalan
         - Pinch Screen   : Zoom In/Out ukuran font terminal
         ==========================================
@@ -3031,6 +3268,33 @@ class MainActivity : ComponentActivity() {
             )
         } finally {
             isProcessingAI = false
+            /* Wave-10: Optional haptic when a long AI response finishes. */
+            maybeVibrateOnAiDone(fullResponse.length)
+        }
+    }
+
+    /** Wave-10: Short haptic feedback after AI replies (opt-in, default on for long replies). */
+    private fun maybeVibrateOnAiDone(responseChars: Int) {
+        if (responseChars < 200) return
+        val enabled = getSharedPreferences("TunnelUI", Context.MODE_PRIVATE)
+            .getBoolean("vibrateOnAiDone", true)
+        if (!enabled) return
+        try {
+            val vibrator = getSystemService(Context.VIBRATOR_SERVICE) as? android.os.Vibrator
+                ?: return
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                vibrator.vibrate(
+                    android.os.VibrationEffect.createOneShot(
+                        40,
+                        android.os.VibrationEffect.DEFAULT_AMPLITUDE
+                    )
+                )
+            } else {
+                @Suppress("DEPRECATION")
+                vibrator.vibrate(40)
+            }
+        } catch (_: Exception) {
+            /* ignore — haptic is best-effort */
         }
     }
 }

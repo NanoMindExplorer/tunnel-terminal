@@ -5,6 +5,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
@@ -48,9 +49,14 @@ import kotlin.math.roundToInt
  * - Debounce resize saat zoom untuk hindari ioctl spam
  */
 
+/**
+ * Wave-10: Tab entry with custom label (id, display index, label).
+ */
+data class TabUiItem(val id: Int, val index: Int, val label: String)
+
 @Composable
 fun TabBar(
-    tabs: List<Pair<Int, Int>>, activeTabId: Int,
+    tabs: List<TabUiItem>, activeTabId: Int,
     onTabSelected: (Int) -> Unit, onNewTab: () -> Unit,
     onTabClosed: (Int) -> Unit, onOpenAI: () -> Unit,
     onOpenFileExplorer: () -> Unit = {},
@@ -65,22 +71,36 @@ fun TabBar(
     ubuntuInstalled: Boolean = true,
     /* Phase 41 fix (CRIT-04): Flag untuk sembunyikan tombol Ubuntu di playstore flavor. */
     ubuntuEnabled: Boolean = true,
+    /* Wave-10: Long-press tab to rename. */
+    onTabRename: (Int) -> Unit = {},
     theme: TerminalTheme = ThemeManager.defaultTheme
 ) {
     LazyRow(
         modifier = Modifier.fillMaxWidth().background(theme.uiBg).padding(4.dp),
         horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically
     ) {
-        items(tabs) { tab ->
-            val isActive = tab.first == activeTabId
+        items(tabs, key = { it.id }) { tab ->
+            val isActive = tab.id == activeTabId
             Row(
                 modifier = Modifier.background(if (isActive) theme.uiSurface else theme.uiBg, RoundedCornerShape(4.dp))
-                    .clickable { onTabSelected(tab.first) }
+                    .pointerInput(tab.id) {
+                        detectTapGestures(
+                            onTap = { onTabSelected(tab.id) },
+                            onLongPress = { onTabRename(tab.id) }
+                        )
+                    }
                     .padding(start = 12.dp, top = 6.dp, bottom = 6.dp, end = 4.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text("Tab ${tab.second}  ", color = if (isActive) theme.uiText else theme.uiTextMuted, fontSize = 12.sp, fontFamily = FontFamily.Monospace)
-                Box(modifier = Modifier.clickable { onTabClosed(tab.first) }.padding(4.dp)) {
+                Text(
+                    tab.label.take(16),
+                    color = if (isActive) theme.uiText else theme.uiTextMuted,
+                    fontSize = 12.sp,
+                    fontFamily = FontFamily.Monospace,
+                    maxLines = 1
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Box(modifier = Modifier.clickable { onTabClosed(tab.id) }.padding(4.dp)) {
                     Text("X", color = Color(0xFFFF5252), fontSize = 12.sp, fontFamily = FontFamily.Monospace)
                 }
             }
