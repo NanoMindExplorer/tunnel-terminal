@@ -122,6 +122,8 @@ class MainActivity : ComponentActivity() {
      */
     private var imeFieldText by mutableStateOf("")
     private var imeFieldLast by mutableStateOf("")
+    /** Wave-15: ExtraKeys expanded (symbols + F-row). Default compact for more terminal height. */
+    private var extraKeysExpanded by mutableStateOf(false)
     /** Phase 47 (Bagian 2): Agent Mode screen visibility. */
     private var showAgentScreen by mutableStateOf(false)
     /** Phase 49 (D-4): MCP server management dialog visibility. */
@@ -321,9 +323,13 @@ class MainActivity : ComponentActivity() {
         loadTheme()
         /* C1 fix: Load fontSize di onCreate (bukan di property initializer). */
         try {
-            terminalFontSize = getSharedPreferences("TunnelUI", Context.MODE_PRIVATE).getFloat("fontSize", 12f)
+            val uiPrefs = getSharedPreferences("TunnelUI", Context.MODE_PRIVATE)
+            terminalFontSize = uiPrefs.getFloat("fontSize", 12f)
+            /* Wave-15: Compact ExtraKeys by default; expand state persisted. */
+            extraKeysExpanded = uiPrefs.getBoolean("extraKeysExpanded", false)
         } catch (_: Exception) {
             terminalFontSize = 12f
+            extraKeysExpanded = false
         }
 
         /* C2+H2 fix: Pindahkan startForegroundService SETELAH setContent.
@@ -3094,7 +3100,13 @@ class MainActivity : ComponentActivity() {
                         isCtrlActive = isCtrlActive,
                         isAltActive = isAltActive,
                         onKeyPressed = { handleExtraKey(it) },
-                        theme = currentTheme
+                        theme = currentTheme,
+                        expanded = extraKeysExpanded,
+                        onToggleExpanded = {
+                            extraKeysExpanded = !extraKeysExpanded
+                            getSharedPreferences("TunnelUI", Context.MODE_PRIVATE)
+                                .edit().putBoolean("extraKeysExpanded", extraKeysExpanded).apply()
+                        }
                     )
                 }
 

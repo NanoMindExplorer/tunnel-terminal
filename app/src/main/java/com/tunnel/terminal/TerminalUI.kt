@@ -9,8 +9,11 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.item
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -191,7 +194,10 @@ fun ExtraKeysBar(
     isAltActive: Boolean,
     onKeyPressed: (String) -> Unit,
     /* Wave-7: Theme-aware colors (was hardcoded dark grays). */
-    theme: TerminalTheme = ThemeManager.defaultTheme
+    theme: TerminalTheme = ThemeManager.defaultTheme,
+    /* Wave-15: Compact mode hides symbols + F-row to free vertical space. */
+    expanded: Boolean = false,
+    onToggleExpanded: () -> Unit = {}
 ) {
     /* Dua/tiga baris: simbol + kontrol + one-shot Ctrl / F-keys (Wave-12). */
     /* Phase 34 (A4): Tambah "PASTE" key untuk paste dari clipboard. */
@@ -216,21 +222,7 @@ fun ExtraKeysBar(
     val ctrlChipColor = Color(0xFFFFAB00)
 
     Column(modifier = Modifier.fillMaxWidth().background(barBg)) {
-        LazyRow(
-            modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
-            horizontalArrangement = Arrangement.spacedBy(4.dp), contentPadding = PaddingValues(horizontal = 4.dp)
-        ) {
-            items(symbolKeys) { key ->
-                ExtraKeyChip(
-                    label = key,
-                    color = symbolColor,
-                    bg = keyBg,
-                    onPress = { onKeyPressed(key) },
-                    repeat = false
-                )
-            }
-        }
-
+        /* Wave-15: Always show essential control row + expand toggle. */
         LazyRow(
             modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
             horizontalArrangement = Arrangement.spacedBy(4.dp), contentPadding = PaddingValues(horizontal = 4.dp)
@@ -250,22 +242,63 @@ fun ExtraKeysBar(
                     compact = false
                 )
             }
+            item {
+                ExtraKeyChip(
+                    label = if (expanded) "▾" else "▴",
+                    color = accent,
+                    bg = keyBg,
+                    onPress = onToggleExpanded,
+                    repeat = false,
+                    compact = false
+                )
+            }
         }
 
-        /* Wave-12: Quick Ctrl + F-keys row. */
-        LazyRow(
-            modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
-            horizontalArrangement = Arrangement.spacedBy(4.dp), contentPadding = PaddingValues(horizontal = 4.dp)
-        ) {
-            items(quickCtrlKeys) { key ->
-                val isCtrlChip = key.startsWith("^")
-                ExtraKeyChip(
-                    label = key,
-                    color = if (isCtrlChip) ctrlChipColor else textColor,
-                    bg = if (isCtrlChip) accent.copy(alpha = 0.35f) else keyBg,
-                    onPress = { onKeyPressed(key) },
-                    repeat = false
-                )
+        /* Compact: only essential ^C/^D/^Z + PASTE path already above. */
+        if (!expanded) {
+            LazyRow(
+                modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp), contentPadding = PaddingValues(horizontal = 4.dp)
+            ) {
+                items(listOf("^C", "^D", "^Z", "^L", "^U", "^W", "^A", "^E")) { key ->
+                    ExtraKeyChip(
+                        label = key,
+                        color = ctrlChipColor,
+                        bg = accent.copy(alpha = 0.35f),
+                        onPress = { onKeyPressed(key) },
+                        repeat = false
+                    )
+                }
+            }
+        } else {
+            LazyRow(
+                modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp), contentPadding = PaddingValues(horizontal = 4.dp)
+            ) {
+                items(symbolKeys) { key ->
+                    ExtraKeyChip(
+                        label = key,
+                        color = symbolColor,
+                        bg = keyBg,
+                        onPress = { onKeyPressed(key) },
+                        repeat = false
+                    )
+                }
+            }
+            LazyRow(
+                modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp), contentPadding = PaddingValues(horizontal = 4.dp)
+            ) {
+                items(quickCtrlKeys) { key ->
+                    val isCtrlChip = key.startsWith("^")
+                    ExtraKeyChip(
+                        label = key,
+                        color = if (isCtrlChip) ctrlChipColor else textColor,
+                        bg = if (isCtrlChip) accent.copy(alpha = 0.35f) else keyBg,
+                        onPress = { onKeyPressed(key) },
+                        repeat = false
+                    )
+                }
             }
         }
     }
@@ -343,7 +376,8 @@ fun TerminalScreenView(
     /* Phase 24: fontSize dari external state (persist antar recompose + tab switch). */
     val fontSize = fontSizeState
     var lastResizeTime by remember { mutableStateOf(0L) }
-    val scrollState = rememberScrollState()
+    /* Wave-15: LazyListState for virtualized scrollback (only compose visible rows). */
+    val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
 
     /* BUG-05 fix: Simpan ukuran Box terakhir untuk dipakai saat pinch-zoom.
@@ -358,27 +392,8 @@ fun TerminalScreenView(
     var selectionEnd by remember { mutableStateOf<Pair<Int, Int>?>(null) }
     var isSelecting by remember { mutableStateOf(false) }
 
-    /* Wave-7: Auto-scroll only when user is already near the bottom.
-     * OLD: always pin to bottom on every screenDirty → fighting selection/history scroll.
-     * Also removed duplicate LaunchedEffect(screenDirty).
-     * Wave-12: Freeze auto-scroll while selecting text. */
+    /* Wave-7 + Wave-15: Auto-scroll when near bottom (LazyColumn). */
     var showJumpToBottom by remember { mutableStateOf(false) }
-    LaunchedEffect(screenDirty, isSelecting) {
-        if (scrollState.maxValue <= 0) return@LaunchedEffect
-        val nearBottom = scrollState.value >= scrollState.maxValue - 80
-        showJumpToBottom = !nearBottom
-        if (nearBottom && !isSelecting) {
-            scrollState.scrollTo(scrollState.maxValue)
-        }
-    }
-    /* Wave-12: Track scroll position for jump-to-bottom FAB visibility. */
-    LaunchedEffect(scrollState.value, scrollState.maxValue) {
-        if (scrollState.maxValue <= 0) {
-            showJumpToBottom = false
-        } else {
-            showJumpToBottom = scrollState.value < scrollState.maxValue - 80
-        }
-    }
 
     /* BUG-05+06 fix: Panggil onResize LANGSUNG saat fontSize berubah.
      * Konversi sp→px dengan density yang benar. */
@@ -410,8 +425,8 @@ fun TerminalScreenView(
     /* Wave-1: Actually render scrollback history above the live screen.
      * getScrollbackLines(0, n) returns newest-first; reverse for oldest-at-top. */
     val scrollbackSnapshot = remember(screenDirty) {
-        /* Wave-14: Raise visible scrollback to 1200 (virtualization deferred). */
-        val count = emulator.getScrollbackCount().coerceAtMost(1200)
+        /* Wave-15: Full ring (2000) is safe with LazyColumn virtualization. */
+        val count = emulator.getScrollbackCount().coerceAtMost(2000)
         if (count <= 0) emptyList()
         else emulator.getScrollbackLines(0, count).asReversed()
     }
@@ -419,7 +434,23 @@ fun TerminalScreenView(
     /* Wave-13: Content grid = scrollback (top) + live screen (bottom).
      * Selection coordinates are content-row based (0 = oldest visible scrollback). */
     val sbCount = scrollbackSnapshot.size
-    val totalContentRows = sbCount + renderRows
+    val totalContentRows = (sbCount + renderRows).coerceAtLeast(1)
+
+    /* Wave-15: Auto-scroll / jump-to-bottom using LazyListState. */
+    LaunchedEffect(screenDirty, isSelecting, totalContentRows) {
+        val lastIndex = (totalContentRows - 1).coerceAtLeast(0)
+        val lastVisible = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
+        val nearBottom = lastVisible >= lastIndex - 2
+        showJumpToBottom = !nearBottom && totalContentRows > renderRows
+        if (nearBottom && !isSelecting) {
+            listState.scrollToItem(lastIndex)
+        }
+    }
+    LaunchedEffect(listState.firstVisibleItemIndex, listState.layoutInfo.visibleItemsInfo.size, totalContentRows) {
+        val lastIndex = (totalContentRows - 1).coerceAtLeast(0)
+        val lastVisible = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
+        showJumpToBottom = lastVisible < lastIndex - 2 && totalContentRows > renderRows
+    }
 
     /* Phase 53: Selection toolbar helpers. */
     fun selectionBoundsToRect(start: Pair<Int, Int>, end: Pair<Int, Int>): androidx.compose.ui.geometry.Rect {
@@ -428,11 +459,13 @@ fun TerminalScreenView(
         val (sRow, sCol) = if (start.first < end.first || (start.first == end.first && start.second <= end.second)) start else end
         val (eRow, eCol) = if (start.first < end.first || (start.first == end.first && start.second <= end.second)) end else start
         val paddingPx = with(density) { 4.dp.toPx() }
-        /* Wave-13: Toolbar rect relative to viewport (compensate scroll). */
+        /* Wave-15: Map content rows to viewport via LazyList first-visible offset. */
+        val firstIdx = listState.firstVisibleItemIndex
+        val firstOff = listState.firstVisibleItemScrollOffset
         val left = sCol * charW + paddingPx
-        val top = sRow * charH + paddingPx - scrollState.value
+        val top = (sRow - firstIdx) * charH + paddingPx - firstOff
         val right = (eCol + 1) * charW + paddingPx
-        val bottom = (eRow + 1) * charH + paddingPx - scrollState.value
+        val bottom = (eRow - firstIdx + 1) * charH + paddingPx - firstOff
         return androidx.compose.ui.geometry.Rect(left, top, right, bottom)
     }
 
@@ -542,13 +575,14 @@ fun TerminalScreenView(
                     fun posToCell(pos: androidx.compose.ui.geometry.Offset): Pair<Int, Int> {
                         val charW = with(density) { fontSize.sp.toPx() * 0.6f }
                         val charH = with(density) { fontSize.sp.toPx() * 1.2f }
-                        /* Wave-13: Content rows include scrollback above live screen.
-                         * R = (pos.y + scrollState.value - paddingPx) / charH, clamped to totalContentRows. */
-                        val adjustedY = pos.y + scrollState.value - paddingPx
+                        /* Wave-15: LazyColumn — content row from firstVisibleItem + local Y. */
+                        val firstIdx = listState.firstVisibleItemIndex
+                        val firstOff = listState.firstVisibleItemScrollOffset
+                        val adjustedY = pos.y - paddingPx + firstOff
                         val adjustedX = pos.x - paddingPx
                         val col = (adjustedX / charW).toInt().coerceIn(0, (renderCols - 1).coerceAtLeast(0))
                         val maxRow = (totalContentRows - 1).coerceAtLeast(0)
-                        val row = (adjustedY / charH).toInt().coerceIn(0, maxRow)
+                        val row = (firstIdx + (adjustedY / charH).toInt()).coerceIn(0, maxRow)
                         return Pair(row, col)
                     }
 
@@ -632,57 +666,44 @@ fun TerminalScreenView(
                             emulator.encodeMouseEvent(btn, col, row, press = true)?.let { seq ->
                                 emulator.writeCallback?.invoke(seq)
                             }
-                        } else if (scrollState.maxValue > 0) {
-                            val dy = (scroll.y * 48f).toInt()
-                            val target = (scrollState.value - dy).coerceIn(0, scrollState.maxValue)
-                            scope.launch { scrollState.scrollTo(target) }
+                        } else {
+                            /* Wave-15: scroll LazyColumn by item steps when possible. */
+                            val dy = scroll.y
+                            scope.launch {
+                                val step = if (dy < 0) -3 else 3
+                                val target = (listState.firstVisibleItemIndex + step)
+                                    .coerceIn(0, (totalContentRows - 1).coerceAtLeast(0))
+                                listState.scrollToItem(target)
+                            }
                         }
                         onScroll(scroll.y)
                     }
                 }
             }
     ) {
-        /* Phase 35: Selection state + snapshot + dims already declared before Box. */
-
-        Column(
+        /* Wave-15: Virtualized content rows (scrollback + live). */
+        val rowHeight = with(density) { (fontSize.sp.toPx() * 1.2f) }
+        LazyColumn(
+            state = listState,
             modifier = Modifier
                 .fillMaxSize()
-                .padding(4.dp)
-                .verticalScroll(scrollState)
+                .padding(4.dp),
+            userScrollEnabled = !isSelecting
         ) {
-            /* Wave-1: Scrollback history (oldest first), then live screen rows.
-             * Selection still maps to live-screen coordinates only. */
-            scrollbackSnapshot.forEachIndexed { sbIndex, sbLine ->
-                val contentRow = sbIndex
-                val annotatedString = buildTerminalRowAnnotated(
-                    rowCells = sbLine,
-                    cols = renderCols,
-                    cursorCol = -1,
-                    cursorVisible = false,
-                    isSelecting = isSelecting,
-                    selectionStart = selectionStart,
-                    selectionEnd = selectionEnd,
-                    rowIndex = contentRow,
-                    theme = theme
-                )
-                Text(
-                    text = annotatedString,
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = fontSize.sp,
-                    softWrap = false,
-                    maxLines = 1,
-                    overflow = androidx.compose.ui.text.style.TextOverflow.Clip,
-                    modifier = Modifier.fillMaxWidth()
-                )
-            }
-            for (row in 0 until renderRows) {
-                val rowCells = screenSnapshot.getOrElse(row) { arrayOf() }
-                val contentRow = sbCount + row
+            items(
+                count = totalContentRows,
+                key = { contentRow -> "r$contentRow" }
+            ) { contentRow ->
+                val rowCells: Array<TerminalCell> = when {
+                    contentRow < sbCount -> scrollbackSnapshot.getOrElse(contentRow) { emptyArray() }
+                    else -> screenSnapshot.getOrElse(contentRow - sbCount) { emptyArray() }
+                }
+                val liveRow = contentRow - sbCount
                 val annotatedString = buildTerminalRowAnnotated(
                     rowCells = rowCells,
                     cols = renderCols,
                     cursorCol = cursorState.col,
-                    cursorVisible = cursorState.visible && row == cursorState.row,
+                    cursorVisible = cursorState.visible && liveRow == cursorState.row && contentRow >= sbCount,
                     isSelecting = isSelecting,
                     selectionStart = selectionStart,
                     selectionEnd = selectionEnd,
@@ -696,7 +717,9 @@ fun TerminalScreenView(
                     softWrap = false,
                     maxLines = 1,
                     overflow = androidx.compose.ui.text.style.TextOverflow.Clip,
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(with(density) { rowHeight.toDp() })
                 )
             }
         }
@@ -709,7 +732,9 @@ fun TerminalScreenView(
                     .padding(12.dp)
                     .background(theme.uiAccent.copy(alpha = 0.9f), RoundedCornerShape(20.dp))
                     .clickable {
-                        scope.launch { scrollState.scrollTo(scrollState.maxValue) }
+                        scope.launch {
+                            listState.scrollToItem((totalContentRows - 1).coerceAtLeast(0))
+                        }
                         showJumpToBottom = false
                     }
                     .padding(horizontal = 14.dp, vertical = 8.dp)
@@ -794,7 +819,7 @@ private fun getSelectedText(
                 val cell = screen[row][col]
                 /* Wave-12: Skip wide-char continuation cells (avoid double-width garbage). */
                 if (!cell.wideContinuation) {
-                    lineBuilder.append(cell.char)
+                    lineBuilder.append(cell.displayText())
                 }
             }
         }
@@ -833,7 +858,7 @@ internal fun getSelectedTextFromContent(
         for (col in rowStart..rowEnd) {
             if (col < rowCells.size) {
                 val cell = rowCells[col]
-                if (!cell.wideContinuation) lineBuilder.append(cell.char)
+                if (!cell.wideContinuation) lineBuilder.append(cell.displayText())
             }
         }
         sbOut.append(lineBuilder.toString().trimEnd())
@@ -899,7 +924,7 @@ internal fun buildTerminalRowAnnotated(
             }
 
             /* Merge adjacent same-style cells into one span. */
-            val run = StringBuilder().append(cell.char)
+            val run = StringBuilder().append(cell.displayText())
             var next = col + 1
             while (next < cols) {
                 val nCell = rowCells.getOrElse(next) { TerminalCell() }
@@ -916,7 +941,7 @@ internal fun buildTerminalRowAnnotated(
                 if (nBg != bgColor || nFg != fgColor || nCell.bold != bold ||
                     nCell.italic != italic || nCell.underline != underline
                 ) break
-                run.append(nCell.char)
+                run.append(nCell.displayText())
                 next++
             }
             withStyle(
