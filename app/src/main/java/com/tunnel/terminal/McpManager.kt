@@ -180,9 +180,16 @@ class McpManager(private val context: Context) {
         val allTools = mutableListOf<McpTool>()
         for (server in _servers.filter { it.enabled }) {
             try {
+                val pingErr = pingServer(server)
+                if (pingErr != null) {
+                    Log.w(tag, "MCP ${server.name} ping failed: $pingErr")
+                    _discoveredTools[server.name] = emptyList()
+                    continue
+                }
                 val tools = discoverTools(server)
                 _discoveredTools[server.name] = tools
                 allTools.addAll(tools)
+                Log.i(tag, "MCP ${server.name}: discovered ${tools.size} tools")
             } catch (e: Exception) {
                 Log.w(tag, "Failed to discover tools from ${server.name}: ${e.message}")
                 _discoveredTools[server.name] = emptyList()
@@ -295,8 +302,13 @@ class McpManager(private val context: Context) {
 
     /** Generate system prompt section untuk AI — list all MCP tools. */
     fun generateSystemPromptSection(): String {
-        if (_discoveredTools.isEmpty()) return ""
-        val sb = StringBuilder("\n\n## MCP TOOLS (external servers)\n\n")
+        if (_discoveredTools.isEmpty()) {
+            return "\n\n## MCP TOOLS\n(no servers discovered — add HTTP MCP bridge URL in settings; " +
+                "stdio MCP servers are not supported on Android yet)\n"
+        }
+        val sb = StringBuilder("\n\n## MCP TOOLS (HTTP bridge)\n\n")
+        sb.append("Note: This app uses a simplified HTTP MCP bridge (GET /tools, POST /tools/{name}/invoke). ")
+        sb.append("Full MCP stdio/JSON-RPC is not available on Android.\n\n")
         _discoveredTools.forEach { (serverName, tools) ->
             if (tools.isNotEmpty()) {
                 sb.append("Server: $serverName\n")
@@ -308,5 +320,32 @@ class McpManager(private val context: Context) {
         }
         sb.append("To call MCP tool: <tool_call>{\"tool\":\"mcp.servername.toolname\",\"args\":{...}}</tool_call>\n")
         return sb.toString()
+    }
+
+    /**
+     * Wave-6: Health-check a server URL before discover.
+     * Returns null if OK, or an error message.
+     */
+    suspend fun pingServer(server: McpServerConfig): String? = withContext(Dispatchers.IO) {
+        if (!isAllowedMcpUrl(server.url)) return@withContext "URL not allowed: ${server.url}"
+        try {
+            val url = URL(server.url.trimEnd('/'))
+            val conn = (url.openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
+                connectTimeout = 8000
+                readTimeout = 8000
+                if (server.apiKey.isNotBlank()) {
+                    setRequestProperty("Authorization", "Bearer ${server.apiKey}")
+                }
+            }
+            try {
+                val code = conn.responseCode
+                if (code in 200..499) null else "HTTP $code from ${server.url}"
+            } finally {
+                conn.disconnect()
+            }
+        } catch (e: Exception) {
+            "Unreachable: ${e.message}"
+        }
     }
 }

@@ -31,14 +31,18 @@ fun AgentScreen(
     isRunning: Boolean,
     isPaused: Boolean = false,
     events: List<AgentTaskRunner.AgentEvent>,
+    pendingClarification: String? = null,
     onStart: (goal: String, useUbuntu: Boolean) -> Unit,
     onPause: () -> Unit,
     onResume: () -> Unit,
     onStop: () -> Unit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    /** Wave-6: Answer clarification and continue as a new agent run with context. */
+    onAnswerClarification: ((answer: String) -> Unit)? = null
 ) {
     var goalText by remember { mutableStateOf("") }
     var useUbuntu by remember { mutableStateOf(true) }
+    var clarifyAnswer by remember { mutableStateOf("") }
     val scrollState = rememberScrollState()
 
     // Auto-scroll ke bawah saat event baru
@@ -105,6 +109,58 @@ fun AgentScreen(
                         fontFamily = FontFamily.Monospace
                     )
                     Spacer(modifier = Modifier.height(12.dp))
+                }
+
+                /* Wave-6: Clarification answer UI when agent asked a question. */
+                if (!isRunning && !pendingClarification.isNullOrBlank()) {
+                    Text(
+                        "Agent asks: $pendingClarification",
+                        color = Color(0xFFFFAB00),
+                        fontSize = 11.sp,
+                        fontFamily = FontFamily.Monospace
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    OutlinedTextField(
+                        value = clarifyAnswer,
+                        onValueChange = { clarifyAnswer = it },
+                        label = {
+                            Text(
+                                "Your answer",
+                                color = theme.uiTextMuted,
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 11.sp
+                            )
+                        },
+                        modifier = Modifier.fillMaxWidth().height(64.dp),
+                        textStyle = androidx.compose.ui.text.TextStyle(
+                            color = theme.uiText,
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 12.sp
+                        ),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = theme.uiAccent,
+                            unfocusedBorderColor = theme.uiSurface,
+                            cursorColor = theme.uiAccent
+                        )
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    TextButton(
+                        onClick = {
+                            val a = clarifyAnswer.trim()
+                            if (a.isNotBlank()) {
+                                onAnswerClarification?.invoke(a)
+                                clarifyAnswer = ""
+                            }
+                        },
+                        enabled = clarifyAnswer.isNotBlank() && onAnswerClarification != null
+                    ) {
+                        Text(
+                            "▶ Continue with answer",
+                            color = if (clarifyAnswer.isNotBlank()) theme.uiAccent else theme.uiTextMuted,
+                            fontFamily = FontFamily.Monospace
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
                 }
 
                 /* Event log */

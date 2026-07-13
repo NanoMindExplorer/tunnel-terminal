@@ -88,17 +88,51 @@ fun TunnelEditorDialog(
     }
 
     val isModified = content != originalContent
+    /* Wave-6: Confirm before discarding unsaved edits. */
+    var showDiscardConfirm by remember { mutableStateOf(false) }
+
+    fun requestClose() {
+        if (isModified) showDiscardConfirm = true
+        else onDismiss()
+    }
+
+    if (showDiscardConfirm) {
+        AlertDialog(
+            onDismissRequest = { showDiscardConfirm = false },
+            title = {
+                Text(
+                    "Unsaved changes",
+                    color = theme.uiText,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 14.sp
+                )
+            },
+            text = {
+                Text(
+                    "Discard changes to ${file.name}?",
+                    color = theme.uiTextMuted,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 12.sp
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    showDiscardConfirm = false
+                    onDismiss()
+                }) {
+                    Text("Discard", color = Color(0xFFFF5252), fontFamily = FontFamily.Monospace)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDiscardConfirm = false }) {
+                    Text("Keep editing", color = theme.uiAccent, fontFamily = FontFamily.Monospace)
+                }
+            }
+        )
+    }
 
     AlertDialog(
-        onDismissRequest = {
-            /* Konfirmasi jika ada perubahan belum disimpan.
-             * Confirm if unsaved changes. */
-            if (isModified) {
-                /* Untuk simplifikasi, langsung dismiss. Bisa ditambah dialog konfirmasi.
-                 * For simplicity, dismiss directly. */
-            }
-            onDismiss()
-        },
+        onDismissRequest = { requestClose() },
         modifier = Modifier.fillMaxSize(0.95f).background(Color(0xFF1E1E1E)),
         title = {
             Column {
@@ -238,7 +272,7 @@ fun TunnelEditorDialog(
         },
         dismissButton = {
             Button(
-                onClick = onDismiss,
+                onClick = { requestClose() },
                 colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF333333))
             ) { Text("Cancel") }
         }

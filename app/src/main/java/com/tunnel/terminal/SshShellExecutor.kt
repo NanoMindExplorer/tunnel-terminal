@@ -447,32 +447,33 @@ class SshShellExecutor(
     }
 
     /**
-     * Phase 60 fix (audit B-3): Buat direktori recursive (seperti mkdir -p).
-     * Sebelumnya, writeFileRemote pakai sftp.mkdir(parent) yang hanya bisa
-     * buat satu level direktori (seperti mkdir POSIX tanpa -p). Kalau AI
-     * menulis ke path bersarang baru (mis. proyek_baru/src/main.py di mana
-     * dua-duanya belum ada), mkdir gagal dan comment mengasumsikan "mungkin
-     * sudah ada" padahal bisa juga berarti induknya belum ada.
-     *
-     * Fix: Traverse path per-segment, mkdir masing-masing level, ignore
-     * exception kalau sudah ada (idempotent).
+     * Wave-6: mkdir -p that preserves absolute remote paths.
+     * OLD: always built relative segments (dropped leading /).
      */
     private fun mkdirRecursive(sftp: ChannelSftp, path: String) {
+        val absolute = path.startsWith("/")
         val parts = path.trim('/').split("/").filter { it.isNotEmpty() }
-        var current = ""
+        var current = if (absolute) "" else ""
         for (part in parts) {
-            current = if (current.isEmpty()) part else "$current/$part"
-            try { sftp.mkdir(current) } catch (_: Exception) { /* sudah ada, lanjut */ }
+            current = if (current.isEmpty()) {
+                if (absolute) "/$part" else part
+            } else {
+                "$current/$part"
+            }
+            try { sftp.mkdir(current) } catch (_: Exception) { /* already exists */ }
         }
     }
 
     /** Tulis file ke remote via SFTP. */
     fun writeFileRemote(path: String, content: String): Boolean {
+        if (content.length > MAX_SFTP_CHARS) {
+            Log.e(tag, "SFTP write ditolak: content ${content.length} > $MAX_SFTP_CHARS chars")
+            return false
+        }
         val sftp = ensureSftpChannel() ?: return false
         return try {
-            // Pastikan parent directory exists (recursive, Phase 60 fix audit B-3)
             val parent = path.substringBeforeLast("/", "")
-            if (parent.isNotEmpty()) {
+            if (parent.isNotEmpty() && parent != path) {
                 mkdirRecursive(sftp, parent)
             }
             sftp.put(content.byteInputStream(Charsets.UTF_8), path)
@@ -484,14 +485,27 @@ class SshShellExecutor(
         }
     }
 
-    /** Baca file dari remote via SFTP. */
+    /** Baca file dari remote via SFTP (capped). */
     fun readFileRemote(path: String): String? {
         val sftp = ensureSftpChannel() ?: return null
         return try {
             val stream = sftp.get(path)
-            val text = stream.bufferedReader(Charsets.UTF_8).use { it.readText() }
-            Log.i(tag, "SFTP read: $path (${text.length} chars)")
-            text
+            val sb = StringBuilder()
+            stream.bufferedReader(Charsets.UTF_8).use { reader ->
+                val buf = CharArray(4096)
+                var total = 0
+                while (total < MAX_SFTP_CHARS) {
+                    val n = reader.read(buf, 0, minOf(buf.size, MAX_SFTP_CHARS - total))
+                    if (n < 0) break
+                    sb.append(buf, 0, n)
+                    total += n
+                }
+                if (reader.read() != -1) {
+                    sb.append("\n... (truncated at $MAX_SFTP_CHARS chars)")
+                }
+            }
+            Log.i(tag, "SFTP read: $path (${sb.length} chars)")
+            sb.toString()
         } catch (e: Exception) {
             Log.e(tag, "SFTP read gagal: ${e.message}")
             null
@@ -524,6 +538,8 @@ class SshShellExecutor(
     }
     companion object {
         private val globalIdCounter = java.util.concurrent.atomic.AtomicInteger(0)
+        /** Wave-6: Cap remote file I/O to avoid OOM on huge remote files. */
+        private const val MAX_SFTP_CHARS = 512_000
     }
 }
 

@@ -48,8 +48,12 @@ fun FileExplorerPanel(
     var dirEntries by remember { mutableStateOf(listOf<File>()) }
     var errorMsg by remember { mutableStateOf<String?>(null) }
 
-    /* Load directory contents. */
-    fun loadDir(dir: File) {
+    /**
+     * Wave-6: Browse vs shell cd are separate.
+     * @param syncShell when true, also call onFolderNavigate (explicit "Open in terminal").
+     * Opening explorer / tapping folders only browses — does not cd the shell.
+     */
+    fun loadDir(dir: File, syncShell: Boolean = false) {
         try {
             if (!dir.exists() || !dir.isDirectory) {
                 errorMsg = "Bukan direktori atau tidak ada: ${dir.absolutePath}"
@@ -65,15 +69,15 @@ fun FileExplorerPanel(
             dirEntries = files
             currentDir = dir
             errorMsg = null
-            onFolderNavigate(dir)
+            if (syncShell) onFolderNavigate(dir)
         } catch (e: Exception) {
             errorMsg = "Error: ${e.message}"
         }
     }
 
-    /* Initial load. */
+    /* Initial load — browse only, do not cd shell. */
     LaunchedEffect(initialDir.absolutePath) {
-        loadDir(initialDir)
+        loadDir(initialDir, syncShell = false)
     }
 
     Column(modifier = Modifier.fillMaxSize().background(theme.uiBg)) {
@@ -126,10 +130,18 @@ fun FileExplorerPanel(
                 Icon(Icons.Default.ArrowUpward, contentDescription = "Parent", tint = theme.uiAccent, modifier = Modifier.size(16.dp))
             }
             IconButton(
-                onClick = { loadDir(currentDir) },
+                onClick = { loadDir(currentDir, syncShell = false) },
                 modifier = Modifier.size(28.dp)
             ) {
                 Icon(Icons.Default.Refresh, contentDescription = "Refresh", tint = theme.uiAccent, modifier = Modifier.size(16.dp))
+            }
+            /* Wave-6: Explicit shell cd — does not fire on mere browse. */
+            TextButton(
+                onClick = { onFolderNavigate(currentDir) },
+                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                modifier = Modifier.height(28.dp)
+            ) {
+                Text("cd here", color = theme.uiAccent, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
             }
         }
 
@@ -140,6 +152,13 @@ fun FileExplorerPanel(
             fontSize = 10.sp,
             fontFamily = FontFamily.Monospace,
             modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)
+        )
+        Text(
+            "Browse only — use \"cd here\" to change shell directory",
+            color = theme.uiTextMuted,
+            fontSize = 9.sp,
+            fontFamily = FontFamily.Monospace,
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 2.dp)
         )
 
         Divider(color = theme.uiSurface, thickness = 1.dp)

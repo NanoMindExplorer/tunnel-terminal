@@ -292,23 +292,36 @@ class ToolExecutor(
      * old_string HARUS match persis 1 kali di file — mencegah AI salah
      * mengganti bagian yang mirip tapi berbeda konteks. */
     private fun executeEditFile(path: String, oldString: String, newString: String): String {
+        /* Wave-6: SSH edit via SFTP read → replace → write. */
+        val sessionType = sessionTargetResolver?.sessionType ?: "local"
+        if (sessionType == "ssh" && sshExecutor != null) {
+            val original = sshExecutor!!.readFileRemote(path)
+                ?: return "Error: cannot read remote file: $path"
+            val occurrences = Regex(Regex.escape(oldString)).findAll(original).count()
+            return when {
+                occurrences == 0 -> "Error: old_string tidak ditemukan di remote $path. Baca ulang dulu."
+                occurrences > 1 -> "Error: old_string muncul $occurrences kali di remote $path — perlu lebih spesifik."
+                else -> {
+                    val updated = original.replaceFirst(oldString, newString)
+                    if (sshExecutor!!.writeFileRemote(path, updated)) {
+                        "OK: edited $path (remote, replaced 1 occurrence)"
+                    } else {
+                        "Error: failed to write remote file after edit: $path"
+                    }
+                }
+            }
+        }
+
         val file = resolvePath(path)
         if (!file.exists()) return "Error: file not found: ${file.absolutePath}"
         val original = try { file.readText() } catch (e: Exception) {
             return "Error: cannot read file: ${e.message}"
         }
-        /* Phase 60 fix (audit B-5): Pakai Regex.findAll untuk hitung occurrence
-         * yang benar untuk pattern overlapping. Sebelumnya pakai split() yang
-         * hanya hitung non-overlapping dari kiri — bisa meleset untuk kasus
-         * tepi seperti cari "aa" di "aaaa" (split = 1, findAll = 3).
-         * Regex.escape memastikan oldString tidak di-interpretasi sebagai regex
-         * pattern (literal match). */
         val occurrences = Regex(Regex.escape(oldString)).findAll(original).count()
         return when {
             occurrences == 0 -> "Error: old_string tidak ditemukan persis di ${file.absolutePath}. Baca ulang file dulu sebelum edit."
             occurrences > 1 -> "Error: old_string muncul $occurrences kali — perlu lebih spesifik (sertakan lebih banyak baris konteks)."
             else -> {
-                /* Phase 50 fix (B-4): Save checkpoint sebelum edit. */
                 checkpointManager?.saveCheckpointBeforeWrite(file.absolutePath)
                 val updated = original.replaceFirst(oldString, newString)
                 file.writeText(updated)
