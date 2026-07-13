@@ -349,6 +349,15 @@ class ProotShellExecutor(
         } finally {
             try { inputStream.close() } catch (_: Exception) {}
             try { emulator.flush() } catch (_: Exception) {}
+            /* Wave-3: Reap zombie proot child on natural exit. */
+            try {
+                if (childPid > 1) {
+                    TerminalJni.killSession(childPid, 0)
+                    childPid = -1
+                }
+            } catch (e: Exception) {
+                Log.w(tag, "reap on exit: ${e.message}")
+            }
             isAlive = false
 
             val uptime = System.currentTimeMillis() - startTime

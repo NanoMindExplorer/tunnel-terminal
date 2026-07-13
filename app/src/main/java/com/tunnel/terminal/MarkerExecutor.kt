@@ -197,6 +197,12 @@ class MarkerExecutor {
         var outputAfter = outputBefore
 
         while (System.currentTimeMillis() - startTime < maxTimeoutMs) {
+            /* Wave-3: Abort early if session died (no point waiting for marker). */
+            if (!session.isAlive) {
+                val partialOutput = stripMarker(computeNewOutput(outputBefore, session.getCleanOutput()))
+                Log.w(TAG, "Session died while waiting for marker $markerIdCounter (cmd: $command)")
+                return@withContext ExecutionOutcome.TimedOut(partialOutput)
+            }
             /* Phase 40 fix (M2): poll delay 25ms — cukup responsif tanpa CPU waste. */
             delay(25)
             outputAfter = session.getCleanOutput()

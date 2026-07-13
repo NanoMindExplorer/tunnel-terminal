@@ -70,16 +70,18 @@ fun CommandPalette(
     /* Phase 26 hotfix: Use rememberCoroutineScope for suspend calls. */
     val paletteScope = rememberCoroutineScope()
 
-    /* Build full item list dengan recent commands. */
+    /* Build full item list dengan recent commands.
+     * Wave-3: recent items carry the command in title; onExecute in MainActivity
+     * runs executeCommand for id starting with "recent_". */
     val allItems = remember(items, recentCommands) {
         val recents = recentCommands.take(5).mapIndexed { idx, cmd ->
             PaletteItem(
                 id = "recent_$idx",
                 title = cmd,
-                subtitle = "recent command",
+                subtitle = "recent command — tap to run",
                 icon = Icons.Default.History,
                 category = PaletteCategory.RECENT,
-                action = { /* action akan di-handle via onExecute callback */ }
+                action = { /* handled by onExecute via recent_ id */ }
             )
         }
         recents + items
