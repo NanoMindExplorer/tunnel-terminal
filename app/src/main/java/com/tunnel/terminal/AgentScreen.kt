@@ -29,6 +29,7 @@ import androidx.compose.ui.unit.sp
 fun AgentScreen(
     theme: TerminalTheme,
     isRunning: Boolean,
+    isPaused: Boolean = false,
     events: List<AgentTaskRunner.AgentEvent>,
     onStart: (goal: String, useUbuntu: Boolean) -> Unit,
     onPause: () -> Unit,
@@ -143,8 +144,15 @@ fun AgentScreen(
         confirmButton = {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (isRunning) {
-                    TextButton(onClick = onPause) {
-                        Text("⏸ Pause", color = Color(0xFFFFAB00), fontFamily = FontFamily.Monospace)
+                    /* Wave-1: Pause is no longer a one-way trap — show Resume when paused. */
+                    if (isPaused) {
+                        TextButton(onClick = onResume) {
+                            Text("▶ Resume", color = Color(0xFF4CAF50), fontFamily = FontFamily.Monospace)
+                        }
+                    } else {
+                        TextButton(onClick = onPause) {
+                            Text("⏸ Pause", color = Color(0xFFFFAB00), fontFamily = FontFamily.Monospace)
+                        }
                     }
                     TextButton(onClick = onStop) {
                         Text("⏹ Stop", color = Color(0xFFFF5252), fontFamily = FontFamily.Monospace)

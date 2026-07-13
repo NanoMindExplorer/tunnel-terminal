@@ -114,7 +114,11 @@ class ShellExecutor(
     override suspend fun start() {
         withContext(Dispatchers.IO) {
             isAlive = true
-            outputBuffer.setLength(0)
+            /* Wave-1: Reset FD close guard so restart can close the new master fd. */
+            fdClosed.set(false)
+            synchronized(outputLock) {
+                outputBuffer.setLength(0)
+            }
             _lastCommandOutput.value = ""
 
             /* Phase 44 fix (MED-04): Hitung ukuran PTY awal dari display metrics
@@ -123,7 +127,7 @@ class ShellExecutor(
              * tab baru dibuka (sebelumnya: 80x24 → onSizeChanged → resize ke actual).
              *
              * Asumsi: fontSize default 12sp, char width ≈ 0.6 × fontSize, char height ≈ 1.2 × fontSize.
-             * Density dari resources. */
+             * Density from resources. */
             val displayMetrics = android.util.DisplayMetrics()
             try {
                 @Suppress("DEPRECATION")
@@ -149,7 +153,12 @@ class ShellExecutor(
                 triggerScreenUpdate()
                 return@withContext
             }
-            childPid = TerminalJni.createSession(initialRows, initialCols, outFd)
+            /* Wave-1: Pass real app home path (multi-user / work profile safe). */
+            val homePath = java.io.File(
+                context?.filesDir ?: java.io.File("/data/data/com.tunnel.terminal/files"),
+                "home"
+            ).absolutePath
+            childPid = TerminalJni.createSession(initialRows, initialCols, outFd, homePath)
             masterFd = outFd.getOrElse(0) { -1 }
 
             if (childPid <= 0 || masterFd < 0) {
@@ -186,7 +195,10 @@ class ShellExecutor(
      */
     override suspend fun restart() {
         destroy()
-        emulator = TerminalEmulator(themeHolder)
+        /* Wave-1: Re-wire DA/DSR writeCallback after creating a new emulator. */
+        emulator = TerminalEmulator(themeHolder).also {
+            it.writeCallback = { data -> writeRaw(data) }
+        }
         start()
     }
 

@@ -25,10 +25,6 @@ class SessionTargetResolver(
     private val workspaceRoot: File,
     private val rootfsDir: File?
 ) {
-    companion object {
-        private const val TAG = "SessionTargetResolver"
-    }
-
     /**
      * Resolve path AI ke File fisik Android yang benar, berdasarkan sesi aktif.
      *
@@ -60,9 +56,11 @@ class SessionTargetResolver(
                 }
             }
             else -> {
-                /* Local: pakai workspaceRoot (perilaku lama, backward compatible). */
+                /* Local: relative → workspace; absolute → real filesystem (sandbox
+                 * still enforced by isPathAllowed + SAF check in ToolExecutor).
+                 * Wave-1: do NOT remap /sdcard/... under workspaceRoot. */
                 if (logicalPath.startsWith("/")) {
-                    File(workspaceRoot, logicalPath.removePrefix("/"))
+                    File(logicalPath)
                 } else {
                     File(workspaceRoot, logicalPath)
                 }
@@ -73,19 +71,30 @@ class SessionTargetResolver(
     /** Cek apakah path berada di dalam area yang diizinkan (sandbox check). */
     fun isPathAllowed(file: File): Boolean {
         val canonicalPath = try { file.canonicalPath } catch (e: Exception) { file.absolutePath }
-        val workspacePath = workspaceRoot.canonicalPath
-        val insideWorkspace = canonicalPath.startsWith(workspacePath)
-
-        if (insideWorkspace) return true
+        val workspacePath = try { workspaceRoot.canonicalPath } catch (e: Exception) { workspaceRoot.absolutePath }
+        if (isPathInside(canonicalPath, workspacePath)) return true
 
         /* Untuk Ubuntu, izinkan akses ke dalam rootfs. */
         if (sessionType == "ubuntu" && rootfsDir != null) {
-            val rootfsPath = rootfsDir.canonicalPath
-            return canonicalPath.startsWith(rootfsPath)
+            val rootfsPath = try { rootfsDir.canonicalPath } catch (e: Exception) { rootfsDir.absolutePath }
+            return isPathInside(canonicalPath, rootfsPath)
         }
 
         /* Untuk path di dalam SAF tree yang sudah di-grant, cek via StorageManager. */
         return false
+    }
+
+    companion object {
+        private const val TAG = "SessionTargetResolver"
+
+        /**
+         * Wave-1: Prefix check with path boundary — prevents `workspace_evil` matching
+         * prefix of `.../workspace`.
+         */
+        fun isPathInside(childPath: String, parentPath: String): Boolean {
+            val parent = parentPath.trimEnd('/')
+            return childPath == parent || childPath.startsWith("$parent/")
+        }
     }
 
     /** Deskripsi target untuk AI context. */

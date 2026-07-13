@@ -125,7 +125,11 @@ class ProotShellExecutor(
     override suspend fun start() {
         withContext(Dispatchers.IO) {
             isAlive = true
-            outputBuffer.setLength(0)
+            /* Wave-1: Reset FD close guard so restart can close the new master fd. */
+            fdClosed.set(false)
+            synchronized(outputLock) {
+                outputBuffer.setLength(0)
+            }
             _lastCommandOutput.value = ""
             startTime = System.currentTimeMillis()
 
@@ -285,7 +289,10 @@ class ProotShellExecutor(
 
     override suspend fun restart() {
         destroy()
-        emulator = TerminalEmulator(themeHolder)
+        /* Wave-1: Re-wire DA/DSR writeCallback after creating a new emulator. */
+        emulator = TerminalEmulator(themeHolder).also {
+            it.writeCallback = { data -> writeRaw(data) }
+        }
         start()
     }
 
@@ -384,6 +391,8 @@ class ProotShellExecutor(
 
     override fun clearScreen() {
         emulator.process("\u001B[2J\u001B[H")
+        /* Wave-1: Mirror ShellExecutor — clear scrollback on local clear. */
+        emulator.clearScrollback()
         synchronized(outputLock) {
             outputBuffer.setLength(0)
         }

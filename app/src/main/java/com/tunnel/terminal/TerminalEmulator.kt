@@ -501,8 +501,10 @@ class TerminalEmulator(private val themeHolder: ThemeHolder = ThemeHolder()) {
         if (n <= 0) return
         val effective = minOf(n, scrollBottom - scrollTop + 1)
         for (i in 0 until effective) {
-            /* Phase 49 (E-1): Simpan baris teratas ke scrollback sebelum di-overwrite. */
-            if (altScreen == null) {  // hanya simpan ke scrollback di main screen, bukan alt
+            /* Phase 49 (E-1) + Wave-1: Simpan baris teratas ke scrollback hanya di main screen.
+             * OLD BUG: gate pakai altScreen == null — setelah exit TUI (vim/less), altScreen
+             * tetap non-null → scrollback mati permanen. FIX: gate pada !inAltScreen. */
+            if (!inAltScreen) {
                 val topRow = screen[scrollTop].copyOf()  // copy baris (array of TerminalCell)
                 scrollbackLines.addLast(topRow)
                 while (scrollbackLines.size > scrollbackMaxLines) {
@@ -638,9 +640,13 @@ class TerminalEmulator(private val themeHolder: ThemeHolder = ThemeHolder()) {
                         }
                         for (c in 0..cursorCol) screen[cursorRow][c] = blankCell()
                     }
-                    2, 3 -> { /* entire screen + scrollback (3) */
+                    2, 3 -> { /* entire screen; mode 3 also clears scrollback */
                         for (r in 0 until rows) {
                             for (c in 0 until cols) screen[r][c] = blankCell()
+                        }
+                        if (mode == 3) {
+                            scrollbackLines.clear()
+                            scrollbackOffset = 0
                         }
                         cursorRow = 0; cursorCol = 0
                     }
@@ -890,6 +896,9 @@ class TerminalEmulator(private val themeHolder: ThemeHolder = ThemeHolder()) {
                         inAltScreen = false
                         screen = mainScreen ?: Array(rows) { Array(cols) { blankCell() } }
                         mainScreen = null
+                        /* Wave-1: Drop alt buffer so future main-screen scrollback is not
+                         * gated by a stale non-null altScreen (paired with !inAltScreen gate). */
+                        altScreen = null
                         /* Note: cursor position not restored (1048 handles that separately).
                          * 1049 = save cursor + switch; 1047 = switch only; 1048 = save cursor only.
                          * Simplifikasi: reset cursor on exit. */

@@ -29,7 +29,26 @@ extern "C" {
 JNIEXPORT jint JNICALL
 Java_com_tunnel_terminal_TerminalJni_createSession(JNIEnv *env, jobject thiz,
                                                     jint rows, jint cols,
-                                                    jintArray outFd) {
+                                                    jintArray outFd,
+                                                    jstring homePath) {
+    /* Wave-1: Copy home path from Java BEFORE fork (child must not touch JNIEnv).
+     * Fallback keeps previous hard-coded path for safety if null/empty. */
+    char homeDirBuf[512];
+    const char *fallbackHome = "/data/data/com.tunnel.terminal/files/home";
+    homeDirBuf[0] = '\0';
+    if (homePath != NULL) {
+        const char *cHome = env->GetStringUTFChars(homePath, NULL);
+        if (cHome != NULL) {
+            strncpy(homeDirBuf, cHome, sizeof(homeDirBuf) - 1);
+            homeDirBuf[sizeof(homeDirBuf) - 1] = '\0';
+            env->ReleaseStringUTFChars(homePath, cHome);
+        }
+    }
+    if (homeDirBuf[0] == '\0') {
+        strncpy(homeDirBuf, fallbackHome, sizeof(homeDirBuf) - 1);
+        homeDirBuf[sizeof(homeDirBuf) - 1] = '\0';
+    }
+
     int masterFd = -1;
     pid_t pid = forkpty(&masterFd, NULL, NULL, NULL);
 
@@ -50,46 +69,45 @@ Java_com_tunnel_terminal_TerminalJni_createSession(JNIEnv *env, jobject thiz,
         char *envp[16];
         int env_idx = 0;
 
-        /* Copy existing environ. */
+        /* Copy existing environ, skip TERM/HOME/TERM_PROGRAM so our values win
+         * (most libc env lookups use first match). */
         for (int i = 0; environ[i] != NULL && env_idx < 12; i++) {
+            const char *e = environ[i];
+            if (strncmp(e, "TERM=", 5) == 0) continue;
+            if (strncmp(e, "HOME=", 5) == 0) continue;
+            if (strncmp(e, "TERM_PROGRAM=", 13) == 0) continue;
             envp[env_idx++] = environ[i];
         }
 
         /* Tambahkan TERM, TERM_PROGRAM, HOME.
-         * M1 fix: Gunakan static char arrays (writable) bukan string literal cast.
-         * Cast (char*)"..." dari const char* adalah UB — bisa segfault di read-only memory. */
+         * HOME is built from homeDirBuf (stack copy from parent, safe after fork). */
         static char term_env[] = "TERM=xterm-256color";
         static char term_prog_env[] = "TERM_PROGRAM=tunnel-terminal";
-        static char home_env[] = "HOME=/data/data/com.tunnel.terminal/files/home";
+        char home_env[512 + 5];
+        /* Build HOME=<path> without snprintf (not async-signal-safe). */
+        {
+            const char *prefix = "HOME=";
+            size_t pi = 0;
+            while (prefix[pi] != '\0' && pi < sizeof(home_env) - 1) {
+                home_env[pi] = prefix[pi];
+                pi++;
+            }
+            size_t hi = 0;
+            while (homeDirBuf[hi] != '\0' && pi + hi < sizeof(home_env) - 1) {
+                home_env[pi + hi] = homeDirBuf[hi];
+                hi++;
+            }
+            home_env[pi + hi] = '\0';
+        }
         envp[env_idx++] = term_env;
         envp[env_idx++] = term_prog_env;
         envp[env_idx++] = home_env;
         envp[env_idx] = NULL;
 
-        /* Phase 45 fix Bug #1: Pindah ke home directory app SEBELUM exec.
-         *
-         * OLD BUG: HOME di-set sebagai env var, tapi itu TIDAK memindahkan cwd
-         * proses. Shell mewarisi cwd dari proses Android app (defaultnya "/",
-         * root filesystem yang read-only & permission-denied untuk app biasa).
-         * Akibatnya: prompt "tunnel@android:/$", ls → "Permission denied",
-         * mkdir → "Read-only file system".
-         *
-         * FIX: mkdir() + chdir() ke home directory app SEBELUM execve().
-         * - mkdir() buat folder kalau belum ada (idempotent — return -1+EEXIST
-         *   kalau sudah ada, yang kita abaikan).
-         * - chdir() pindah cwd proses ke home. Shell yang di-exec mewarisi
-         *   cwd ini → prompt "tunnel@android:~/files/home$" (atau custom PS1).
-         *
-         * Keduanya async-signal-safe (POSIX.1), aman dipanggil di child process
-         * antara fork-exec — konsisten dengan alasan BUG-30 fix di file ini.
-         * Tidak pakai LOGE() di sini karena __android_log_print tidak dijamin
-         * async-signal-safe di proses yang baru di-fork (bisa deadlock kalau
-         * thread lain pegang malloc lock saat fork). Kalau gagal, lanjut saja —
-         * shell tetap jalan, hanya cwd-nya tidak ideal.
-         */
-        static const char home_dir[] = "/data/data/com.tunnel.terminal/files/home";
-        mkdir(home_dir, 0700);  /* idempotent, ignore error if exists */
-        chdir(home_dir);        /* move cwd to home; ignore error if fails */
+        /* Phase 45 + Wave-1: mkdir + chdir to real app home (multi-user safe).
+         * Both are async-signal-safe (POSIX.1). */
+        mkdir(homeDirBuf, 0700);  /* idempotent, ignore error if exists */
+        chdir(homeDirBuf);        /* move cwd to home; ignore error if fails */
 
         /* execve adalah async-signal-safe.
          * M1 fix: Gunai static char array untuk argv juga. */

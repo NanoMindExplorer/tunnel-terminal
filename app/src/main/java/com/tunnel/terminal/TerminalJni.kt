@@ -36,9 +36,10 @@ object TerminalJni {
      * @param rows jumlah baris awal
      * @param cols jumlah kolom awal
      * @param outFd array int[1] untuk menerima master file descriptor
+     * @param homePath absolute path for HOME + initial cwd (Wave-1: multi-user safe)
      * @return child pid (>0) jika sukses, -1 jika gagal
      */
-    external fun createSession(rows: Int, cols: Int, outFd: IntArray): Int
+    external fun createSession(rows: Int, cols: Int, outFd: IntArray, homePath: String): Int
 
     /**
      * Phase 36 (proot/Ubuntu): Sama seperti createSession(), tapi exec ke program
