@@ -146,6 +146,45 @@ class TerminalEmulator(private val themeHolder: ThemeHolder = ThemeHolder()) {
     private var inAltScreen = false
 
     /**
+     * Wave-12: DECCKM — application cursor keys (CSI ?1h).
+     * When true, arrows are ESC O A/B/C/D (vim/less); otherwise CSI A/B/C/D.
+     */
+    @Volatile
+    var applicationCursorKeys: Boolean = false
+        private set
+
+    /**
+     * Wave-12: Bracketed paste mode (CSI ?2004h).
+     * When true, paste should be wrapped in ESC[200~ … ESC[201~.
+     */
+    @Volatile
+    var bracketedPaste: Boolean = false
+        private set
+
+    /** Wave-12: Arrow key sequence for current DECCKM mode. dir: A=up B=down C=right D=left */
+    fun cursorKey(dir: Char): String {
+        val d = dir.uppercaseChar()
+        return if (applicationCursorKeys) "\u001BO$d" else "\u001B[$d"
+    }
+
+    /** Wave-12: Function key sequences (xterm). F1–F4 SS3, F5–F12 CSI. */
+    fun functionKey(n: Int): String = when (n) {
+        1 -> "\u001BOP"
+        2 -> "\u001BOQ"
+        3 -> "\u001BOR"
+        4 -> "\u001BOS"
+        5 -> "\u001B[15~"
+        6 -> "\u001B[17~"
+        7 -> "\u001B[18~"
+        8 -> "\u001B[19~"
+        9 -> "\u001B[20~"
+        10 -> "\u001B[21~"
+        11 -> "\u001B[23~"
+        12 -> "\u001B[24~"
+        else -> ""
+    }
+
+    /**
      * Regex untuk ANSI escape sequences:
      * 1. OSC sequences: \u001B]...\u0007 (atau \u001B\\)
      * 2. CSI sequences: \u001B[paramsfinal
@@ -965,12 +1004,12 @@ class TerminalEmulator(private val themeHolder: ThemeHolder = ThemeHolder()) {
                 }
                 /* Cursor visibility */
                 25 -> isCursorVisible = set
-                /* Auto-wrap (7) - kita selalu wrap, abaikan */
-                7, /* Application cursor keys */
-                1, /* Bracketed paste */
-                2004, /* Reverse video */
-                5, /* Origin mode */
-                6 -> { /* ignore - simplifikasi */ }
+                /* Wave-12: Application cursor keys (DECCKM) — vim/less/htop. */
+                1 -> applicationCursorKeys = set
+                /* Wave-12: Bracketed paste — prevent multi-line paste from auto-running. */
+                2004 -> bracketedPaste = set
+                /* Auto-wrap (7) - kita selalu wrap; reverse video (5); origin (6) — simplify. */
+                7, 5, 6 -> { /* ignore - simplifikasi */ }
                 else -> { /* unhandled private mode */ }
             }
         }
