@@ -5,7 +5,7 @@
 ![Architecture](https://img.shields.io/badge/Architecture-NDK%20%2B%20Jetpack%20Compose-purple)
 ![AI](https://img.shields.io/badge/AI-Multi%20Provider%20%2B%20Vision%20%2B%20MCP-cyan)
 ![Linux](https://img.shields.io/badge/Linux-Ubuntu%2024.04%20via%20proot-orange)
-![Version](https://img.shields.io/badge/version-7.4.0-blue)
+![Version](https://img.shields.io/badge/version-7.5.0-blue)
 ![Stability](https://img.shields.io/badge/stability-production-green)
 
 ## Quick Links
