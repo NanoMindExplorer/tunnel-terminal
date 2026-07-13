@@ -47,3 +47,13 @@ jobs:
 | `05-PermissionManagerTest` | Always/Never allow, session scope |
 | `06-WaveUtilsTest` | path sandbox, width, metrics, markers |
 | `07-AiToolCallAndPromptTest` | parse, read-only set, cwd prompt |
+| `08-HistoryAndUrlTest` | AI base URL validation |
+
+## Built-in commands (Wave 8+)
+
+| Command | Description |
+|---------|-------------|
+| `history` | Show current tab command history |
+| `history-clear` | Clear session + persisted history |
+| `export-output` | Write transcript to `filesDir/exports/` |
+| `ai-metrics` | Show last AI request latency/size |
