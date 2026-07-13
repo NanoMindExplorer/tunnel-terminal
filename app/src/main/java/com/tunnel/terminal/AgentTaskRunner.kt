@@ -114,6 +114,10 @@ class AgentTaskRunner(
         approve: suspend (AiToolCall, String) -> Boolean,
         events: (AgentEvent) -> Unit
     ) {
+        /* Wave-1: Reset control flags so Start works after a previous Stop/Pause. */
+        stopped = false
+        paused = false
+
         val history = mutableListOf<StepRecord>()
         var iteration = 0
         val workspacePath = toolExecutor.workspaceRootFile().absolutePath

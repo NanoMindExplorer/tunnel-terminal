@@ -1,5 +1,6 @@
 package com.tunnel.terminal
 
+import androidx.compose.ui.unit.sp
 import org.junit.Assert.*
 import org.junit.Before
 import org.junit.Test
@@ -170,7 +171,7 @@ class TerminalEmulatorTest {
         val oldBg = oldTheme.theme.background
         emulator.process("Test")
         // Change theme
-        val newTheme = ThemeManager.themes.firstOrNull { it.foreground != oldFg } ?: ThemeManager.themes[1]
+        val newTheme = ThemeManager.presets.firstOrNull { it.foreground != oldFg } ?: ThemeManager.presets[1]
         oldTheme.theme = newTheme
         emulator.recolorForTheme(oldFg, oldBg)
         val snapshot = emulator.getScreenSnapshot()

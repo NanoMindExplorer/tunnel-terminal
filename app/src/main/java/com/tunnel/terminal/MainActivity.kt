@@ -127,6 +127,8 @@ class MainActivity : ComponentActivity() {
     private val agentEvents = mutableStateListOf<AgentTaskRunner.AgentEvent>()
     /** Phase 47: Is Agent task running? */
     private var agentRunning by mutableStateOf(false)
+    /** Wave-1: Agent pause state for Resume button UI. */
+    private var agentPaused by mutableStateOf(false)
     /** Phase 52 fix (Bug #1): State untuk approval dialog (CompletableDeferred bridge). */
     private var pendingAgentApproval by mutableStateOf<Pair<AiToolCall, String>?>(null)
     private var agentApprovalDeferred: kotlinx.coroutines.CompletableDeferred<Boolean>? = null
@@ -416,15 +418,24 @@ class MainActivity : ComponentActivity() {
             }
             call.tool == "write_file" -> {
                 /* Phase 23: Inline diff view untuk AI file edits.
-                 * Show diff sebelum apply — user bisa review/reject. */
+                 * Wave-1: Resolve path via ToolExecutor sandbox — never raw File(path). */
                 val path = call.args["path"] ?: return
                 val content = call.args["content"] ?: return
-                val file = java.io.File(path)
-                val original = if (file.exists()) file.readText() else ""
-                if (original != content) {
-                    pendingDiff = Triple(path, original, content)
-                } else {
-                    chatMessages.add(ChatMessage("assistant", "No changes needed for $path", false))
+                try {
+                    val file = toolExecutor.resolvePathForAccess(path)
+                    val original = if (file.exists() && file.isFile) {
+                        try { file.readText() } catch (e: Exception) { "" }
+                    } else ""
+                    if (original != content) {
+                        /* Store resolved absolute path so Apply hits the same file. */
+                        pendingDiff = Triple(file.absolutePath, original, content)
+                    } else {
+                        chatMessages.add(ChatMessage("assistant", "No changes needed for ${file.absolutePath}", false))
+                    }
+                } catch (e: SecurityException) {
+                    chatMessages.add(ChatMessage("assistant", "Error: ${e.message}", false, isError = true))
+                } catch (e: Exception) {
+                    chatMessages.add(ChatMessage("assistant", "Error resolving path: ${e.message}", false, isError = true))
                 }
             }
             call.tool.startsWith("mcp.") -> {
@@ -610,58 +621,62 @@ class MainActivity : ComponentActivity() {
         if (goal.isBlank()) return
         if (agentRunning) return
 
-        // Pilih session — Ubuntu kalau diminta dan ada, fallback ke active session
-        val session = if (useUbuntu) {
-            shellExecutors.find { it.sessionType == "ubuntu" && it.isAlive }
-                ?: run {
-                    lifecycleScope.launch { createUbuntuTab() }
-                    Thread.sleep(2000)
-                    shellExecutors.find { it.sessionType == "ubuntu" && it.isAlive }
-                }
-        } else {
-            shellExecutors.find { it.id == activeExecutorId }
-        }
-
-        if (session == null) {
-            agentEvents.add(AgentTaskRunner.AgentEvent.StoppedForSafety("Tidak ada session aktif. Buka tab terminal dulu."))
-            return
-        }
-
         agentEvents.clear()
         agentRunning = true
+        agentPaused = false
 
-        /* Phase 52 fix (Bug #1): Ganti hardcoded onApprove=true dengan CompletableDeferred
-         * yang menampilkan dialog blocking ke user. Risk assessment sekarang BENAR-BENAR
-         * berfungsi — command berisiko (rm -rf, curl|sh, sudo) butuh approval eksplisit.
-         * Phase 52 fix (Bug #3): Simpan Job supaya Stop bisa cancel() coroutine yang
-         * sedang menunggu respons AI — bukan cuma set flag yang dicek di iterasi berikutnya. */
+        /* Phase 52 + Wave-1: Entire flow (incl. Ubuntu tab wait) runs on a coroutine —
+         * never Thread.sleep on the main thread. */
         agentJob = lifecycleScope.launch {
             try {
+                val session = if (useUbuntu) {
+                    var s = shellExecutors.find { it.sessionType == "ubuntu" && it.isAlive }
+                    if (s == null) {
+                        createUbuntuTab()
+                        /* Wait up to ~4s for proot session readiness without blocking UI. */
+                        repeat(40) {
+                            kotlinx.coroutines.delay(100)
+                            s = shellExecutors.find { it.sessionType == "ubuntu" && it.isAlive }
+                            if (s != null) return@repeat
+                        }
+                    }
+                    s
+                } else {
+                    shellExecutors.find { it.id == activeExecutorId }
+                }
+
+                if (session == null) {
+                    agentEvents.add(
+                        AgentTaskRunner.AgentEvent.StoppedForSafety(
+                            "Tidak ada session aktif. Buka tab terminal dulu" +
+                                if (useUbuntu) " (atau install Ubuntu)." else "."
+                        )
+                    )
+                    return@launch
+                }
+
                 agentTaskRunner.run(
                     goal = goal,
                     session = session,
                     settings = aiSettings,
                     maxIterations = 40,
                     approve = { call, reason ->
-                        /* Phase 52 fix (Bug #1): Bridge suspend function ke dialog Compose
-                         * pakai CompletableDeferred. Loop Agent BENAR-BENAR berhenti sampai
-                         * user pilih Approve/Deny. */
                         val deferred = kotlinx.coroutines.CompletableDeferred<Boolean>()
                         agentApprovalDeferred = deferred
                         pendingAgentApproval = call to reason
-                        deferred.await()  // suspend di sini — loop berhenti sampai user pilih
+                        deferred.await()
                     },
                     events = { event ->
                         agentEvents.add(event)
                     }
                 )
             } catch (e: kotlinx.coroutines.CancellationException) {
-                /* Phase 52 fix (Bug #3): Job.cancel() memunculkan CancellationException. */
                 agentEvents.add(AgentTaskRunner.AgentEvent.StoppedForSafety("Dihentikan oleh user"))
             } catch (e: Exception) {
                 agentEvents.add(AgentTaskRunner.AgentEvent.StoppedForSafety("Exception: ${e.message}"))
             } finally {
                 agentRunning = false
+                agentPaused = false
             }
         }
     }
@@ -1109,6 +1124,10 @@ class MainActivity : ComponentActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        /* Wave-1: Sessions live on TunnelApp so they survive Activity recreate.
+         * Only tear them down when the Activity is actually finishing (user quit /
+         * process end path), not on configuration-driven recreation. */
+        if (!isFinishing) return
         /* Phase 20: destroy() blocks (Thread.sleep + join). Run on background thread
          * to avoid ANR. Old code: forEach on main thread = 5 tabs × 400ms = 2s ANR. */
         Thread {
@@ -1292,8 +1311,11 @@ class MainActivity : ComponentActivity() {
                 modifiedContent = modified,
                 theme = currentTheme,
                 onApply = {
-                    java.io.File(path).writeText(modified)
-                    chatMessages.add(ChatMessage("assistant", "✅ Applied changes to ${java.io.File(path).name}", false))
+                    /* Wave-1: Apply via ToolExecutor so checkpoint + sandbox apply. */
+                    val result = toolExecutor.execute(
+                        AiToolCall("write_file", mapOf("path" to path, "content" to modified))
+                    )
+                    chatMessages.add(ChatMessage("assistant", "✅ $result", false, isError = result.startsWith("Error")))
                     pendingDiff = null
                 },
                 onReject = {
@@ -1356,18 +1378,26 @@ class MainActivity : ComponentActivity() {
             AgentScreen(
                 theme = currentTheme,
                 isRunning = agentRunning,
+                isPaused = agentPaused,
                 events = agentEvents,
                 onStart = { goal, useUbuntu ->
                     startAgentTask(goal, useUbuntu)
                 },
-                onPause = { agentTaskRunner.pause() },
-                onResume = { agentTaskRunner.resume() },
+                onPause = {
+                    agentTaskRunner.pause()
+                    agentPaused = true
+                },
+                onResume = {
+                    agentTaskRunner.resume()
+                    agentPaused = false
+                },
                 onStop = {
                     /* Phase 52 fix (Bug #3): Job.cancel() menginterupsi coroutine di titik
                      * suspend manapun — termasuk saat menunggu respons AI. */
                     agentJob?.cancel()
                     agentTaskRunner.stop()
                     agentRunning = false
+                    agentPaused = false
                 },
                 onDismiss = { showAgentScreen = false }
             )

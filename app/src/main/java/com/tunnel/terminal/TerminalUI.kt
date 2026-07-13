@@ -280,6 +280,13 @@ fun TerminalScreenView(
     val cursorState = renderState.cursor
     val renderRows = renderState.rows
     val renderCols = renderState.cols
+    /* Wave-1: Actually render scrollback history above the live screen.
+     * getScrollbackLines(0, n) returns newest-first; reverse for oldest-at-top. */
+    val scrollbackSnapshot = remember(screenDirty) {
+        val count = emulator.getScrollbackCount().coerceAtMost(500)
+        if (count <= 0) emptyList()
+        else emulator.getScrollbackLines(0, count).asReversed()
+    }
 
     /* Phase 53: Selection toolbar helpers. */
     fun selectionBoundsToRect(start: Pair<Int, Int>, end: Pair<Int, Int>): androidx.compose.ui.geometry.Rect {
@@ -472,6 +479,34 @@ fun TerminalScreenView(
                 .padding(4.dp)
                 .verticalScroll(scrollState)
         ) {
+            /* Wave-1: Scrollback history (oldest first), then live screen rows.
+             * Selection still maps to live-screen coordinates only. */
+            for (sbLine in scrollbackSnapshot) {
+                val annotatedString = buildAnnotatedString {
+                    for (col in 0 until renderCols) {
+                        val cell = sbLine.getOrElse(col) { TerminalCell() }
+                        val bgColor = if (cell.reverse) cell.fgColor else cell.bgColor
+                        val fgColor = if (cell.reverse) cell.bgColor else cell.fgColor
+                        withStyle(SpanStyle(
+                            color = fgColor,
+                            background = bgColor,
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = if (cell.bold) FontWeight.Bold else FontWeight.Normal,
+                            fontStyle = if (cell.italic) FontStyle.Italic else FontStyle.Normal,
+                            textDecoration = if (cell.underline) androidx.compose.ui.text.style.TextDecoration.Underline else androidx.compose.ui.text.style.TextDecoration.None
+                        )) { append(cell.char) }
+                    }
+                }
+                Text(
+                    text = annotatedString,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = fontSize.sp,
+                    softWrap = false,
+                    maxLines = 1,
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Clip,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
             for (row in 0 until renderRows) {
                 val annotatedString = buildAnnotatedString {
                     for (col in 0 until renderCols) {

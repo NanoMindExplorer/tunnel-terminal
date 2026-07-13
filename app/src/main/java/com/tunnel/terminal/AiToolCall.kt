@@ -231,10 +231,9 @@ class ToolExecutor(
         val candidate = if (rawPath.startsWith("/")) File(rawPath) else File(workspaceRoot, rawPath)
         val canonical = try { candidate.canonicalFile } catch (e: Exception) { candidate }
 
-        val workspacePath = workspaceRoot.canonicalPath
-        val insideWorkspace = try {
-            canonical.canonicalPath.startsWith(workspacePath)
-        } catch (e: Exception) { false }
+        val workspacePath = try { workspaceRoot.canonicalPath } catch (e: Exception) { workspaceRoot.absolutePath }
+        /* Wave-1: boundary-aware prefix check (not bare startsWith). */
+        val insideWorkspace = SessionTargetResolver.isPathInside(canonical.canonicalPath, workspacePath)
 
         val insideGrantedStorage = storageManager?.isPathWithinGrantedTree(canonical) ?: false
 
@@ -248,6 +247,12 @@ class ToolExecutor(
         }
         return canonical
     }
+
+    /**
+     * Wave-1: Expose path resolution for MainActivity write_file diff flow so
+     * UI does not bypass the sandbox with raw File(path).
+     */
+    fun resolvePathForAccess(rawPath: String): File = resolvePath(rawPath)
 
     /** Phase 47 (Fix 1): Expose workspaceRoot untuk AgentTaskRunner. */
     fun workspaceRootFile(): File = workspaceRoot

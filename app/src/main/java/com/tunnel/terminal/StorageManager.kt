@@ -240,7 +240,8 @@ class StorageManager(private val context: Context) {
         return try {
             val canonicalPath = file.canonicalPath
             val canonicalRoot = java.io.File(grantedRoot).canonicalPath
-            canonicalPath.startsWith(canonicalRoot)
+            /* Wave-1: boundary-aware prefix (avoid sibling path false positives). */
+            SessionTargetResolver.isPathInside(canonicalPath, canonicalRoot)
         } catch (e: Exception) {
             Log.w(TAG, "Gagal cek isPathWithinGrantedTree: ${e.message}")
             false
