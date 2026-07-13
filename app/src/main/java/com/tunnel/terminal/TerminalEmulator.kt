@@ -12,7 +12,11 @@ import androidx.compose.ui.unit.sp
  * Terminal cell with char, fg color, bg color, and text style attributes.
  */
 data class TerminalCell(
-    var char: Char = ' ',
+    /**
+     * Wave-15: Full glyph string (may be multi-code-point with combining marks,
+     * or a single non-BMP emoji). Prefer [displayText] when rendering.
+     */
+    var glyph: String = " ",
     var fgColor: Color = Color(0xFF00FF00),
     var bgColor: Color = Color.Black,
     var bold: Boolean = false,
@@ -21,37 +25,49 @@ data class TerminalCell(
     var reverse: Boolean = false,
     /** Wave-5: true if this cell is the right half of a double-width glyph (CJK/emoji). */
     var wideContinuation: Boolean = false
-)
+) {
+    /** Back-compat single-char access (first code unit). */
+    var char: Char
+        get() = glyph.firstOrNull() ?: ' '
+        set(value) {
+            glyph = value.toString()
+        }
+
+    fun displayText(): String = if (wideContinuation) "" else glyph
+}
 
 /**
- * Wave-5: Approximate terminal column width (wcwidth-lite).
+ * Wave-5 + Wave-15: Approximate terminal column width (wcwidth-lite).
  * 0 = combining / zero-width, 1 = normal, 2 = CJK / many emoji.
  */
 object CharDisplayWidth {
-    fun of(ch: Char): Int {
-        val type = Character.getType(ch)
+    fun of(ch: Char): Int = ofCodePoint(ch.code)
+
+    /** Wave-15: Width by Unicode code point (handles astral emoji as 2). */
+    fun ofCodePoint(cp: Int): Int {
+        /* Zero-width joiners / variation selectors / ZWSP. */
+        if (cp == 0x200D || cp == 0x200B || cp in 0xFE00..0xFE0F) return 0
+        val type = Character.getType(cp)
         if (type == Character.NON_SPACING_MARK.toInt() ||
             type == Character.ENCLOSING_MARK.toInt() ||
             type == Character.FORMAT.toInt()
         ) {
             return 0
         }
-        val code = ch.code
-        /* Common East Asian / fullwidth ranges (BMP). */
-        if (code in 0x1100..0x115F ||
-            code in 0x2E80..0xA4CF ||
-            code in 0xAC00..0xD7A3 ||
-            code in 0xF900..0xFAFF ||
-            code in 0xFE10..0xFE19 ||
-            code in 0xFE30..0xFE6F ||
-            code in 0xFF00..0xFF60 ||
-            code in 0xFFE0..0xFFE6
+        /* Common East Asian / fullwidth ranges. */
+        if (cp in 0x1100..0x115F ||
+            cp in 0x2E80..0xA4CF ||
+            cp in 0xAC00..0xD7A3 ||
+            cp in 0xF900..0xFAFF ||
+            cp in 0xFE10..0xFE19 ||
+            cp in 0xFE30..0xFE6F ||
+            cp in 0xFF00..0xFF60 ||
+            cp in 0xFFE0..0xFFE6
         ) {
             return 2
         }
-        /* High surrogates: treat as width 2 (emoji / astral — rough). */
-        if (ch.isHighSurrogate()) return 2
-        if (ch.isLowSurrogate()) return 0
+        /* Most non-BMP (emoji, etc.) occupy 2 columns in modern terminals. */
+        if (cp > 0xFFFF) return 2
         return 1
     }
 }
@@ -414,7 +430,7 @@ class TerminalEmulator(private val themeHolder: ThemeHolder = ThemeHolder()) {
     private fun lineToPlain(line: Array<TerminalCell>): String {
         val sb = StringBuilder(line.size)
         for (cell in line) {
-            if (!cell.wideContinuation) sb.append(cell.char)
+            if (!cell.wideContinuation) sb.append(cell.displayText())
         }
         return sb.toString().trimEnd()
     }
@@ -601,54 +617,107 @@ class TerminalEmulator(private val themeHolder: ThemeHolder = ThemeHolder()) {
     /* flush() moved to synchronized version above (Phase 21 thread safety). */
 
     private fun printText(text: String) {
-        for (ch in text.toCharArray()) {
+        /* Wave-15: Iterate Unicode code points (not UTF-16 chars) so emoji/CJK wrap correctly. */
+        var i = 0
+        while (i < text.length) {
+            val ch = text[i]
             when (ch) {
-                '\n' -> { cursorCol = 0; cursorRow++ }
-                '\r' -> cursorCol = 0
-                '\b' -> if (cursorCol > 0) cursorCol--
+                '\n' -> {
+                    cursorCol = 0; cursorRow++
+                    i++
+                }
+                '\r' -> {
+                    cursorCol = 0
+                    i++
+                }
+                '\b' -> {
+                    if (cursorCol > 0) cursorCol--
+                    i++
+                }
                 '\t' -> {
                     val next = ((cursorCol / 8) + 1) * 8
-                    cursorCol = if (next >= cols) { cursorRow++; 0 } else next
+                    cursorCol = if (next >= cols) {
+                        cursorRow++
+                        0
+                    } else next
+                    i++
                 }
-                '\u0007' -> { /* bell - ignore */ }
+                '\u0007' -> {
+                    /* bell - ignore */
+                    i++
+                }
                 else -> {
-                    val w = CharDisplayWidth.of(ch)
+                    val cp: Int
+                    val glyph: String
+                    if (Character.isHighSurrogate(ch) && i + 1 < text.length &&
+                        Character.isLowSurrogate(text[i + 1])
+                    ) {
+                        cp = Character.toCodePoint(ch, text[i + 1])
+                        glyph = String(Character.toChars(cp))
+                        i += 2
+                    } else {
+                        cp = ch.code
+                        glyph = ch.toString()
+                        i++
+                    }
+                    val w = CharDisplayWidth.ofCodePoint(cp)
                     if (w == 0) {
-                        /* Combining mark: attach to previous cell if possible. */
+                        /* Wave-15: Attach combining / ZWJ / VS to previous base cell. */
+                        attachCombining(glyph)
                         continue
                     }
-                    /* Wrap early if wide char won't fit on this line. */
-                    if (w == 2 && cursorCol >= cols - 1) {
-                        cursorCol = 0
-                        cursorRow++
-                        if (cursorRow > scrollBottom) scrollUp(cursorRow - scrollBottom)
-                    }
-                    if (cursorRow in 0 until rows && cursorCol in 0 until cols) {
-                        val cell = screen[cursorRow][cursorCol]
-                        cell.char = ch
-                        cell.fgColor = if (currentReverse) currentBg else currentFg
-                        cell.bgColor = if (currentReverse) currentFg else currentBg
-                        cell.bold = currentBold
-                        cell.italic = currentItalic
-                        cell.underline = currentUnderline
-                        cell.wideContinuation = false
-                        cell.reverse = currentReverse
-                        if (w == 2 && cursorCol + 1 < cols) {
-                            val next = screen[cursorRow][cursorCol + 1]
-                            next.char = ' '
-                            next.fgColor = cell.fgColor
-                            next.bgColor = cell.bgColor
-                            next.wideContinuation = true
-                            next.bold = false
-                            next.italic = false
-                            next.underline = false
-                        }
-                    }
-                    cursorCol += w
-                    if (cursorCol >= cols) { cursorCol = 0; cursorRow++ }
+                    printGlyph(glyph, w)
                 }
             }
             if (cursorRow > scrollBottom) scrollUp(cursorRow - scrollBottom)
+        }
+    }
+
+    /** Wave-15: Append zero-width / combining sequence onto the glyph under the cursor. */
+    private fun attachCombining(piece: String) {
+        if (cursorRow !in 0 until rows) return
+        val col = if (cursorCol > 0) cursorCol - 1 else 0
+        if (col !in 0 until cols) return
+        val cell = screen[cursorRow][col]
+        if (cell.wideContinuation && col > 0) {
+            screen[cursorRow][col - 1].glyph += piece
+        } else if (!cell.wideContinuation) {
+            cell.glyph += piece
+        }
+    }
+
+    private fun printGlyph(glyph: String, w: Int) {
+        /* Wrap early if wide char won't fit on this line. */
+        if (w == 2 && cursorCol >= cols - 1) {
+            cursorCol = 0
+            cursorRow++
+            if (cursorRow > scrollBottom) scrollUp(cursorRow - scrollBottom)
+        }
+        if (cursorRow in 0 until rows && cursorCol in 0 until cols) {
+            val cell = screen[cursorRow][cursorCol]
+            cell.glyph = glyph
+            cell.fgColor = if (currentReverse) currentBg else currentFg
+            cell.bgColor = if (currentReverse) currentFg else currentBg
+            cell.bold = currentBold
+            cell.italic = currentItalic
+            cell.underline = currentUnderline
+            cell.wideContinuation = false
+            cell.reverse = currentReverse
+            if (w == 2 && cursorCol + 1 < cols) {
+                val next = screen[cursorRow][cursorCol + 1]
+                next.glyph = " "
+                next.fgColor = cell.fgColor
+                next.bgColor = cell.bgColor
+                next.wideContinuation = true
+                next.bold = false
+                next.italic = false
+                next.underline = false
+            }
+        }
+        cursorCol += w
+        if (cursorCol >= cols) {
+            cursorCol = 0
+            cursorRow++
         }
     }
 
