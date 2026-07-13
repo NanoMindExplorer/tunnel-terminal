@@ -255,6 +255,11 @@ fun BlockTerminalView(
     onFontSizeChange: (Float) -> Unit = {}
 ) {
     val scrollState = androidx.compose.foundation.rememberScrollState()
+    /* Wave-16: Live pinch size (mirrors TerminalScreenView). */
+    var gestureFontSp by androidx.compose.runtime.mutableFloatStateOf(fontSizeState)
+    androidx.compose.runtime.LaunchedEffect(fontSizeState) {
+        gestureFontSp = fontSizeState
+    }
 
     Column(
         modifier = Modifier
@@ -262,12 +267,13 @@ fun BlockTerminalView(
             .background(theme.background)
             .verticalScroll(scrollState)
             .padding(8.dp)
-            /* Phase 44 fix (MED-02): Tambah pinch-to-zoom gesture detector. */
+            /* Phase 44 + Wave-16: Pinch zoom with live local size (no stale capture). */
             .pointerInput(Unit) {
                 detectTransformGestures { _, _, zoom, _ ->
-                    val newFont = (fontSizeState * zoom).coerceIn(8f, 24f)
-                    if (newFont != fontSizeState) {
-                        onFontSizeChange(newFont)
+                    val next = TerminalFontZoom.applyPinch(gestureFontSp, zoom)
+                    if (next != gestureFontSp) {
+                        gestureFontSp = next
+                        onFontSizeChange(next)
                     }
                 }
             }
