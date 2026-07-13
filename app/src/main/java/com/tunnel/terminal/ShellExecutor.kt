@@ -31,20 +31,10 @@ class ShellExecutor(
             isAlive = true
             resetSessionBuffers()
 
-            val displayMetrics = android.util.DisplayMetrics()
-            try {
-                @Suppress("DEPRECATION")
-                (context?.getSystemService(android.content.Context.WINDOW_SERVICE) as? android.view.WindowManager)
-                    ?.defaultDisplay?.getMetrics(displayMetrics)
-            } catch (_: Exception) {}
-            val density = displayMetrics.density.takeIf { it > 0 } ?: 2.0f
-            val screenWidthPx = displayMetrics.widthPixels.takeIf { it > 0 } ?: (1080 * density).toInt()
-            val screenHeightPx = displayMetrics.heightPixels.takeIf { it > 0 } ?: (1920 * density).toInt()
-            val fontSizeSp = 12f
-            val charWidthPx = (fontSizeSp * density * 0.6f).coerceAtLeast(1f)
-            val charHeightPx = (fontSizeSp * density * 1.2f).coerceAtLeast(1f)
-            val initialCols = (screenWidthPx / charWidthPx).toInt().coerceIn(20, 200)
-            val initialRows = (screenHeightPx / charHeightPx).toInt().coerceIn(10, 100)
+            /* Wave-13: Shared geometry helper (same as proot/SSH). */
+            val geo = TerminalSize.fromDisplay(context, fontSizeSp = 12f)
+            val initialCols = geo.cols
+            val initialRows = geo.rows
 
             if (!TerminalJni.isLoaded) {
                 failStart("Native library (libtunnel_terminal.so) tidak dapat dimuat.")

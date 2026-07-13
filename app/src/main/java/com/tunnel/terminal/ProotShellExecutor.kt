@@ -132,10 +132,12 @@ class ProotShellExecutor(
                 Log.i(tag, "Retry dengan PROOT_NO_SECCOMP=1")
             }
 
+            /* Wave-13: Spawn with display-derived size (was hard-coded 24×80). */
+            val geo = TerminalSize.fromDisplay(bootstrap.appContext, fontSizeSp = 12f)
             val outFd = IntArray(1)
             firstByteLatch = CountDownLatch(1)
             val pid = TerminalJni.createSessionExec(
-                24, 80, outFd, prootPath,
+                geo.rows, geo.cols, outFd, prootPath,
                 argv.toTypedArray(),
                 envp.toTypedArray()
             )
@@ -152,7 +154,7 @@ class ProotShellExecutor(
             }
 
             adoptMasterAndStartReader(pid, fd, "proot-read-$id")
-            Log.i(tag, "Ubuntu proot: rootfs=$rootfsPath lib=$libPath")
+            Log.i(tag, "Ubuntu proot: rootfs=$rootfsPath lib=$libPath size=${geo.rows}x${geo.cols}")
 
             try {
                 val ready = firstByteLatch!!.await(5, TimeUnit.SECONDS)
@@ -163,7 +165,7 @@ class ProotShellExecutor(
             }
             Thread.sleep(100)
             writeRaw("export PS1='\\u@\\h:\\w\\$ '\n")
-            TerminalJni.resize(masterFd, 24, 80)
+            TerminalJni.resize(masterFd, geo.rows, geo.cols)
         }
     }
 
