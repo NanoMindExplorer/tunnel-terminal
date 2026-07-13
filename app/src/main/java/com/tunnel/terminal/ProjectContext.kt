@@ -21,7 +21,7 @@ import java.io.File
  *
  * Dipanggil dari AIAgent.buildRequestBody() supaya AI dapat context project setiap request.
  */
-class ProjectContext(private val context: Context, sessionType: String = "local") {
+class ProjectContext(private val context: Context) {
     companion object {
         private const val TAG = "ProjectContext"
         private const val MAX_FILE_TREE_ENTRIES = 200
@@ -31,16 +31,17 @@ class ProjectContext(private val context: Context, sessionType: String = "local"
     /**
      * Build project context string untuk AI system prompt.
      * @param workspaceRoot Root direktori project (dari ToolExecutor.getWorkspaceRoot())
+     * @param sessionType active terminal session type (local/ssh/ubuntu) for git hints
      * @return Context string, atau empty string kalau tidak ada project yang terdeteksi
      */
-    fun buildContext(workspaceRoot: File): String {
+    fun buildContext(workspaceRoot: File, sessionType: String = "local"): String {
         if (!workspaceRoot.exists() || !workspaceRoot.isDirectory) return ""
 
         val sb = StringBuilder()
         var hasContent = false
 
         // 1. Git state
-        val gitInfo = detectGitState(workspaceRoot)
+        val gitInfo = detectGitState(workspaceRoot, sessionType)
         if (gitInfo.isNotBlank()) {
             sb.append("=== Project Context ===\n")
             sb.append(gitInfo)
@@ -98,7 +99,7 @@ class ProjectContext(private val context: Context, sessionType: String = "local"
      * abstrak) supaya bisa execute "git status --porcelain" lewat PTY.
      * Saat ini cuma branch yang reliable across all session types.
      */
-    private fun detectGitState(root: File): String {
+    private fun detectGitState(root: File, sessionType: String): String {
         val gitDir = File(root, ".git")
         if (!gitDir.exists()) return ""
 
@@ -121,12 +122,39 @@ class ProjectContext(private val context: Context, sessionType: String = "local"
             Log.w(TAG, "Gagal baca git HEAD: ${e.message}")
         }
 
-        /* Phase 60 fix (audit B-4): Skip ProcessBuilder git status — tidak
-         * pernah jalan di Android. Status modified/untracked hanya bisa
-         * didapat lewat terminal session (MarkerExecutor) untuk sesi Ubuntu.
-         * Untuk sesi lokal Android, fitur ini memang tidak akan pernah bisa.
-         * Tambah note di context supaya AI tahu kenapa status tidak tersedia. */
-        sb.append("Status: (not available on Android — use 'git status' in terminal)\n")
+        /* Wave-4: Best-effort git extras without spawning git binary:
+         * - last commit message from .git/logs/HEAD or COMMIT_EDITMSG
+         * - rough dirty signal: compare presence of index vs worktree not feasible
+         *   without git; surface session hint for AI. */
+        try {
+            val commitMsg = File(gitDir, "COMMIT_EDITMSG")
+            if (commitMsg.exists() && commitMsg.canRead()) {
+                val msg = commitMsg.readText().trim().lineSequence().firstOrNull().orEmpty()
+                if (msg.isNotBlank()) sb.append("Last commit message: ${msg.take(120)}\n")
+            }
+            val logHead = File(gitDir, "logs/HEAD")
+            if (logHead.exists() && logHead.canRead()) {
+                val last = logHead.readLines().lastOrNull().orEmpty()
+                // format: <old> <new> <name> <email> <time> <tz>\t<message>
+                val tab = last.indexOf('\t')
+                if (tab >= 0 && tab + 1 < last.length) {
+                    val logMsg = last.substring(tab + 1).trim()
+                    if (logMsg.isNotBlank() && !sb.contains("Last commit message:")) {
+                        sb.append("Last log: ${logMsg.take(120)}\n")
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Gagal baca git log: ${e.message}")
+        }
+
+        sb.append(
+            when (sessionType) {
+                "ubuntu" -> "Status: run `git status --porcelain` in Ubuntu tab for full dirty list\n"
+                "ssh" -> "Status: run `git status` on remote for dirty files\n"
+                else -> "Status: (no system git on Android shell — use Ubuntu tab or remote)\n"
+            }
+        )
 
         return sb.toString()
     }

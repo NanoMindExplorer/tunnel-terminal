@@ -63,7 +63,7 @@ data class AiToolCall(
     companion object {
         /* Wave-2: plan_task / update_task_status are meta tools (no FS/shell side effects). */
         val READ_ONLY_TOOLS = setOf(
-            "read_file", "list_files", "search_files", "get_terminal_output",
+            "read_file", "list_files", "search_files", "grep_content", "get_terminal_output",
             "plan_task", "update_task_status"
         )
         val DESTRUCTIVE_TOOLS = setOf("write_file", "edit_file", "delete_file", "run_command")
@@ -116,10 +116,11 @@ data class AiToolCall(
             Anda memiliki akses ke tools berikut untuk menyelesaikan tugas user:
 
             TOOLS READ-ONLY (tidak butuh permission):
-            - read_file: Baca file. Args: path
+            - read_file: Baca file (maks ~5KB). Args: path
             - list_files: List direktori. Args: dir (opsional, default = workspace)
-            - search_files: Cari file berisi pattern. Args: pattern, dir (opsional)
-            - get_terminal_output: Ambil output terminal terakhir. Args: (none)
+            - search_files: Cari file berdasarkan NAMA (regex). Args: pattern, dir (opsional)
+            - grep_content: Cari TEKS di dalam file (content search). Args: pattern, dir (opsional), max_results (opsional)
+            - get_terminal_output: Ambil output terminal aktif terkini. Args: (none)
             - plan_task: Set rencana tugas di awal tugas kompleks. Args: steps (array string, maks 20)
             - update_task_status: Update status langkah rencana. Args: step_id (int), status (PENDING/IN_PROGRESS/DONE/FAILED)
 
@@ -191,6 +192,22 @@ class ToolExecutor(
     private var sshExecutor: SshShellExecutor? = null
 ) {
     private val tag = "ToolExecutor"
+
+    companion object {
+        private const val MAX_READ_CHARS = 5000
+        private const val MAX_READ_BYTES = 2 * 1024 * 1024 // 2MB hard cap before truncate
+        private const val MAX_SEARCH_MATCHES = 100
+        private const val MAX_GREP_MATCHES = 40
+        private const val MAX_GREP_FILES = 300
+    }
+
+    /** Wave-4: Provider for live terminal output (set from MainActivity). */
+    @Volatile
+    private var terminalOutputProvider: (() -> String)? = null
+
+    fun setTerminalOutputProvider(provider: (() -> String)?) {
+        terminalOutputProvider = provider
+    }
 
     /**
      * Workspace root — direktori kerja privat app yang selalu bisa ditulis.
@@ -315,12 +332,17 @@ class ToolExecutor(
                     val sessionType = sessionTargetResolver?.sessionType ?: "local"
                     if (sessionType == "ssh" && sshExecutor != null) {
                         val text = sshExecutor!!.readFileRemote(path)
-                        if (text != null) text.take(5000) else "Error: cannot read remote file: $path"
+                        if (text != null) formatReadResult(path, text) else "Error: cannot read remote file: $path"
                     } else {
                         val file = resolvePath(path)
                         if (!file.exists()) return "Error: file not found: ${file.absolutePath}"
                         if (!file.canRead()) return "Error: cannot read file (permission denied): ${file.absolutePath}"
-                        file.readText().take(5000)
+                        if (file.isDirectory) return "Error: path is a directory: ${file.absolutePath}"
+                        if (file.length() > MAX_READ_BYTES) {
+                            return "Error: file too large (${file.length()} bytes, max $MAX_READ_BYTES). Use grep_content or head via run_command."
+                        }
+                        /* Wave-4: stream first MAX_READ_CHARS only — avoid OOM on large files. */
+                        formatReadResult(file.absolutePath, readFileHead(file, MAX_READ_CHARS))
                     }
                 }
                 "list_files" -> {
@@ -341,17 +363,69 @@ class ToolExecutor(
                 "search_files" -> {
                     val pattern = call.args["pattern"] ?: return "Error: pattern required"
                     val dirRaw = call.args["dir"] ?: "."
-                    /* Phase 58: search_files tetap lokal (SFTP ls tidak support regex search). */
+                    /* Wave-4: match by filename; cap by match count not walk nodes. */
                     val file = if (dirRaw == ".") workspaceRoot else resolvePath(dirRaw)
-                    val regex = Regex(pattern, RegexOption.IGNORE_CASE)
+                    val regex = try {
+                        Regex(pattern, RegexOption.IGNORE_CASE)
+                    } catch (e: Exception) {
+                        return "Error: invalid regex pattern: ${e.message}"
+                    }
                     val results = mutableListOf<String>()
-                    file.walkTopDown().take(100).forEach { f ->
+                    var visited = 0
+                    for (f in file.walkTopDown()) {
+                        visited++
+                        if (visited > 5000) break
                         if (f.isFile && regex.containsMatchIn(f.name)) {
                             results.add(f.absolutePath)
+                            if (results.size >= MAX_SEARCH_MATCHES) break
                         }
                     }
-                    if (results.isEmpty()) "No files found matching: $pattern"
-                    else results.joinToString("\n")
+                    if (results.isEmpty()) "No files found matching name pattern: $pattern"
+                    else results.joinToString("\n") +
+                        if (results.size >= MAX_SEARCH_MATCHES) "\n... (truncated at $MAX_SEARCH_MATCHES matches)" else ""
+                }
+                "grep_content" -> {
+                    /* Wave-4: content search (grep-like) inside workspace files. */
+                    val pattern = call.args["pattern"] ?: return "Error: pattern required"
+                    val dirRaw = call.args["dir"] ?: "."
+                    val maxResults = call.args["max_results"]?.toIntOrNull()?.coerceIn(1, 100) ?: MAX_GREP_MATCHES
+                    val root = if (dirRaw == ".") workspaceRoot else resolvePath(dirRaw)
+                    if (!root.exists()) return "Error: directory not found: ${root.absolutePath}"
+                    val regex = try {
+                        Regex(pattern, RegexOption.IGNORE_CASE)
+                    } catch (e: Exception) {
+                        return "Error: invalid regex pattern: ${e.message}"
+                    }
+                    val hits = mutableListOf<String>()
+                    var filesScanned = 0
+                    root.walkTopDown().maxDepth(8).forEach { f ->
+                        if (hits.size >= maxResults) return@forEach
+                        if (!f.isFile) return@forEach
+                        if (f.length() > 512 * 1024) return@forEach // skip >512KB
+                        val name = f.name.lowercase()
+                        if (name.endsWith(".so") || name.endsWith(".png") || name.endsWith(".jpg") ||
+                            name.endsWith(".jar") || name.endsWith(".apk") || name.endsWith(".zip")
+                        ) return@forEach
+                        filesScanned++
+                        if (filesScanned > MAX_GREP_FILES) return@forEach
+                        try {
+                            f.useLines { lines ->
+                                var lineNo = 0
+                                for (line in lines) {
+                                    lineNo++
+                                    if (line.length > 2000) continue
+                                    if (regex.containsMatchIn(line)) {
+                                        hits.add("${f.absolutePath}:$lineNo:${line.take(200)}")
+                                        if (hits.size >= maxResults) break
+                                    }
+                                    if (lineNo > 5000) break
+                                }
+                            }
+                        } catch (_: Exception) { /* skip unreadable */ }
+                    }
+                    if (hits.isEmpty()) "No content matches for: $pattern (scanned $filesScanned files)"
+                    else hits.joinToString("\n") +
+                        if (hits.size >= maxResults) "\n... (truncated at $maxResults matches)" else ""
                 }
                 "plan_task" -> {
                     /* Phase 58 fix (§4.6): Set rencana tugas. */
@@ -367,8 +441,13 @@ class ToolExecutor(
                     taskPlanManager?.markStep(stepId, status) ?: "Error: TaskPlanManager not available"
                 }
                 "get_terminal_output" -> {
-                    /* Output terminal akan di-inject oleh caller. */
-                    "Use terminal context from system message."
+                    /* Wave-4: Real terminal output via provider from MainActivity. */
+                    val out = terminalOutputProvider?.invoke()
+                    when {
+                        out == null -> "Error: no active terminal session wired"
+                        out.isBlank() -> "(terminal output empty)"
+                        else -> out.take(3000)
+                    }
                 }
                 "write_file" -> {
                     val path = call.args["path"] ?: return "Error: path required"
@@ -396,7 +475,10 @@ class ToolExecutor(
                     } else {
                         val file = resolvePath(path)
                         if (!file.exists()) return "Error: file not found: ${file.absolutePath}"
-                        if (file.delete()) "OK: deleted ${file.absolutePath}"
+                        if (file.isDirectory) return "Error: refusing to delete directory via delete_file: ${file.absolutePath}"
+                        /* Wave-4: checkpoint snapshot before delete so undo is possible. */
+                        checkpointManager?.saveCheckpointBeforeWrite(file.absolutePath)
+                        if (file.delete()) "OK: deleted ${file.absolutePath} (checkpoint saved if file existed)"
                         else "Error: failed to delete ${file.absolutePath}"
                     }
                 }
@@ -419,6 +501,34 @@ class ToolExecutor(
         } catch (e: Exception) {
             Log.e(tag, "Tool execution failed: ${e.message}")
             "Error: ${e.message}"
+        }
+    }
+
+    /** Wave-4: Read only the first maxChars of a file (streamed). */
+    private fun readFileHead(file: File, maxChars: Int): String {
+        val sb = StringBuilder(maxChars.coerceAtMost(8192))
+        file.bufferedReader(Charsets.UTF_8).use { reader ->
+            val buf = CharArray(4096)
+            var total = 0
+            while (total < maxChars) {
+                val toRead = minOf(buf.size, maxChars - total)
+                val n = reader.read(buf, 0, toRead)
+                if (n < 0) break
+                sb.append(buf, 0, n)
+                total += n
+            }
+            if (reader.read() != -1) {
+                sb.append("\n... (truncated, file longer than $maxChars chars)")
+            }
+        }
+        return sb.toString()
+    }
+
+    private fun formatReadResult(path: String, text: String): String {
+        return if (text.length >= MAX_READ_CHARS || text.contains("(truncated")) {
+            text.take(MAX_READ_CHARS + 80)
+        } else {
+            text
         }
     }
 }

@@ -72,11 +72,17 @@ class CheckpointManager(private val context: Context) {
             return null
         }
 
-        // Tulis manifest
+        // Wave-4: Safe JSON manifest (path may contain quotes)
         val manifest = File(turnDir, "manifest.json")
-        manifest.writeText("""
-            {"turn": $currentTurn, "timestamp": $timestamp, "file": "$filePath"}
-        """.trimIndent())
+        try {
+            val json = org.json.JSONObject()
+                .put("turn", currentTurn)
+                .put("timestamp", timestamp)
+                .put("file", filePath)
+            manifest.writeText(json.toString())
+        } catch (e: Exception) {
+            Log.w(TAG, "Gagal tulis manifest: ${e.message}")
+        }
 
         val checkpoint = Checkpoint(currentTurn, timestamp, filePath, turnDir)
         checkpoints.add(checkpoint)

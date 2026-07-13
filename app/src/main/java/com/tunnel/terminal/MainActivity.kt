@@ -271,6 +271,10 @@ class MainActivity : ComponentActivity() {
         /* Phase 58 fix (§4.6): Init TaskPlanManager. */
         taskPlanManager = TaskPlanManager()
         toolExecutor = ToolExecutor(this, storageManager, checkpointManager, null, taskPlanManager)
+        /* Wave-4: Wire live terminal output for get_terminal_output tool. */
+        toolExecutor.setTerminalOutputProvider {
+            shellExecutors.find { it.id == activeExecutorId }?.getCleanOutput() ?: ""
+        }
         permissionManager = PermissionManager(this)
         contextManager = ContextManager(this)
         mcpManager = McpManager(this)
@@ -2390,6 +2394,27 @@ class MainActivity : ComponentActivity() {
                         )
                     }
                     } /* end else (normal mode) */
+                    /* Wave-4: Smart autocomplete from history + common commands. */
+                    val acSuggestions = remember(activeExecutor.currentCommandBuffer, activeExecutor.commandHistory.size) {
+                        SmartAutocomplete.getSuggestions(
+                            activeExecutor.currentCommandBuffer,
+                            activeExecutor.commandHistory,
+                            limit = 8
+                        )
+                    }
+                    if (acSuggestions.isNotEmpty() && activeExecutor.currentCommandBuffer.isNotBlank()) {
+                        AutocompleteDropdown(
+                            suggestions = acSuggestions,
+                            theme = currentTheme,
+                            onSelect = { suggestion ->
+                                /* Replace current buffer + sync shell line with backspaces then type. */
+                                val old = activeExecutor.currentCommandBuffer
+                                repeat(old.length) { activeExecutor.writeRaw("\u007F") }
+                                activeExecutor.currentCommandBuffer = suggestion
+                                activeExecutor.writeRaw(suggestion)
+                            }
+                        )
+                    }
                     ExtraKeysBar(
                         isCtrlActive = isCtrlActive,
                         isAltActive = isAltActive,
@@ -2674,7 +2699,10 @@ class MainActivity : ComponentActivity() {
                 activeExecutor?.sessionType ?: "local",
                 activeExecutor?.environmentDescription ?: "",
                 /* Phase 50 fix (B-5): Inject project context (git, manifests, file tree). */
-                projectContext.buildContext(toolExecutor.workspaceRootFile()),
+                projectContext.buildContext(
+                    toolExecutor.workspaceRootFile(),
+                    activeExecutor?.sessionType ?: "local"
+                ),
                 /* Phase 58 fix (§4.6): Inject task plan (imun dari cap 20 pesan). */
                 taskPlanManager.renderForSystemPrompt()
             ).collect { delta ->

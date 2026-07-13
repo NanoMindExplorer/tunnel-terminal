@@ -89,9 +89,8 @@ class ShellExecutor(
     override val commandHistory = mutableListOf<String>()
 
     /** Per-tab current input line buffer (Phase 19.5: was global in MainActivity).
-     * Saat user switch tab, input yang sedang diketik tidak hilang. */
-    @Volatile
-    override var currentCommandBuffer: String = ""
+     * Wave-4: Compose mutableState so autocomplete recomposes while typing. */
+    override var currentCommandBuffer by mutableStateOf("")
 
     /** Per-tab history navigation index (-1 = tidak browsing history). */
     @Volatile
@@ -233,8 +232,9 @@ class ShellExecutor(
                 /* Phase 21: Synchronize outputBuffer access (readLoop writes, main reads). */
                 val outputStr = synchronized(outputLock) {
                     outputBuffer.append(text)
-                    if (outputBuffer.length > 4000) {
-                        outputBuffer = StringBuilder(outputBuffer.substring(outputBuffer.length - 4000))
+                    /* Wave-4: larger ring so MarkerExecutor markers survive long apt logs. */
+                    if (outputBuffer.length > 16000) {
+                        outputBuffer = StringBuilder(outputBuffer.substring(outputBuffer.length - 16000))
                     }
                     outputBuffer.toString()
                 }
@@ -320,7 +320,8 @@ class ShellExecutor(
             lastEnd = m.range.last + 1
         }
         sb.append(raw, lastEnd, raw.length)
-        return sb.toString().trim().take(2000)
+        /* Wave-4: expose more clean output for AI markers / get_terminal_output. */
+        return sb.toString().trim().take(8000)
     }
 
     /**
