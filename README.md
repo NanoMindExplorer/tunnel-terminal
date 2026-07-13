@@ -3,9 +3,12 @@
 **Tunnel Terminal** adalah terminal Android AI-native yang merubah cara developer bekerja di perangkat mobile. Menggabungkan mesin C/C++ NDK (Pseudo-Terminal asli) dengan AI Copilot multi-provider, terminal berbasis blok, command palette, tool calling, **lingkungan Linux Ubuntu asli via proot (tanpa root)**, dan banyak lagi.
 
 ![Architecture](https://img.shields.io/badge/Architecture-NDK%20%2B%20Jetpack%20Compose-purple)
-![AI](https://img.shields.io/badge/AI-Multi%20Provider%20%2B%20Vision%20%2B%20MCP-cyan)
+![AI](https://img.shields.io/badge/AI-Multi%20Provider%20%2B%20Vision%20%2B%20MCP%20%2B%20Tools-cyan)
 ![Linux](https://img.shields.io/badge/Linux-Ubuntu%2024.04%20via%20proot-orange)
 ![Version](https://img.shields.io/badge/version-8.1.0-blue)
+![Kotlin](https://img.shields.io/badge/Kotlin-2.0.21-7F52FF)
+![AGP](https://img.shields.io/badge/AGP-8.5.2-orange)
+![Tests](https://img.shields.io/badge/tests-14%20files-green)
 ![Stability](https://img.shields.io/badge/stability-production-green)
 
 ## Quick Links
@@ -19,17 +22,26 @@
 Terminal Android konvensional hanya menampilkan teks dan mengeksekusi command. Tunnel Terminal membawa pengalaman **Warp + Claude Code + Cursor + Termux proot-distro** ke Android dalam satu app:
 
 - **Block-based UI** — setiap command + output = card diskret (seperti Warp)
-- **AI Agent** — AI bisa baca/tulis file, jalankan command, dengan permission prompts
+- **AI Agent** — AI bisa baca/tulis file, jalankan command, dengan permission prompts + risk-approval dialog
+- **Native API Tool-Calling** (Phase 59) — `tools`/`tool_choice` parameter dikirim ke API provider (OpenAI, DeepSeek, Groq, OpenRouter, Gemini, Anthropic Native, Mistral, Together, Fireworks). MCP tools juga di-inject dinamis.
+- **TaskPlanManager** (Phase 58) — plan/act/observe/verify loop, immune terhadap 20-message context limit
+- **SFTP for SSH** (Phase 58) — remote file I/O via `ChannelSftp` — read/write/list file di server SSH tanpa `scp` manual
+- **Anthropic Native API** (Wave 5) — support Claude via Messages API (`apiStyle: anthropic`), bukan hanya OpenAI-compat
 - **Linux Environment (Ubuntu)** — jalankan `apt`, `git`, `python`, `nodejs` di Ubuntu 24.04 asli via proot, **tanpa root** — lengkap dengan marker-based exit code capture supaya AI bisa autonously install package
 - **Command Palette** — Ctrl+K untuk akses cepat semua fitur (seperti VS Code)
 - **Markdown Rendering** — AI responses dirender sebagai rich markdown
 - **@context Mentions** — mention file, block, terminal output sebagai AI context
-- **MCP Protocol** — connect ke MCP servers untuk tools eksternal
-- **SSH Client** — remote ke server langsung dari terminal
+- **MCP Protocol** — connect ke MCP servers untuk tools eksternal (HTTPS enforced, API keys encrypted)
+- **SSH Client** — remote ke server langsung dari terminal, dengan SFTP untuk file ops
 - **Syntax Highlighting** — 8 bahasa dengan theme-aware colors
 - **Split Pane** — 2 terminal side by side (tmux-style)
 - **Voice Input** — speech-to-text untuk AI prompts
 - **6 Themes** — Matrix, Dracula, Solarized, Monokai Pro, Nord, Tokyo Night
+- **Checkpointing/Undo** (Phase 50) — AI edit file disimpan snapshot-nya; satu tap undo
+- **Project Context** (Phase 50) — git branch + manifests + file tree auto-injected ke AI prompt
+- **EncryptedSharedPreferences** (Phase 41) — API key AES256-GCM encrypted at rest
+- **Wave 10-17 UX polish** — bookmarks, safe paste, DECCKM, ExtraKeys, scrollback search, font zoom, AI chat UX
+- **14 test files** — TerminalEmulator, AiToolCall, Permission, Wave utils, history/url, chat export, bookmarks, IME, terminal polish, scrollback select, find/url/mouse, Unicode, font zoom
 
 ## Fitur Utama (Ringkas)
 
@@ -38,30 +50,43 @@ Terminal Android konvensional hanya menampilkan teks dan mengeksekusi command. T
 | 1 | True Linux Terminal | C++ NDK PTY via `forkpty()`, mendukung vim/htop/less |
 | 2 | Block-Based Terminal | Warp-style command+output cards, collapsible, rerun, AI explain |
 | 3 | AI Auto-Pilot | Multi-step command execution, error detection, marker-based exit code |
-| 4 | AI Tool Calling | read_file, write_file, delete_file, run_command, list_files, search_files |
-| 5 | Permission Prompts | Claude Code-style: Allow once / Always allow / Deny (kecuali run_command/delete_file) |
-| 6 | Inline Diff View | LCS-based diff sebelum apply AI file edits |
-| 7 | Command Palette | Ctrl+K fuzzy search, 5 categories, keyboard nav |
-| 8 | @context Mentions | @file, @block, @command, @terminal, @snippet |
-| 9 | MCP Protocol | Connect ke MCP servers, discover+invoke tools |
-| 10 | Multi-Provider AI | 13 presets + Custom, fetch /models, vision detection |
-| 11 | AI Streaming SSE | Token-by-token response via Server-Sent Events |
-| 12 | AI Image Vision | Gallery/camera multi-select, auto-compress, vision models |
-| 13 | Markdown Rendering | Headers, bold, italic, code blocks, lists, links, blockquotes |
-| 14 | SSH Client | JSch, password+key auth, UTF-8 safe, TOFU host key |
-| 15 | Syntax Highlighting | Kotlin, Python, JS/TS, Shell, JSON, XML, YAML, Markdown |
-| 16 | Split Pane | 2 terminals side by side, tap to switch |
-| 17 | Smart Autocomplete | History + common commands, substring matching |
-| 18 | Voice Input | Speech-to-text (Bahasa Indonesia) |
-| 19 | Agent Workflows | Save/replay multi-step AI sequences, conditional steps |
-| 20 | Theme Picker | 6 themes, live apply, fontSize persist |
-| 21 | File Explorer | Browse filesystem tanpa `cd` |
-| 22 | Workspace Sessions | Save/restore tab sets |
-| 23 | Physical Keyboard | Full support: Enter, Backspace, Tab, Arrows, F1-F4, Ctrl+key, Alt+key |
-| 24 | Mouse Support | Click to focus, scroll wheel |
-| 25 | Pinch-to-Zoom | Font size persist across sessions |
-| 26 | **Linux Environment** | **Ubuntu 24.04 via proot — `apt`, `git`, `python`, `nodejs` tanpa root** |
-| 27 | **Marker-Based Execution** | **AI run_command dibungkus unique marker → capture exit code → kirim balik ke AI sebagai context** |
+| 4 | AI Tool Calling | 11 tools: read_file, write_file, edit_file, delete_file, list_files, search_files, grep_content, run_command, get_terminal_output, plan_task, update_task_status |
+| 5 | **Native API Tool-Calling** | **Phase 59: `tools`+`tool_choice` parameter dikirim ke API. MCP tools di-inject dinamis.** |
+| 6 | Permission Prompts | Claude Code-style: Allow once / Always allow / Deny (kecuali run_command/delete_file). Per-session scope. |
+| 7 | Inline Diff View | LCS-based diff sebelum apply AI file edits |
+| 8 | Command Palette | Ctrl+K fuzzy search, 5 categories, keyboard nav |
+| 9 | @context Mentions | @file, @block, @command, @terminal, @snippet |
+| 10 | MCP Protocol | Connect ke MCP servers, discover+invoke tools, HTTPS enforced |
+| 11 | Multi-Provider AI | 13 presets + Custom, fetch /models, vision detection, native tool_calling flag, Anthropic Native API |
+| 12 | AI Streaming SSE | Token-by-token response via Server-Sent Events + native tool_calls delta accumulation |
+| 13 | AI Image Vision | Gallery/camera multi-select, auto-compress, vision models |
+| 14 | Markdown Rendering | Headers, bold, italic, code blocks, lists, links, blockquotes |
+| 15 | SSH Client | JSch, password+key auth, UTF-8 safe, TOFU host key |
+| 16 | **SFTP for SSH** | **Phase 58: read/write/list file di server SSH via ChannelSftp — mkdir recursive** |
+| 17 | Syntax Highlighting | Kotlin, Python, JS/TS, Shell, JSON, XML, YAML, Markdown |
+| 18 | Split Pane | 2 terminals side by side, tap to switch |
+| 19 | Smart Autocomplete | History + common commands, substring matching (persist across restart) |
+| 20 | Voice Input | Speech-to-text (Bahasa Indonesia) |
+| 21 | Agent Workflows | Save/replay multi-step AI sequences, conditional steps |
+| 22 | Theme Picker | 6 themes, live apply, fontSize persist |
+| 23 | File Explorer | Browse filesystem tanpa `cd` |
+| 24 | Workspace Sessions | Save/restore tab sets |
+| 25 | Physical Keyboard | Full support: Enter, Backspace, Tab, Arrows, F1-F12, Ctrl+key, Alt+key |
+| 26 | Mouse Support | Click to focus, scroll wheel, mode 1000/1006 (SGR) |
+| 27 | Pinch-to-Zoom | Font size 8-28sp, 0.5sp snap, persist across sessions |
+| 28 | **Linux Environment** | **Ubuntu 24.04 via proot — `apt`, `git`, `python`, `nodejs` tanpa root** |
+| 29 | **Marker-Based Execution** | **AI run_command dibungkus unique marker → capture exit code → kirim balik ke AI sebagai context** |
+| 30 | **Agent Mode** (Phase 47) | **Autonomous task runner: AI pilih tool sendiri, risk-approval dialog, Stop/Pause/Resume** |
+| 31 | **TaskPlanManager** (Phase 58) | **Plan/Act/Observe/Verify loop, immune terhadap 20-message context limit** |
+| 32 | **Checkpointing/Undo** (Phase 50) | **Snapshot file sebelum AI edit, satu tap undo (max 50 checkpoints)** |
+| 33 | **Project Context** (Phase 50) | **git branch + 10 manifest types + file tree auto-injected ke AI prompt** |
+| 34 | **Scrollback buffer** (Phase 49) | **2000-line ring buffer, LazyColumn virtualized (Wave 15), Unicode code-points** |
+| 35 | **EncryptedSharedPreferences** (Phase 41) | **API key + SSH creds + MCP keys AES256-GCM encrypted at rest** |
+| 36 | **Automated tests** (Phase 51+) | **14 test files (03-16): TerminalEmulator, AiToolCall, Permission, Wave utils, dll** |
+| 37 | **Wave 10-17 UX polish** | **Bookmarks, safe paste, DECCKM, ExtraKeys, scrollback search/find, font zoom, AI chat UX** |
+| 38 | **Anthropic Native API** (Wave 5) | **Claude via Messages API (`apiStyle: anthropic`), bukan hanya OpenAI-compat** |
+| 39 | **HTTPS enforcement** (Phase 60) | **Reject HTTP untuk provider eksternal (kecuali localhost Ollama/LM Studio)** |
+| 40 | **Wide char support** (Wave 15) | **Unicode code-points + combining marks, CJK width 2, emoji width 2** |
 
 ## Built-in Commands
 
@@ -140,11 +165,18 @@ PTY layer yang sudah teruji (`native-lib.cpp` → `forkpty()`) **tidak diubah**.
 
 ## Build
 
-Membutuhkan: Android Studio Hedgehog+, Android SDK 34, NDK 25.1.8937393+, CMake 3.22.1
+Membutuhkan: Android Studio Koala+ (AGP 8.5.2), Android SDK 34, NDK 25.1.8937393+, CMake 3.22.1, Kotlin 2.0.21, Gradle 8.9, JDK 17
 
 ```bash
 ./gradlew assembleDebug
 # Output: app/build/outputs/apk/debug/app-debug.apk
+
+# Release build (signed, ProGuard/R8 enabled)
+./gradlew assembleFullRelease
+# Output: app/build/outputs/apk/full/release/app-full-release.apk
+
+# Run unit tests (14 test files)
+./gradlew testFullDebugUnitTest
 ```
 
 ### ⚠️ Wajib sebelum build: obtain binary `proot`
@@ -227,8 +259,72 @@ Tanpa binary ini, app tetap jalan normal untuk semua fitur lain (local shell, SS
 | 31 | Crash-on-launch fix — 7 root causes (SharedPreferences, foreground service, JNI) |
 | 32-34 | Input double-fire fix, soft keyboard Enter, text selection, paste, SSH TOFU real fingerprint check |
 | 35-36 | Credit + crypto address, marker-based command execution foundation |
-| 37 | Marker-based AI tool calling — `run_command` dibungkus marker, exit code di-capture, hasil dikirim balik ke AI sebagai context; @command: real implementation |
-| **38-39** | **Linux Environment (Ubuntu via proot) — `createSessionExec()` JNI, `ProotBootstrap` download+extract rootfs, `ProotShellExecutor`, install dialog, SECCOMP auto-retry, uninstall** |
+| 37 | Marker-based AI tool calling — `run_command` dibungkus marker, exit code di-capture |
+| 38-39 | Linux Environment (Ubuntu via proot) — `createSessionExec()` JNI, `ProotBootstrap`, `ProotShellExecutor` |
+| 40 | Audit V3 fixes — 42 bugs (A1-A4, H1-H10, M1-M13) |
+| 41 | Security & Privacy — EncryptedSharedPreferences (AES256-GCM), SSH dialog, .gitignore, product flavors |
+| 42-44 | Documentation, robustness, UX quality (theme recolor, pinch-zoom Block Mode, PTY initial size) |
+| 45-46 | Realtime fixes + AI↔Ubuntu Integration (MarkerExecutor, non-interactive apt, AgentWorkflow unify) |
+| 47 | Storage sandbox + Agent Mode — workspace sandbox, AgentTaskRunner autonomous loop, AgentScreen UI |
+| 48 | Rendering fixes — atomic snapshot, alt-screen resize, 30fps throttle, random marker |
+| 49 | Scrollback + Persistence + MCP UI — 2000-line ring buffer, TunnelApp Application scope |
+| 50 | Project Context + Checkpointing — ProjectContext (git/manifests/file tree), CheckpointManager (undo) |
+| 51 | Automated tests + BlockMode fix — 39 unit tests, incremental parse |
+| 52 | Agent Mode audit fixes — approval dialog, success detection, Stop cancel |
+| 53-57 | Text selection, terminal resize, edit_file tool, SessionTargetResolver |
+| 58 | **TaskPlanManager (plan/act/observe/verify) + SFTP for SSH file I/O** |
+| 59 | **Native API tool-calling (B-1) + AGP 8.5.2 + Kotlin 2.0.21 + Compose Compiler Plugin (C-2)** |
+| 60 | **Audit fixes: HTTPS enforcement, MCP schema validation, Ubuntu download reliability, reflection removal** |
+| **Wave 1-2** | **Critical stability, scrollback, agent, sandbox, HOME path, SSH TOFU before auth, rootfs SHA256, secure storage** |
+| **Wave 3-4** | **IME input, block live updates, palette recents, diff apply, reaper, autocomplete, grep_content, safe read/delete** |
+| **Wave 5-6** | **PtySessionBase, Anthropic Messages API, wide-char, metrics, explorer cd, editor confirm, SFTP limits, agent clarify** |
+| **Wave 7-9** | **Release polish, persistent history, export transcript, URL validate, chat export, snippet type-in, SSH host keys (v7.3.0-v7.5.0)** |
+| **Wave 10-11** | **Tab rename, bookmarks, copy-output, keep-screen-on, IME fix typed chars vanish (v7.6.0-v7.6.1)** |
+| **Wave 12-13** | **Terminal max polish (paste, DECCKM, ExtraKeys, scroll, render), scrollback select/copy, key-repeat, split activate, PTY size (v7.7.0-v7.8.0)** |
+| **Wave 14** | **Find scrollback, open-url, mouse/wheel, reconnect keep history (v7.9.0)** |
+| **Wave 15-16** | **LazyColumn virtualized scrollback, Unicode code-points, compact ExtraKeys, font zoom pinch fix (v8.0.0-v8.0.1)** |
+| **Wave 17** | **AI chat, Auto-Pilot, and Agent UX polish (v8.1.0)** |
+
+**Total: 161 commits, ~18,800 baris code, 55 Kotlin files + 1 C++ file + 14 test files**
+
+## Release v8.1.0
+
+Release v8.1.0 adalah **major release** yang menggabungkan 17 waves development (Wave 1-17) di atas Phase 60. Total **161 commits, ~18,800 baris code, 55 Kotlin files + 1 C++ file + 14 test files**.
+
+### Highlights v8.1.0
+
+- **Anthropic Native API** (Wave 5) — Claude via Messages API, bukan hanya OpenAI-compat
+- **PtySessionBase** (Wave 5) — shared PTY session core untuk local + proot
+- **Persistent command history** (Wave 8) — survive app restart, shared for autocomplete
+- **Chat + transcript export** (Wave 8-9) — export AI chat ke txt, terminal output ke txt
+- **URL validator** (Wave 8) — auto-prepend https://, reject HTTP untuk non-localhost
+- **Bookmarks** (Wave 10) — `bookmark add/list/go/remove`, quick cd
+- **Tab rename** (Wave 10) — long-press tab untuk rename label
+- **Safe paste** (Wave 12) — bracketed paste mode, flatten newlines, 64KB cap
+- **DECCKM** (Wave 12) — application cursor keys untuk vim/less
+- **ExtraKeys** (Wave 12-14) — `^C ^D ^Z ^L ^U ^W` + F1-F12 + `^A`/`^E` + `A+`/`A−`
+- **Scrollback select/copy** (Wave 13) — select dari scrollback, copy ke clipboard
+- **Find scrollback** (Wave 14) — `find <query>` search di scrollback
+- **Open URL** (Wave 14) — detect http(s) URL di output, open external browser
+- **Mouse wheel** (Wave 14) — mode 1000/1006 (SGR), scroll terminal
+- **Reconnect keep history** (Wave 14) — restart session tanpa hapus scrollback
+- **LazyColumn virtualized** (Wave 15) — render 2000 scrollback rows tanpa lag
+- **Unicode code-points** (Wave 15) — combining marks, CJK width 2, emoji width 2
+- **Font zoom fix** (Wave 16) — pinch-zoom gesture-local, 0.5sp snap, range 8-28sp
+- **AI chat UX** (Wave 17) — Stop stream, bubble + Copy/Retry, empty chips, Auto-Pilot progress, Agent scroll/pause, API key mask, max tokens, FAB AI
+- **14 test files** — TerminalEmulator, AiToolCall, Permission, Wave utils (06-16)
+
+### Backlog Status
+
+| ID | Item | Status | Phase |
+|---|---|---|---|
+| B-1 | Native API tool-calling | ✅ DONE | 59 |
+| B-4 | Checkpointing/Undo | ✅ DONE | 50 |
+| B-5 | Project Context Awareness | ✅ DONE | 50 |
+| C-2 | AGP + Kotlin upgrade | ✅ DONE | 59 |
+| C-5 | Automated tests | ✅ DONE | 51+ (14 files) |
+
+Lihat [GitHub Release v8.1.0](https://github.com/NanoMindExplorer/tunnel-terminal/releases/tag/v8.1.0) untuk changelog lengkap.
 
 ## Credits
 

@@ -1,6 +1,6 @@
 # Tunnel Terminal — Panduan Penggunaan Lengkap
 
-**Versi:** 6.3.0 (Phase 41) | **Platform:** Android 7.0+ (API 24+) | **ABI:** arm64-v8a
+**Versi:** 8.1.0 (Wave 17) | **Platform:** Android 7.0+ (API 24+) | **ABI:** arm64-v8a | **Kotlin:** 2.0.21 | **AGP:** 8.5.2
 
 ---
 
@@ -18,17 +18,24 @@
 10. [Command Palette (Ctrl+K)](#10-command-palette-ctrlk)
 11. [@context Mentions](#11-context-mentions)
 12. [SSH Client](#12-ssh-client)
-13. [Code Editor](#13-code-editor)
-14. [File Explorer](#14-file-explorer)
-15. [Themes](#15-themes)
-16. [Workspace Sessions](#16-workspace-sessions)
-17. [Voice Input](#17-voice-input)
-18. [Agent Workflows](#18-agent-workflows)
-19. [MCP Protocol](#19-mcp-protocol)
-20. [Storage Access (SAF)](#20-storage-access-saf)
-21. [Pinch-to-Zoom](#21-pinch-to-zoom)
-22. [Settings AI Provider](#22-settings-ai-provider)
-23. [Troubleshooting](#23-troubleshooting)
+13. [Linux Environment (Ubuntu via proot)](#13-linux-environment-ubuntu-via-proot)
+14. [Code Editor](#14-code-editor)
+15. [File Explorer](#15-file-explorer)
+16. [Themes](#16-themes)
+17. [Workspace Sessions](#17-workspace-sessions)
+18. [Voice Input](#18-voice-input)
+19. [Agent Workflows](#19-agent-workflows)
+20. [Agent Mode](#20-agent-mode)
+21. [MCP Protocol](#21-mcp-protocol)
+22. [Storage Access (SAF)](#22-storage-access-saf)
+23. [Pinch-to-Zoom & Font Size](#23-pinch-to-zoom--font-size)
+24. [Bookmarks](#24-bookmarks)
+25. [Scrollback Search & URL Open](#25-scrollback-search--url-open)
+26. [Mouse & ExtraKeys](#26-mouse--extrakeys)
+27. [Safe Paste & DECCKM](#27-safe-paste--decckm)
+28. [Chat & Transcript Export](#28-chat--transcript-export)
+29. [Settings AI Provider](#29-settings-ai-provider)
+30. [Troubleshooting](#30-troubleshooting)
 
 ---
 

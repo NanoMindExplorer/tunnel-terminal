@@ -1,7 +1,9 @@
 # Tunnel Terminal — Wiki
 
-**Versi:** 6.6.0 (Phase 47 — Agent Mode + Storage Sandbox)
+**Versi:** 8.1.0 (Wave 17 — AI chat / Auto-Pilot / Agent UX polish)
 **Repo:** https://github.com/NanoMindExplorer/tunnel-terminal
+**Release:** [v8.1.0](https://github.com/NanoMindExplorer/tunnel-terminal/releases/tag/v8.1.0)
+**Stats:** 161 commits · ~18,800 baris code · 55 Kotlin files + 1 C++ file + 14 test files
 
 ---
 
@@ -40,7 +42,7 @@ Tunnel Terminal adalah terminal Android AI-native yang menggabungkan:
 - **MCP Protocol** untuk external tool interoperability
 - **6 themes** dengan theme-aware syntax highlighting
 
-Total codebase: ~9.500 baris (30 file Kotlin + 1 file C++ + resource XML + build config).
+Total codebase: ~18.800 baris (55 file Kotlin + 1 file C++ + 14 file test + resource XML + build config).
 
 ---
 
@@ -718,36 +720,61 @@ Keep rules untuk:
 | **49** | **Scrollback + Persistence + MCP UI** — E-1 scrollback buffer 2000 lines, F-3 TunnelApp Application scope, D-4 MCP server management dialog | +220/-6 |
 | **50** | **Project Context + Checkpointing** — B-5 ProjectContext (git/manifest/file tree), B-4 CheckpointManager (undo AI file edits) | +350/-10 |
 | **51** | **Automated tests + BlockMode fix** — C-5 39 unit tests (TerminalEmulator, AiToolCall, PermissionManager), F-4 incremental parse | +320/-10 |
+| **52** | **Agent Mode audit fixes** — Bug #1 approval dialog (risk-tagged commands), Bug #2 success detection (regex strengthen), Bug #3 Stop button cancel (job.cancel + active flag) | +180/-30 |
+| **53-57** | **Text selection refinement + terminal resize + verification audit + edit_file tool + SessionTargetResolver** | +1030/-260 |
+| **58** | **TaskPlanManager (plan/act/observe/verify) + SFTP for SSH file I/O** — Plan loop immune 20-msg limit, ChannelSftp untuk remote file ops | +1200/-80 |
+| **59** | **Native API tool-calling (B-1) + AGP/Kotlin upgrade (C-2)** — `tools`+`tool_choice` API parameter, AGP 8.5.2 + Kotlin 2.0.21 + Compose Compiler Plugin + Gradle 8.9 | +450/-50 |
+| **60** | **Audit fixes: HTTPS enforcement, MCP schema validation, Ubuntu download reliability, reflection removal** — Bug #2 (HTTPS), Bug #4 (MCP), C-1 to C-5 (Ubuntu download) | +600/-100 |
+| **Wave 1-2** | **Critical stability + security** — scrollback, agent, sandbox, HOME path, SSH TOFU before auth, rootfs SHA256 verify, secure storage fail-closed | +2000/-200 |
+| **Wave 3-4** | **UX + agent tools** — IME input, block live updates, palette recents, diff apply, reaper, autocomplete, grep_content, safe read/delete, output buffer | +1500/-300 |
+| **Wave 5-6** | **PtySessionBase + Anthropic + UX** — shared PTY core, Anthropic Messages API, wide-char, AiMetrics, explorer cd, editor confirm, SFTP limits, agent clarify, MCP ping | +1800/-400 |
+| **Wave 7-9** | **Release polish + history + export** (v7.3.0-v7.5.0) — scroll, permissions, tests, persistent history, export transcript, URL validate, chat export, snippet type-in, SSH host keys | +2200/-500 |
+| **Wave 10-11** | **Tabs + bookmarks + IME fix** (v7.6.0-v7.6.1) — tab rename, bookmarks, copy-output, keep-screen-on, IME fix typed chars vanish | +1500/-300 |
+| **Wave 12-13** | **Terminal max polish + scrollback select** (v7.7.0-v7.8.0) — safe paste, DECCKM, ExtraKeys, scroll, render, scrollback select/copy, key-repeat, split activate, PTY size | +2500/-800 |
+| **Wave 14** | **Find + mouse + reconnect** (v7.9.0) — find scrollback, open-url, mouse/wheel mode 1000/1006, reconnect keep history, F1-F4 + ^A/^E | +1200/-300 |
+| **Wave 15-16** | **LazyColumn + Unicode + font zoom** (v8.0.0-v8.0.1) — LazyColumn virtualized scrollback, Unicode code-points, compact ExtraKeys, font zoom pinch fix | +1800/-600 |
+| **Wave 17** | **AI chat UX polish** (v8.1.0) — Stop stream, bubble + Copy/Retry, empty chips, Auto-Pilot progress, Agent scroll/pause, API key mask, max tokens, FAB AI | +1500/-400 |
 
-**Total: 90+ commits, ~15.000 lines code, 40+ Kotlin files + 1 C++ file + 3 test files**
+**Total: 161 commits, ~18.800 baris code, 55 Kotlin files + 1 C++ file + 14 test files**
 
 ---
 
 ## 20. Known Limitations
 
-1. **No scrollback buffer** — ✅ FIXED (Phase 49) — ring buffer 2000 baris di TerminalEmulator, auto-save saat scrollUp, clear saat `clear` command
-2. **PTY initial 80×24** — ✅ FIXED (Phase 44) — hitung dari display metrics (screenWidthPx/charWidthPx), bukan hardcode
+1. **No scrollback buffer** — ✅ FIXED (Phase 49 + Wave 15) — ring buffer 2000 baris, LazyColumn virtualized, Unicode code-points
+2. **PTY initial 80×24** — ✅ FIXED (Phase 44 + Wave 13) — TerminalSize.fromDisplay() hitung dari display metrics
 3. **@command: real implementation** (Phase 37+) — command dieksekusi via MarkerExecutor, output + exit code di-capture real-time
-4. **SSH host key dialog** — ✅ FIXED (Phase 41) — dialog blocking dengan fingerprint lama vs baru sekarang ada
-5. **Agent Workflows UI builder** — workflows hanya bisa dibuat via code, tidak ada UI builder. Tapi Agent Mode (Phase 47) adalah alternatif yang lebih fleksibel
+4. **SSH host key dialog** — ✅ FIXED (Phase 41 + Wave 2) — TOFU before auth, dialog blocking dengan fingerprint lama vs baru
+5. **Agent Workflows UI builder** — workflows hanya bisa dibuat via code. Agent Mode (Phase 47) adalah alternatif yang lebih fleksibel
 6. **MCP server management UI** — ✅ FIXED (Phase 49) — McpServerManagementDialog dengan form add/remove server
-7. **EncryptedSharedPreferences** — ✅ FIXED (Phase 41) — API key sekarang dienkripsi via EncryptedSharedPreferences (AES256-GCM)
-8. **Tool-calling text/regex** — masih pakai `<tool_call>` tag parsing, bukan native API `tools` parameter. Migrasi ditunda (butuh provider-specific changes). Partial: sudah pakai findAll() (multi tool-call) + strip code blocks (anti-injection).
-9. **AGP + Kotlin version** — masih 8.1.2 + 1.9.0. Upgrade ditunda (risky, butuh fase terpisah).
-10. **Rendering atomicity** — ✅ FIXED (Phase 48) — getRenderState() atomic snapshot (screen+cursor+rows+cols dalam satu synchronized block)
-11. **Alt-screen resize sync** — ✅ FIXED (Phase 48) — resize() sekarang resize KETIGA buffer (screen + altScreen + mainScreen)
-12. **Screen buffer persistence** — ✅ FIXED (Phase 49) — TunnelApp Application subclass hold shellExecutors, survive Activity recreate
-13. **Block Mode parse divergen** — ✅ FIXED (Phase 51) — incremental parse, hanya parse prompt baru
-14. **Output throttle** — ✅ FIXED (Phase 48) — screenDirty di-throttle ke ~30fps (33ms) di 3 executor
-15. **Automated tests** — ✅ FIXED (Phase 51) — 39 unit tests (TerminalEmulator, AiToolCall, PermissionManager)
+7. **EncryptedSharedPreferences** — ✅ FIXED (Phase 41 + Wave 2) — API key + SSH creds + MCP keys AES256-GCM encrypted, fail-closed (no plaintext fallback)
+8. **Tool-calling text/regex** — ✅ FIXED (Phase 59, B-1) — native API `tools`+`tool_choice` parameter untuk provider yang support. Text-tag `<tool_call>` parsing tetap sebagai bridge/fallback untuk provider non-native.
+9. **AGP + Kotlin version** — ✅ FIXED (Phase 59, C-2) — AGP 8.5.2 + Kotlin 2.0.21 + Gradle 8.9 + Compose Compiler Plugin
+10. **Rendering atomicity** — ✅ FIXED (Phase 48) — getRenderState() atomic snapshot
+11. **Alt-screen resize sync** — ✅ FIXED (Phase 48) — resize() resize KETIGA buffer (screen + altScreen + mainScreen)
+12. **Screen buffer persistence** — ✅ FIXED (Phase 49) — TunnelApp Application scope, survive Activity recreate
+13. **Block Mode parse divergen** — ✅ FIXED (Phase 51) — incremental parse
+14. **Output throttle** — ✅ FIXED (Phase 48) — screenDirty di-throttle ke ~30fps (33ms)
+15. **Automated tests** — ✅ FIXED (Phase 51 + Wave 6-16) — 14 test files (03-16): TerminalEmulator, AiToolCall, Permission, Wave utils, history/url, chat export, bookmarks, IME, terminal polish, scrollback select, find/url/mouse, Unicode, font zoom
+16. **Agent Mode approval/success/Stop bugs** — ✅ FIXED (Phase 52) — risk-tagged command approval dialog, success detection regex strengthen, Stop button via job.cancel()
+17. **SFTP for SSH file I/O** — ✅ FIXED (Phase 58) — ChannelSftp untuk read/write/list file di server SSH, mkdir recursive (Wave 6)
+18. **TaskPlanManager context limit** — ✅ FIXED (Phase 58) — plan/act/observe/verify loop, plan disimpan terpisah dari conversation history
+19. **Ubuntu download reliability** — ✅ FIXED (Phase 60, C-1 to C-5) — readTimeout 300s, retry 2x per URL, NonCancellable context, indeterminate progress fallback
+20. **HTTPS enforcement** — ✅ FIXED (Phase 60, Bug #2) — reject HTTP untuk provider eksternal (kecuali localhost Ollama/LM Studio)
+21. **MCP schema validation** — ✅ FIXED (Phase 60, Bug #4) — try-catch + basic schema check (ensure type + properties)
+22. **Anthropic Native API** — ✅ FIXED (Wave 5) — apiStyle: anthropic, Claude via Messages API
+23. **Wide char / Unicode** — ✅ FIXED (Wave 15) — code-points + combining marks, CJK width 2, emoji width 2
+24. **Font zoom** — ✅ FIXED (Wave 16) — pinch-zoom gesture-local, 0.5sp snap, range 8-28sp
 
 ---
 
 ## Catatan Penutup
 
-Tunnel Terminal v7.0.0 (Phase 51) adalah hasil 51 phase development dengan 90+ commit, mulai dari terminal sederhana hingga AI-native terminal dengan 30+ fitur termasuk Linux Environment (Ubuntu via proot), Agent Mode (autonomous task runner), dan automated tests. Codebase telah melalui multiple comprehensive audit (V3: 42 bug, V4: 18 bug, V5: 30 bug — total 90 bug ditemukan dan di-fixed) plus realtime audit (3 root cause bug).
+Tunnel Terminal v8.1.0 (Wave 17) adalah hasil **161 commits** dengan **~18.800 baris code** (55 Kotlin files + 1 C++ file + 14 test files), mulai dari terminal sederhana hingga AI-native terminal dengan **40+ fitur** termasuk Linux Environment (Ubuntu via proot), Agent Mode (autonomous task runner), Native API Tool-Calling, TaskPlanManager, SFTP for SSH, Anthropic Native API, Checkpointing/Undo, dan 14 test files.
 
-**Status audit V5:** 26 dari 30 bug DONE (87%), 2 PARTIAL, 2 DEFERRED (dengan justifikasi).
+Codebase telah melalui **multiple comprehensive audit** (V3: 42 bug, V4: 18 bug, V5: 30 bug, Phase 52: 3 bug, Phase 60: 5 bug — total **98+ bug ditemukan dan di-fixed**) plus 17 waves UX polish.
+
+**Status backlog B/C:** Semua backlog utama SELESAI — B-1 (Native API tool-calling) ✅, B-4 (Checkpointing) ✅, B-5 (Project Context) ✅, C-2 (AGP+Kotlin upgrade) ✅, C-5 (Automated tests) ✅.
 
 Untuk panduan cara penggunaan, lihat [USER_GUIDE.md](USER_GUIDE.md).
-Untuk checklist lengkap status audit, lihat [CHECKLIST_AUDIT_V5_FINAL.md](../CHECKLIST_AUDIT_V5_FINAL.md).
+Untuk release notes lengkap, lihat [GitHub Release v8.1.0](https://github.com/NanoMindExplorer/tunnel-terminal/releases/tag/v8.1.0).
