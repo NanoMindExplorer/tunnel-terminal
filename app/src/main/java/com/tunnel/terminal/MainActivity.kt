@@ -137,6 +137,11 @@ class MainActivity : ComponentActivity() {
     private var imeFieldLast by mutableStateOf("")
     /** Wave-15: ExtraKeys expanded (symbols + F-row). Default compact for more terminal height. */
     private var extraKeysExpanded by mutableStateOf(false)
+    /**
+     * Wave-21: AI Copilot as a right-side panel (does NOT cover the terminal).
+     * User can watch AI run commands while reading chat/settings.
+     */
+    private var aiPanelOpen by mutableStateOf(false)
     /** Phase 47 (Bagian 2): Agent Mode screen visibility. */
     private var showAgentScreen by mutableStateOf(false)
     /** Phase 49 (D-4): MCP server management dialog visibility. */
@@ -364,9 +369,14 @@ class MainActivity : ComponentActivity() {
             )
             /* Wave-15: Compact ExtraKeys by default; expand state persisted. */
             extraKeysExpanded = uiPrefs.getBoolean("extraKeysExpanded", false)
+            /* Wave-21: Side panel open state (default closed → max terminal width). */
+            aiPanelOpen = uiPrefs.getBoolean("aiPanelOpen", false)
+            aiDrawerOpen = aiPanelOpen
         } catch (_: Exception) {
             terminalFontSize = TerminalFontZoom.DEFAULT_SP
             extraKeysExpanded = false
+            aiPanelOpen = false
+            aiDrawerOpen = false
         }
 
         /* C2+H2 fix: Pindahkan startForegroundService SETELAH setContent.
@@ -1488,9 +1498,8 @@ class MainActivity : ComponentActivity() {
     }
 
     /**
-     * Wave-20: True when terminal should own volume-key history navigation.
-     * Must exclude AI drawer / palette / SSH dialog — previously only file overlays
-     * were checked so Vol± still stole media volume while chat was open.
+     * Wave-20/21: True when AI side panel is open (volume history disabled so media works).
+     * Named historically aiDrawerOpen; now tracks side panel, not ModalNavigationDrawer.
      */
     private var aiDrawerOpen by mutableStateOf(false)
 
@@ -1500,8 +1509,28 @@ class MainActivity : ComponentActivity() {
             !showWorkspaceDrawer &&
             !showCommandPalette &&
             !showSshDialog &&
-            !aiDrawerOpen &&
+            !aiPanelOpen &&
             renameTabId == null
+
+    /** Wave-21: Open AI copilot as right side panel (terminal stays visible). */
+    private fun openAiPanel(tab: Int = 0) {
+        chatInitialTab = tab
+        aiPanelOpen = true
+        aiDrawerOpen = true
+        getSharedPreferences("TunnelUI", Context.MODE_PRIVATE)
+            .edit().putBoolean("aiPanelOpen", true).apply()
+    }
+
+    private fun closeAiPanel() {
+        aiPanelOpen = false
+        aiDrawerOpen = false
+        getSharedPreferences("TunnelUI", Context.MODE_PRIVATE)
+            .edit().putBoolean("aiPanelOpen", false).apply()
+    }
+
+    private fun toggleAiPanel(tab: Int = 0) {
+        if (aiPanelOpen) closeAiPanel() else openAiPanel(tab)
+    }
 
     /* ─── Volume key command history navigation (per-active-executor) ─── */
     /* Phase 20 + Wave-20: Only intercept when terminal is the focused surface. */
@@ -1586,31 +1615,36 @@ class MainActivity : ComponentActivity() {
     @OptIn(ExperimentalMaterial3Api::class)
     @Composable
     fun TerminalApp() {
-        val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
         val scope = rememberCoroutineScope()
-        /* Wave-20: Keep Activity-level flag so volume keys release while AI drawer open. */
-        LaunchedEffect(drawerState.currentValue) {
-            aiDrawerOpen = drawerState.currentValue == DrawerValue.Open
-        }
 
         var isCtrlActive by remember { mutableStateOf(false) }
         var isAltActive by remember { mutableStateOf(false) }
 
-        /* Phase 24.5: Process pending voice text — kirim sebagai AI prompt + open drawer. */
+        /* Phase 24.5: Process pending voice text — open side panel + AI prompt. */
         val voiceText by _pendingVoiceText
         LaunchedEffect(voiceText) {
             if (voiceText.isNotBlank()) {
-                drawerState.open()
+                openAiPanel(0)
                 handleAIPrompt(voiceText)
                 _pendingVoiceText.value = ""
             }
         }
 
-        /* Back button handler: tutup drawer/editor dulu sebelum exit. */
-        BackHandler(enabled = editingFile != null || drawerState.isOpen) {
+        /* Wave-21: Auto-open side panel only when work *starts* (not if user closes mid-run). */
+        var wasAiWorking by remember { mutableStateOf(false) }
+        LaunchedEffect(isProcessingAI, autoPilotRunning, agentRunning) {
+            val working = isProcessingAI || autoPilotRunning || agentRunning
+            if (working && !wasAiWorking) {
+                openAiPanel(0)
+            }
+            wasAiWorking = working
+        }
+
+        /* Back button: close AI panel / editor first. */
+        BackHandler(enabled = editingFile != null || aiPanelOpen) {
             when {
                 editingFile != null -> editingFile = null
-                drawerState.isOpen -> scope.launch { drawerState.close() }
+                aiPanelOpen -> closeAiPanel()
             }
         }
 
@@ -1633,28 +1667,23 @@ class MainActivity : ComponentActivity() {
             val paletteItems = buildList {
                 /* AI actions. */
                 add(PaletteItem("ai_explain", "Ask AI to explain last output", "AI", Icons.Default.Psychology, PaletteCategory.AI) {
-                    chatInitialTab = 0
-                    scope.launch {
-                        drawerState.open()
-                        aiJob?.cancel()
-                        aiJob = scope.launch { handleAIPrompt("Jelaskan output terminal terakhir.") }
-                    }
+                    openAiPanel(0)
+                    aiJob?.cancel()
+                    aiJob = scope.launch { handleAIPrompt("Jelaskan output terminal terakhir.") }
                 })
                 add(PaletteItem("ai_fix", "Ask AI to fix errors", "AI", Icons.Default.Build, PaletteCategory.AI) {
-                    chatInitialTab = 0
-                    scope.launch {
-                        drawerState.open()
-                        aiJob?.cancel()
-                        aiJob = scope.launch { handleAIPrompt("Perbaiki error di terminal.") }
-                    }
+                    openAiPanel(0)
+                    aiJob?.cancel()
+                    aiJob = scope.launch { handleAIPrompt("Perbaiki error di terminal.") }
                 })
-                add(PaletteItem("ai_open_chat", "Open AI chat", "AI", Icons.Default.Chat, PaletteCategory.AI) {
-                    chatInitialTab = 0
-                    scope.launch { drawerState.open() }
+                add(PaletteItem("ai_open_chat", "Open AI chat (side panel)", "AI", Icons.Default.Chat, PaletteCategory.AI) {
+                    openAiPanel(0)
                 })
                 add(PaletteItem("ai_autopilot", "Open AI chat (Auto-Pilot)", "AI", Icons.Default.SmartToy, PaletteCategory.AI) {
-                    chatInitialTab = 0
-                    scope.launch { drawerState.open() }
+                    openAiPanel(0)
+                })
+                add(PaletteItem("ai_toggle_panel", "Toggle AI side panel", "AI", Icons.Default.Chat, PaletteCategory.AI) {
+                    toggleAiPanel(0)
                 })
                 /* Navigation. */
                 add(PaletteItem("new_tab", "New tab", "Navigation", Icons.Default.Add, PaletteCategory.NAVIGATION) { lifecycleScope.launch { createNewTab() } })
@@ -1683,8 +1712,7 @@ class MainActivity : ComponentActivity() {
                 })
                 /* Settings. */
                 add(PaletteItem("open_settings", "Open AI Settings", "Setting", Icons.Default.Settings, PaletteCategory.SETTING) {
-                    chatInitialTab = 2
-                    scope.launch { drawerState.open() }
+                    openAiPanel(2)
                 })
                 add(PaletteItem("open_file_explorer", "Open File Explorer", "Setting", Icons.Default.Folder, PaletteCategory.SETTING) { showFileExplorer = true })
                 add(PaletteItem("open_workspace", "Workspace Sessions", "Setting", Icons.Default.Save, PaletteCategory.SETTING) { showWorkspaceDrawer = true })
@@ -2183,94 +2211,19 @@ class MainActivity : ComponentActivity() {
             )
         }
 
-        ModalNavigationDrawer(
-            drawerState = drawerState,
-            drawerContent = {
-                ModalDrawerSheet(modifier = Modifier.fillMaxHeight(0.9f).background(currentTheme.uiBg)) {
-                    AIChatPanel(
-                        messages = chatMessages,
-                        settings = aiSettings,
-                        snippets = snippetsState,
-                        theme = currentTheme,
-                        themes = ThemeManager.presets,
-                        isProcessingAI = isProcessingAI,
-                        onSettingsChanged = { saveAISettings(it) },
-                        onSendPrompt = { prompt ->
-                            aiJob?.cancel()
-                            aiJob = scope.launch { handleAIPrompt(prompt) }
-                        },
-                        onRunCommand = { cmd ->
-                            shellExecutors.find { it.id == activeExecutorId }?.executeCommand(cmd)
-                            scope.launch { drawerState.close() }
-                        },
-                        onRunAutoPilot = { commands ->
-                            /* Wave-17: Keep drawer open so user sees progress. */
-                            autoPilotJob?.cancel()
-                            autoPilotJob = scope.launch { runAutoPilot(commands) }
-                        },
-                        onSaveSnippet = { title, cmd -> saveSnippet(title, cmd) },
-                        onRunSnippet = { cmd ->
-                            shellExecutors.find { it.id == activeExecutorId }?.executeCommand(cmd)
-                            scope.launch { drawerState.close() }
-                        },
-                        onDeleteSnippet = { id -> deleteSnippet(id) },
-                        onThemeChanged = { changeTheme(it) },
-                        onClearChat = { clearChat() },
-                        onExportChat = { exportChat() },
-                        onInsertSnippet = { cmd ->
-                            insertIntoTerminal(cmd)
-                            scope.launch { drawerState.close() }
-                        },
-                        onClose = { scope.launch { drawerState.close() } },
-                        pendingImages = pendingImages,
-                        onAttachImage = { attachImage() },
-                        onRemoveImage = { idx -> removeImage(idx) },
-                        availableModels = availableModels,
-                        isLoadingModels = isLoadingModels,
-                        modelsFetchError = modelsFetchError,
-                        onFetchModels = { fetchModels() },
-                        onSelectModel = { m -> selectModel(m) },
-                        onStopAI = {
-                            aiJob?.cancel()
-                            aiJob = null
-                            isProcessingAI = false
-                            /* Mark last streaming message as partial. */
-                            val idx = chatMessages.indexOfLast { it.isStreaming }
-                            if (idx >= 0) {
-                                val m = chatMessages[idx]
-                                chatMessages[idx] = m.copy(
-                                    content = m.content.ifBlank { "(dihentikan)" } + "\n\n⏹ Dihentikan.",
-                                    isStreaming = false
-                                )
-                            }
-                        },
-                        onRetryLastPrompt = {
-                            val lastUser = chatMessages.lastOrNull { it.role == "user" }?.content
-                            if (!lastUser.isNullOrBlank()) {
-                                aiJob?.cancel()
-                                aiJob = scope.launch { handleAIPrompt(lastUser) }
-                            }
-                        },
-                        autoPilotRunning = autoPilotRunning,
-                        autoPilotStep = autoPilotStep,
-                        autoPilotTotal = autoPilotTotal,
-                        autoPilotCommand = autoPilotCommand,
-                        onStopAutoPilot = {
-                            autoPilotStopped = true
-                            autoPilotJob?.cancel()
-                        },
-                        initialTab = chatInitialTab
-                    )
-                }
-            }
-        ) {
+        /* Wave-21: Side-by-side layout — terminal LEFT, AI panel RIGHT (never covers terminal). */
+        val configuration = LocalConfiguration.current
+        val panelWidthDp = (configuration.screenWidthDp * 0.40f).coerceIn(280f, 420f).dp
+
+        Row(modifier = Modifier.fillMaxSize()) {
+            /* ── Terminal column ── */
+            Box(modifier = Modifier.weight(1f).fillMaxHeight()) {
             val activeExecutor = shellExecutors.find { it.id == activeExecutorId } ?: shellExecutors.firstOrNull()
             if (activeExecutor == null) {
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Text("Inisialisasi Tunnel Terminal...", color = Color.White, fontFamily = FontFamily.Monospace)
                 }
-                return@ModalNavigationDrawer
-            }
+            } else {
 
             val screenDirty by activeExecutor.screenDirty.collectAsState()
             val tabsData = shellExecutors.mapIndexed { index, executor ->
@@ -2286,7 +2239,6 @@ class MainActivity : ComponentActivity() {
              * Old code: if (!hasPhysicalKeyboard) keyboardController?.show() selalu dipanggil → soft keyboard muncul
              * bahkan saat physical keyboard aktif → adjustResize mengecilkan terminal →
              * layar "naik ke atas", text tidak kelihatan. */
-            val configuration = LocalConfiguration.current
             val hasPhysicalKeyboard = configuration.keyboard == android.content.res.Configuration.KEYBOARD_QWERTY &&
                 configuration.hardKeyboardHidden == android.content.res.Configuration.HARDKEYBOARDHIDDEN_NO
 
@@ -3208,7 +3160,7 @@ class MainActivity : ComponentActivity() {
                         },
                         onNewTab = { lifecycleScope.launch { createNewTab() } },
                         onTabClosed = { closeTab(it) },
-                        onOpenAI = { scope.launch { drawerState.open() } },
+                        onOpenAI = { toggleAiPanel(0) },
                         onOpenFileExplorer = { showFileExplorer = true },
                         onOpenWorkspace = { showWorkspaceDrawer = true },
                         onOpenSsh = { showSshDialog = true },
@@ -3371,7 +3323,7 @@ class MainActivity : ComponentActivity() {
                                 onBlockExplain = { block ->
                                     scope.launch {
                                         handleAIPrompt("Jelaskan output dari command ini:\n$ ${block.command}\n${block.output}")
-                                        drawerState.open()
+                                        openAiPanel(0)
                                     }
                                 },
                                 onToggleCollapse = { id -> blockManager.toggleCollapse(id) },
@@ -3490,12 +3442,9 @@ class MainActivity : ComponentActivity() {
                     )
                 }
 
-                /* Wave-17: FAB opens AI chat; long-press = smart debug prompt. */
+                /* Wave-21: FAB toggles right AI panel (terminal stays visible). */
                 FloatingActionButton(
-                    onClick = {
-                        chatInitialTab = 0
-                        scope.launch { drawerState.open() }
-                    },
+                    onClick = { toggleAiPanel(0) },
                     modifier = Modifier
                         .align(Alignment.BottomEnd)
                         .padding(16.dp)
@@ -3514,16 +3463,15 @@ class MainActivity : ComponentActivity() {
                                     } else {
                                         "Tolong jelaskan apa yang sedang terjadi di terminal saya dan beri saran perintah selanjutnya. Output terminal:\n\n$ctx"
                                     }
-                                    chatInitialTab = 0
+                                    openAiPanel(0)
                                     aiJob?.cancel()
-                                    aiJob = lifecycleScope.launch {
-                                        drawerState.open()
-                                        handleAIPrompt(prompt)
-                                    }
+                                    aiJob = lifecycleScope.launch { handleAIPrompt(prompt) }
                                 }
                             )
                         },
                     containerColor = when {
+                        aiPanelOpen && (isProcessingAI || autoPilotRunning) -> currentTheme.uiAccent
+                        aiPanelOpen -> Color(0xFF3949AB)
                         agentRunning -> Color(0xFFFF6D00)
                         isProcessingAI || autoPilotRunning -> currentTheme.uiAccent
                         else -> Color(0xFF6200EE)
@@ -3532,6 +3480,8 @@ class MainActivity : ComponentActivity() {
                 ) {
                     Text(
                         when {
+                            aiPanelOpen && (isProcessingAI || autoPilotRunning) -> "●"
+                            aiPanelOpen -> "◀"
                             agentRunning -> "🤖"
                             isProcessingAI || autoPilotRunning -> "●"
                             else -> "AI"
@@ -3554,8 +3504,95 @@ class MainActivity : ComponentActivity() {
                             .padding(horizontal = 10.dp, vertical = 6.dp)
                     )
                 }
+            } /* FAB overlay Box */
+            } /* else activeExecutor */
+            } /* terminal column Box */
+
+            /* Wave-21: AI Copilot — right side panel, terminal remains visible. */
+            if (aiPanelOpen) {
+                Box(
+                    modifier = Modifier
+                        .width(1.dp)
+                        .fillMaxHeight()
+                        .background(currentTheme.uiAccent.copy(alpha = 0.4f))
+                )
+                Box(
+                    modifier = Modifier
+                        .width(panelWidthDp)
+                        .fillMaxHeight()
+                        .background(currentTheme.uiBg)
+                ) {
+                    AIChatPanel(
+                        messages = chatMessages,
+                        settings = aiSettings,
+                        snippets = snippetsState,
+                        theme = currentTheme,
+                        themes = ThemeManager.presets,
+                        isProcessingAI = isProcessingAI,
+                        onSettingsChanged = { saveAISettings(it) },
+                        onSendPrompt = { prompt ->
+                            aiJob?.cancel()
+                            aiJob = scope.launch { handleAIPrompt(prompt) }
+                        },
+                        onRunCommand = { cmd ->
+                            shellExecutors.find { it.id == activeExecutorId }?.executeCommand(cmd)
+                        },
+                        onRunAutoPilot = { commands ->
+                            autoPilotJob?.cancel()
+                            autoPilotJob = scope.launch { runAutoPilot(commands) }
+                        },
+                        onSaveSnippet = { title, cmd -> saveSnippet(title, cmd) },
+                        onRunSnippet = { cmd ->
+                            shellExecutors.find { it.id == activeExecutorId }?.executeCommand(cmd)
+                        },
+                        onDeleteSnippet = { id -> deleteSnippet(id) },
+                        onThemeChanged = { changeTheme(it) },
+                        onClearChat = { clearChat() },
+                        onExportChat = { exportChat() },
+                        onInsertSnippet = { cmd -> insertIntoTerminal(cmd) },
+                        onClose = { closeAiPanel() },
+                        pendingImages = pendingImages,
+                        onAttachImage = { attachImage() },
+                        onRemoveImage = { idx -> removeImage(idx) },
+                        availableModels = availableModels,
+                        isLoadingModels = isLoadingModels,
+                        modelsFetchError = modelsFetchError,
+                        onFetchModels = { fetchModels() },
+                        onSelectModel = { m -> selectModel(m) },
+                        onStopAI = {
+                            aiJob?.cancel()
+                            aiJob = null
+                            isProcessingAI = false
+                            val idx = chatMessages.indexOfLast { it.isStreaming }
+                            if (idx >= 0) {
+                                val m = chatMessages[idx]
+                                chatMessages[idx] = m.copy(
+                                    content = m.content.ifBlank { "(dihentikan)" } + "\n\n⏹ Dihentikan.",
+                                    isStreaming = false
+                                )
+                            }
+                        },
+                        onRetryLastPrompt = {
+                            val lastUser = chatMessages.lastOrNull { it.role == "user" }?.content
+                            if (!lastUser.isNullOrBlank()) {
+                                aiJob?.cancel()
+                                aiJob = scope.launch { handleAIPrompt(lastUser) }
+                            }
+                        },
+                        autoPilotRunning = autoPilotRunning,
+                        autoPilotStep = autoPilotStep,
+                        autoPilotTotal = autoPilotTotal,
+                        autoPilotCommand = autoPilotCommand,
+                        onStopAutoPilot = {
+                            autoPilotStopped = true
+                            autoPilotJob?.cancel()
+                        },
+                        initialTab = chatInitialTab,
+                        sidePanelMode = true
+                    )
+                }
             }
-        }
+        } /* Row side-by-side */
     }
 
     /** Phase 53 + Wave-12: Safe paste with bracketed mode + IME sync. */
