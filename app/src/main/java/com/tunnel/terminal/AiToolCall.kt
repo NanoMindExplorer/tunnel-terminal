@@ -117,7 +117,7 @@ data class AiToolCall(
 
             TOOLS READ-ONLY (tidak butuh permission):
             - read_file: Baca file (maks ~5KB). Args: path
-            - list_files: List direktori. Args: dir (opsional, default = workspace)
+            - list_files: List direktori. Args: dir (opsional, default = workspace/home sesi)
             - search_files: Cari file berdasarkan NAMA (regex). Args: pattern, dir (opsional)
             - grep_content: Cari TEKS di dalam file (content search). Args: pattern, dir (opsional), max_results (opsional)
             - get_terminal_output: Ambil output terminal aktif terkini. Args: (none)
@@ -128,40 +128,34 @@ data class AiToolCall(
             - write_file: Tulis file (full overwrite). Args: path, content. Gunakan untuk file BARU atau saat mengganti seluruh isi file.
             - edit_file: Edit parsial file (cari & ganti). Args: path, old_string, new_string. Gunakan untuk mengubah bagian file yang SUDAH ADA — old_string HARUS match persis 1 kali. Jauh lebih hemat token daripada write_file untuk file besar.
             - delete_file: Hapus file. Args: path
-            - run_command: Jalankan command di terminal. Args: cmd
+            - run_command: Jalankan command di terminal AKTIF (local sh / Ubuntu bash / SSH). Args: cmd
 
-            ## DIREKTORI KERJA (PENTING)
+            ## DIREKTORI KERJA (PENTING — tergantung tab aktif)
 
-            Semua path yang kamu tulis TANPA awalan "/" otomatis berada di workspace
-            project privat (selalu bisa ditulis, tidak perlu izin apa pun). Gunakan
-            ini sebagai DEFAULT, contoh: {"path":"main.py"} atau {"path":"src/utils.py"}.
+            ### Tab Local (Android shell)
+            Path RELATIF → workspace app (filesDir/workspace/...). Contoh: {"path":"hello.py"}
+            Path Download absolut hanya setelah setup-storage (SAF).
 
-            Kalau user minta simpan ke folder perangkat (Download/Documents):
-            1) Prefer path absolut di bawah folder yang sudah di-grant via setup-storage,
-               mis. "/storage/emulated/0/Download/catatan.txt" — app menulis lewat SAF
-               (bukan java.io.File mentah), jadi benar-benar masuk folder Download.
-            2) Atau prefix "storage/" = path relatif di dalam tree SAF
-               (mis. {"path":"storage/catatan.txt"}).
-            3) Alternatif: tulis dulu di workspace, lalu user jalankan
-               storage-save-download <file> atau storage-put <file>.
-            User harus sudah setup-storage (pilih Download) sebelum path absolut device
-            atau storage/ dipakai. JANGAN pakai path absolut device untuk file kerja biasa.
+            ### Tab Ubuntu (proot) — UTAMAKAN INI saat environmentDescription bilang Ubuntu
+            Path RELATIF → /root/ di dalam Ubuntu (bukan workspace Android).
+            Contoh: write_file path "demo.py" → /root/demo.py di guest.
+            Lalu run_command: python3 demo.py  (cwd /root).
+            apt: DEBIAN_FRONTEND=noninteractive apt-get install -y <pkg>
+            JANGAN gunakan path /data/data/... di run_command Ubuntu.
+            /mnt/workspace = workspace Android (bind-mount), opsional.
 
-            Contoh workflow workspace:
-            1. User: "Buat file hello.py yang print Hello World"
-            2. AI: <tool_call>{"tool":"write_file","args":{"path":"hello.py","content":"print('Hello World')"}}</tool_call>
-            3. System: OK: wrote 22 chars to .../files/workspace/hello.py
-            4. AI: "File hello.py sudah dibuat di workspace."
+            ### Tab SSH
+            File tools via SFTP; shell via run_command di remote.
 
-            Contoh simpan ke Download (setelah setup-storage pilih Download):
-            <tool_call>{"tool":"write_file","args":{"path":"/storage/emulated/0/Download/hello.txt","content":"halo"}}</tool_call>
+            Contoh Ubuntu:
+            1. write_file {"path":"hello.py","content":"print('hi')"}
+            2. run_command {"cmd":"python3 hello.py"}
+            3. OK — file ada di /root/hello.py di sesi Ubuntu.
 
-            Untuk memanggil tool, sertakan dalam response:
+            Untuk memanggil tool:
             <tool_call>{"tool":"read_file","args":{"path":"main.py"}}</tool_call>
 
-            Anda bisa memanggil MULTIPLE tools dalam satu response. Setelah tool call,
-            sistem akan eksekusi (dengan permission user jika destructive) dan berikan
-            hasilnya di message berikutnya. Anda bisa lanjutkan analisa berdasarkan hasil.
+            Anda bisa MULTIPLE tools per response. Setelah eksekusi, lanjutkan dari hasil.
         """.trimIndent()
     }
 }
@@ -364,9 +358,32 @@ class ToolExecutor(
     /** Phase 47 (Fix 1): Expose workspaceRoot untuk AgentTaskRunner. */
     fun workspaceRootFile(): File = workspaceRoot
 
+    /** Wave-23: Active session type for Agent / prompts. */
+    fun activeSessionType(): String = sessionTargetResolver?.sessionType ?: "local"
+
+    /** Wave-23: Guest-visible home path for cwd (Ubuntu /root vs Android workspace). */
+    fun guestWorkDir(): String = sessionTargetResolver?.guestHome ?: workspaceRoot.absolutePath
+
+    fun sessionPathInstructions(): String =
+        sessionTargetResolver?.pathInstructionsForAi()
+            ?: SessionTargetResolver("local", workspaceRoot, null).pathInstructionsForAi()
+
     /** Phase 57 fix (§4.1): Update SessionTargetResolver saat user pindah tab. */
     fun setSessionTargetResolver(resolver: SessionTargetResolver?) {
         sessionTargetResolver = resolver
+    }
+
+    /** Default directory for list/search/grep when dir is "." */
+    private fun defaultListDir(): File {
+        return if (sessionTargetResolver?.sessionType == "ubuntu") {
+            try {
+                resolvePath(".")
+            } catch (_: Exception) {
+                workspaceRoot
+            }
+        } else {
+            workspaceRoot
+        }
     }
 
     /** Phase 58 fix (§4.1-D): Update SshShellExecutor reference saat pindah tab SSH. */
@@ -473,7 +490,8 @@ class ToolExecutor(
                         val files = sshExecutor!!.listFilesRemote(dirRaw)
                         if (files != null) files.joinToString("\n") else "Error: cannot list remote directory: $dirRaw"
                     } else {
-                        val file = if (dirRaw == ".") workspaceRoot else resolvePath(dirRaw)
+                        /* Wave-23: On Ubuntu, "." = /root in rootfs (not Android workspace). */
+                        val file = if (dirRaw == "." || dirRaw.isBlank()) defaultListDir() else resolvePath(dirRaw)
                         val viaSaf = listViaSaf(file)
                         if (viaSaf != null) return viaSaf
                         if (!file.exists() || !file.isDirectory) return "Error: not a directory: ${file.absolutePath}"
@@ -485,8 +503,8 @@ class ToolExecutor(
                 "search_files" -> {
                     val pattern = call.args["pattern"] ?: return "Error: pattern required"
                     val dirRaw = call.args["dir"] ?: "."
-                    /* Wave-4: match by filename; cap by match count not walk nodes. */
-                    val file = if (dirRaw == ".") workspaceRoot else resolvePath(dirRaw)
+                    /* Wave-4/23: match by filename; Ubuntu default = guest /root. */
+                    val file = if (dirRaw == "." || dirRaw.isBlank()) defaultListDir() else resolvePath(dirRaw)
                     val regex = try {
                         Regex(pattern, RegexOption.IGNORE_CASE)
                     } catch (e: Exception) {
@@ -511,7 +529,7 @@ class ToolExecutor(
                     val pattern = call.args["pattern"] ?: return "Error: pattern required"
                     val dirRaw = call.args["dir"] ?: "."
                     val maxResults = call.args["max_results"]?.toIntOrNull()?.coerceIn(1, 100) ?: MAX_GREP_MATCHES
-                    val root = if (dirRaw == ".") workspaceRoot else resolvePath(dirRaw)
+                    val root = if (dirRaw == "." || dirRaw.isBlank()) defaultListDir() else resolvePath(dirRaw)
                     if (!root.exists()) return "Error: directory not found: ${root.absolutePath}"
                     val regex = try {
                         Regex(pattern, RegexOption.IGNORE_CASE)
@@ -587,7 +605,12 @@ class ToolExecutor(
                         if (safResult != null) return safResult
                         file.parentFile?.mkdirs()
                         file.writeText(content)
-                        "OK: wrote ${content.length} chars to ${file.absolutePath}"
+                        /* Wave-23: Tell AI the guest path on Ubuntu so run_command matches. */
+                        val guest = sessionTargetResolver?.guestPathForPhysical(file)
+                        val guestHint = if (guest != null) {
+                            " (Ubuntu guest path: $guest — pakai ini di run_command)"
+                        } else ""
+                        "OK: wrote ${content.length} chars to ${file.absolutePath}$guestHint"
                     }
                 }
                 "delete_file" -> {

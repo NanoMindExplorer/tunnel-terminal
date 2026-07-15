@@ -124,20 +124,25 @@ class AgentTaskRunner(
 
         val history = mutableListOf<StepRecord>()
         var iteration = 0
-        val workspacePath = toolExecutor.workspaceRootFile().absolutePath
+        /* Wave-23: On Ubuntu, guest HOME is /root — NOT the Android filesDir workspace path.
+         * OLD BUG: cd /data/data/.../workspace inside proot → path missing → every command fails. */
+        val isUbuntu = session.sessionType == "ubuntu"
+        val workDir = if (isUbuntu) "/root" else toolExecutor.workspaceRootFile().absolutePath
+        val pathHint = toolExecutor.sessionPathInstructions()
 
         events(AgentEvent.Status("Memulai Agent task: $goal"))
         events(AgentEvent.Status("Environment: ${session.environmentDescription}"))
-        events(AgentEvent.Status("Workspace: $workspacePath"))
+        events(AgentEvent.Status("Work dir: $workDir (${if (isUbuntu) "Ubuntu guest" else "Android workspace"})"))
         events(AgentEvent.Status("Max iterations: $maxIterations"))
 
-        // Setup: cd ke workspace supaya command yang AI jalankan pakai cwd yang benar
         try {
-            session.writeRaw("cd \"$workspacePath\"\n")
-            /* Phase 52 fix (Bug #3): delay() bukan Thread.sleep — kooperatif terhadap cancellation. */
-            kotlinx.coroutines.delay(100)
+            session.writeRaw("cd \"$workDir\" 2>/dev/null || cd /root 2>/dev/null || true\n")
+            if (isUbuntu) {
+                session.writeRaw("export DEBIAN_FRONTEND=noninteractive\n")
+            }
+            kotlinx.coroutines.delay(150)
         } catch (e: Exception) {
-            Log.w(TAG, "Gagal cd ke workspace: ${e.message}")
+            Log.w(TAG, "Gagal cd ke work dir: ${e.message}")
         }
 
         while (iteration < maxIterations && !stopped) {
@@ -156,7 +161,10 @@ class AgentTaskRunner(
             iteration++
             events(AgentEvent.Status("── Iterasi $iteration/$maxIterations ──"))
 
-            val prompt = buildAgentPrompt(goal, history, iteration, maxIterations, workspacePath, session.environmentDescription)
+            val prompt = buildAgentPrompt(
+                goal, history, iteration, maxIterations, workDir,
+                session.environmentDescription, pathHint, isUbuntu
+            )
             val response = try {
                 aiAgent.askAIStreaming(
                     settings,
@@ -385,36 +393,45 @@ class AgentTaskRunner(
         history: List<StepRecord>,
         iteration: Int,
         max: Int,
-        workspacePath: String,
-        envDesc: String
+        workDir: String,
+        envDesc: String,
+        pathHint: String,
+        isUbuntu: Boolean
     ): String {
         val historyText = history.takeLast(HISTORY_KEEP).joinToString("\n") {
-            "- ${it.action} → ${it.outcome}"
+            val mark = if (it.success) "OK" else "FAIL"
+            "- [$mark] ${it.action} → ${it.outcome}"
         }
+        val ubuntuExtra = if (isUbuntu) {
+            """
+            Ubuntu tips:
+            - write_file "app.py" → file di /root/app.py (guest)
+            - run_command "python3 app.py" (cwd sudah /root)
+            - apt: DEBIAN_FRONTEND=noninteractive apt-get install -y <pkg>
+            - Jangan cd ke path Android /data/data/...
+            """.trimIndent()
+        } else ""
         return """
             Anda adalah Agent otonom. Selesaikan goal berikut sampai tuntas.
 
             Goal: $goal
 
             Environment: $envDesc
-            Workspace: $workspacePath (path relatif otomatis masuk sini)
+            Work directory: $workDir
+            $pathHint
+            $ubuntuExtra
 
             Riwayat langkah sejauh ini (iterasi $iteration/$max):
             $historyText
 
             Instruksi:
-            1. Tentukan LANGKAH BERIKUTNYA untuk mendekati goal. Pakai tool calls
-               (write_file, read_file, run_command, dll) — bukan bash blocks.
-            2. Setiap aksi akan dieksekusi otomatis, hasilnya dikasih balik ke kamu
-               di iterasi berikutnya. Kamu tidak perlu menunggu user.
-            3. Kalau ada error, analisa penyebabnya dan perbaiki di langkah berikutnya.
-            4. Kalau sudah BENAR-BENAR selesai dan teruji (bukan cuma ditulis, tapi
-               sudah dicoba jalan), akhiri dengan:
-               <agent_done>ringkasan singkat apa yang sudah dibuat + cara pakai</agent_done>
-            5. Kalau butuh klarifikasi dari user (mis. goal ambigu), akhiri dengan:
-               <needs_clarification>pertanyaan spesifik ke user</needs_clarification>
-            6. JANGAN ulangi aksi yang sama jika gagal — coba pendekatan berbeda.
-            7. Untuk command apt-get, SELALU pakai flag -y (mis. apt-get install -y nodejs).
+            1. Tentukan LANGKAH BERIKUTNYA. Pakai tool calls (write_file, read_file,
+               run_command, dll) — bukan bash blocks di chat.
+            2. Setiap aksi dieksekusi otomatis; hasil balik di iterasi berikutnya.
+            3. Kalau error, analisa dan perbaiki — jangan ulangi perintah gagal yang sama.
+            4. Selesai + teruji → <agent_done>ringkasan + cara pakai</agent_done>
+            5. Goal ambigu → <needs_clarification>pertanyaan</needs_clarification>
+            6. apt-get SELALU -y + DEBIAN_FRONTEND=noninteractive.
 
             Lanjutkan dengan tool call berikutnya.
         """.trimIndent()

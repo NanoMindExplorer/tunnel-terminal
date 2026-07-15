@@ -500,10 +500,14 @@ class AIAgent(
          * FIX: Build shellInfo section berdasarkan sessionType (local/ssh/ubuntu). */
         val shellInfo = when (sessionType) {
             "ubuntu" -> """
-                Anda berjalan di Ubuntu 24.04 via proot (bash shell).
-                Command tersedia: apt, apt-get, git, python3, nodejs, npm, vim, htop, curl, wget, build-essential, semua tool Ubuntu.
-                sudo tidak perlu (proot sudah fake-root dengan -0).
-                Untuk install package: DEBIAN_FRONTEND=noninteractive apt-get install -y <package>
+                Anda berjalan di Ubuntu 24.04 via proot (bash shell), cwd default /root.
+                Command: apt-get, dpkg, git, python3, pip, curl, wget, gcc, make, dll (setelah di-install).
+                sudo TIDAK perlu (proot fake-root -0).
+                Install: DEBIAN_FRONTEND=noninteractive apt-get install -y <package>
+                write_file path relatif → /root/ di guest (bukan workspace Android).
+                Setelah write_file "x.py", jalankan: python3 x.py  (di /root).
+                JANGAN pakai path /data/data/... di run_command.
+                systemctl TIDAK ada — jalankan servis dengan & .
             """.trimIndent()
             "ssh" -> """
                 Anda berjalan di remote SSH shell. Tanya user distribusi apa yang dipakai sebelum rekomendasi package manager (apt/yum/pacman/dnf).
@@ -575,22 +579,15 @@ class AIAgent(
             (mis. contoh sintaks, potongan untuk didiskusikan) — BUKAN untuk file
             lengkap yang diminta user sebagai deliverable.
 
-            ## PENYIMPANAN FILE (Wave-19)
+            ## PENYIMPANAN FILE (Wave-19/23)
 
-            DEFAULT: path relatif → workspace privat app (selalu bisa ditulis).
+            Bergantung TAB AKTIF:
+            - Local: path relatif → workspace Android.
+            - Ubuntu: path relatif → /root di guest proot (file langsung terlihat bash Ubuntu).
+            - Download perangkat: setup-storage + path absolut SAF / prefix storage/.
 
-            Folder perangkat (Download/Documents) SETELAH user jalankan setup-storage:
-            - write_file/read_file ke path absolut di tree yang di-grant BERHASIL via SAF
-              (contoh: /storage/emulated/0/Download/x.txt).
-            - Prefix "storage/" = path relatif di dalam folder SAF.
-            - Shell mentah (cat > /sdcard/...) HANYA jalan jika user juga storage-grant-all
-              (MANAGE_EXTERNAL_STORAGE). Tanpa itu, JANGAN andalkan shell path ke /sdcard.
-            - Alternatif tanpa path absolut: tulis di workspace lalu minta user
-              `storage-save-download file.txt` atau `storage-put file.txt`.
-
-            Kalau user minta simpan ke Download dan setup-storage sudah ada:
-            gunakan write_file dengan path absolut Download (atau storage/nama.txt).
-            Kalau setup-storage BELUM, buat di workspace + instruksikan setup-storage.
+            Saat Ubuntu aktif, SELALU tulis file kerja ke path relatif atau /root/…
+            lalu jalankan dengan run_command di tab Ubuntu yang sama.
 
             ## MARKDOWN
 
