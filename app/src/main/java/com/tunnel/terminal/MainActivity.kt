@@ -1487,15 +1487,26 @@ class MainActivity : ComponentActivity() {
         stopService(Intent(this, TerminalForegroundService::class.java))
     }
 
+    /**
+     * Wave-20: True when terminal should own volume-key history navigation.
+     * Must exclude AI drawer / palette / SSH dialog — previously only file overlays
+     * were checked so Vol± still stole media volume while chat was open.
+     */
+    private var aiDrawerOpen by mutableStateOf(false)
+
+    private fun isTerminalHistoryFocused(): Boolean =
+        editingFile == null &&
+            !showFileExplorer &&
+            !showWorkspaceDrawer &&
+            !showCommandPalette &&
+            !showSshDialog &&
+            !aiDrawerOpen &&
+            renameTabId == null
+
     /* ─── Volume key command history navigation (per-active-executor) ─── */
-    /* Phase 20: Only intercept volume keys when terminal is focused
-     * (not when AI drawer / editor / file explorer is open).
-     * Old code intercepted ALL volume keys globally — annoying when
-     * user wants to adjust media volume in other contexts. */
+    /* Phase 20 + Wave-20: Only intercept when terminal is the focused surface. */
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
-        /* Only intercept volume keys when no overlay is open. */
-        val terminalFocused = editingFile == null && !showFileExplorer && !showWorkspaceDrawer
-        if (terminalFocused) {
+        if (isTerminalHistoryFocused()) {
             if (keyCode == KeyEvent.KEYCODE_VOLUME_UP) {
                 navigateHistory(forward = false); return true
             } else if (keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) {
@@ -1506,8 +1517,7 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onKeyUp(keyCode: Int, event: KeyEvent?): Boolean {
-        val terminalFocused = editingFile == null && !showFileExplorer && !showWorkspaceDrawer
-        if (terminalFocused) {
+        if (isTerminalHistoryFocused()) {
             if (keyCode == KeyEvent.KEYCODE_VOLUME_UP || keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) return true
         }
         return super.onKeyUp(keyCode, event)
@@ -1578,6 +1588,10 @@ class MainActivity : ComponentActivity() {
     fun TerminalApp() {
         val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
         val scope = rememberCoroutineScope()
+        /* Wave-20: Keep Activity-level flag so volume keys release while AI drawer open. */
+        LaunchedEffect(drawerState.currentValue) {
+            aiDrawerOpen = drawerState.currentValue == DrawerValue.Open
+        }
 
         var isCtrlActive by remember { mutableStateOf(false) }
         var isAltActive by remember { mutableStateOf(false) }
@@ -2327,7 +2341,14 @@ class MainActivity : ComponentActivity() {
                 }
                 /* Wave-12: One-shot control chips (^C etc.) — not sticky CTRL. */
                 when (key) {
-                    "^C" -> { activeExecutor.writeRaw(3.toChar().toString()); return }
+                    "^C" -> {
+                        /* Wave-20: Interrupt also drops our IME/line trackers so next type is clean. */
+                        activeExecutor.writeRaw(3.toChar().toString())
+                        activeExecutor.currentCommandBuffer = ""
+                        activeExecutor.historyIndex = -1
+                        clearImeLine()
+                        return
+                    }
                     "^D" -> { activeExecutor.writeRaw(4.toChar().toString()); return }
                     "^Z" -> { activeExecutor.writeRaw(26.toChar().toString()); return }
                     "^L" -> {
@@ -2361,7 +2382,7 @@ class MainActivity : ComponentActivity() {
                     "↓" -> emu.cursorKey('B')
                     "→" -> emu.cursorKey('C')
                     "←" -> emu.cursorKey('D')
-                    /* Wave-14: xterm HOME/END (works better with bash/readline). */
+                    /* Wave-14/20: xterm application keypad HOME/END (readline / bash). */
                     "HOME" -> "\u001B[1~"
                     "END" -> "\u001B[4~"
                     "PGUP" -> "\u001B[5~"
@@ -2448,15 +2469,16 @@ class MainActivity : ComponentActivity() {
                  * storage-status, storage-reset, ssh-reset-hostkeys, system-info, open,
                  * dan systemctl intercept di tab Ubuntu. Branch `else` (command shell biasa)
                  * TIDAK perlu di-backspace karena karakternya memang harus sampai ke shell. */
+                /* Wave-20: bare command names (no args) must also be local-only. */
                 val isLocalOnly = cmd == "help" || cmd == "clear" || cmd == "setup-storage" ||
                     cmd == "storage-status" || cmd == "storage-reset" ||
                     cmd == "storage-grant-all" ||
                     cmd == "storage-ls" || cmd.startsWith("storage-ls ") ||
-                    cmd.startsWith("storage-put ") ||
-                    cmd.startsWith("storage-get ") ||
-                    cmd.startsWith("storage-save-download ") ||
-                    cmd.startsWith("storage-write ") ||
-                    cmd.startsWith("storage-rm ") ||
+                    cmd == "storage-put" || cmd.startsWith("storage-put ") ||
+                    cmd == "storage-get" || cmd.startsWith("storage-get ") ||
+                    cmd == "storage-save-download" || cmd.startsWith("storage-save-download ") ||
+                    cmd == "storage-write" || cmd.startsWith("storage-write ") ||
+                    cmd == "storage-rm" || cmd.startsWith("storage-rm ") ||
                     cmd == "ssh-reset-hostkeys" || cmd == "ssh-list-hostkeys" ||
                     cmd == "system-info" ||
                     cmd == "history" || cmd == "history-clear" ||
@@ -2466,9 +2488,10 @@ class MainActivity : ComponentActivity() {
                     cmd == "bookmark" || cmd.startsWith("bookmark ") ||
                     cmd == "find" || cmd.startsWith("find ") ||
                     cmd == "open-url" || cmd.startsWith("open-url ") ||
-                    cmd.startsWith("open ") ||
+                    cmd == "open" || cmd.startsWith("open ") ||
                     (activeExecutor.sessionType == "ubuntu" &&
-                        (cmd.startsWith("systemctl ") || cmd.startsWith("service ")))
+                        (cmd == "systemctl" || cmd.startsWith("systemctl ") ||
+                            cmd == "service" || cmd.startsWith("service ")))
 
                 if (isLocalOnly && cmd.isNotEmpty()) {
                     /* Kirim backspace sebanyak panjang cmd untuk hapus dari buffer shell.
@@ -2550,9 +2573,9 @@ class MainActivity : ComponentActivity() {
                         activeExecutor.emulator.process("\n\u001B[36m$out\u001B[0m\n")
                         activeExecutor.triggerScreenUpdate()
                     }
-                    cmd.startsWith("storage-put ") -> {
-                        val rest = cmd.removePrefix("storage-put ").trim()
-                        val parts = rest.split(Regex("\\s+"), limit = 2)
+                    cmd == "storage-put" || cmd.startsWith("storage-put ") -> {
+                        val rest = if (cmd == "storage-put") "" else cmd.removePrefix("storage-put ").trim()
+                        val parts = rest.split(Regex("\\s+"), limit = 2).filter { it.isNotEmpty() }
                         val srcName = parts.getOrNull(0).orEmpty()
                         val dest = parts.getOrNull(1)
                         if (srcName.isBlank()) {
@@ -2574,9 +2597,9 @@ class MainActivity : ComponentActivity() {
                         }
                         activeExecutor.triggerScreenUpdate()
                     }
-                    cmd.startsWith("storage-get ") -> {
-                        val rest = cmd.removePrefix("storage-get ").trim()
-                        val parts = rest.split(Regex("\\s+"), limit = 2)
+                    cmd == "storage-get" || cmd.startsWith("storage-get ") -> {
+                        val rest = if (cmd == "storage-get") "" else cmd.removePrefix("storage-get ").trim()
+                        val parts = rest.split(Regex("\\s+"), limit = 2).filter { it.isNotEmpty() }
                         val remote = parts.getOrNull(0).orEmpty()
                         val localName = parts.getOrNull(1) ?: File(remote).name
                         if (remote.isBlank()) {
@@ -2594,9 +2617,9 @@ class MainActivity : ComponentActivity() {
                         }
                         activeExecutor.triggerScreenUpdate()
                     }
-                    cmd.startsWith("storage-save-download ") -> {
-                        val rest = cmd.removePrefix("storage-save-download ").trim()
-                        val parts = rest.split(Regex("\\s+"), limit = 2)
+                    cmd == "storage-save-download" || cmd.startsWith("storage-save-download ") -> {
+                        val rest = if (cmd == "storage-save-download") "" else cmd.removePrefix("storage-save-download ").trim()
+                        val parts = rest.split(Regex("\\s+"), limit = 2).filter { it.isNotEmpty() }
                         val srcName = parts.getOrNull(0).orEmpty()
                         val displayName = parts.getOrNull(1)
                         if (srcName.isBlank()) {
@@ -2619,9 +2642,9 @@ class MainActivity : ComponentActivity() {
                         }
                         activeExecutor.triggerScreenUpdate()
                     }
-                    cmd.startsWith("storage-write ") -> {
+                    cmd == "storage-write" || cmd.startsWith("storage-write ") -> {
                         /* storage-write <rel-path> <text...> */
-                        val rest = cmd.removePrefix("storage-write ").trim()
+                        val rest = if (cmd == "storage-write") "" else cmd.removePrefix("storage-write ").trim()
                         val sp = rest.indexOf(' ')
                         if (sp <= 0) {
                             activeExecutor.emulator.process(
@@ -2640,8 +2663,8 @@ class MainActivity : ComponentActivity() {
                         }
                         activeExecutor.triggerScreenUpdate()
                     }
-                    cmd.startsWith("storage-rm ") -> {
-                        val rel = cmd.removePrefix("storage-rm ").trim()
+                    cmd == "storage-rm" || cmd.startsWith("storage-rm ") -> {
+                        val rel = if (cmd == "storage-rm") "" else cmd.removePrefix("storage-rm ").trim()
                         if (rel.isBlank()) {
                             activeExecutor.emulator.process(
                                 "\n\u001B[31mUsage: storage-rm <path-relatif-SAF>\u001B[0m\n"
@@ -2766,9 +2789,16 @@ class MainActivity : ComponentActivity() {
                         activeExecutor.emulator.process("\u001B[36m$msg\u001B[0m\n")
                         activeExecutor.triggerScreenUpdate()
                     }
-                    cmd.startsWith("open ") -> {
-                        val fileName = cmd.removePrefix("open ").trim()
-                        resolveAndOpen(fileName, activeExecutor)
+                    cmd == "open" || cmd.startsWith("open ") -> {
+                        val fileName = if (cmd == "open") "" else cmd.removePrefix("open ").trim()
+                        if (fileName.isBlank()) {
+                            activeExecutor.emulator.process(
+                                "\n\u001B[31mUsage: open <file>\u001B[0m\n"
+                            )
+                            activeExecutor.triggerScreenUpdate()
+                        } else {
+                            resolveAndOpen(fileName, activeExecutor)
+                        }
                     }
                     /* Phase 43 fix (LOW-04): Intercept systemctl/service di tab Ubuntu.
                      * Tampilkan workaround langsung di terminal supaya user tidak perlu
@@ -2979,23 +3009,46 @@ class MainActivity : ComponentActivity() {
 
                 /* Ctrl+key combos (priority). */
                 if (ctrl) {
-                    val ch = when (key) {
-                        Key.C -> 3.toChar()
-                        Key.D -> 4.toChar()
-                        Key.Z -> 26.toChar()
-                        Key.L -> 12.toChar()
-                        Key.A -> 1.toChar()
-                        Key.E -> 5.toChar()
-                        Key.K -> 11.toChar()
-                        Key.U -> 21.toChar()
-                        Key.W -> 23.toChar()
-                        Key.R -> 18.toChar()
-                        Key.X -> 24.toChar()
-                        else -> '\u0000'
-                    }
-                    if (ch != '\u0000') {
-                        activeExecutor.writeRaw(ch.toString())
-                        return true
+                    when (key) {
+                        Key.C -> {
+                            activeExecutor.writeRaw(3.toChar().toString())
+                            activeExecutor.currentCommandBuffer = ""
+                            activeExecutor.historyIndex = -1
+                            clearImeLine()
+                            return true
+                        }
+                        Key.U -> {
+                            activeExecutor.writeRaw(21.toChar().toString())
+                            activeExecutor.currentCommandBuffer = ""
+                            clearImeLine()
+                            return true
+                        }
+                        Key.W -> {
+                            activeExecutor.writeRaw(23.toChar().toString())
+                            val prev = activeExecutor.currentCommandBuffer.trimEnd()
+                            val i = prev.lastIndexOf(' ')
+                            val next = if (i < 0) "" else prev.take(i + 1)
+                            activeExecutor.currentCommandBuffer = next
+                            syncImeLine(next)
+                            return true
+                        }
+                        else -> {
+                            val ch = when (key) {
+                                Key.D -> 4.toChar()
+                                Key.Z -> 26.toChar()
+                                Key.L -> 12.toChar()
+                                Key.A -> 1.toChar()
+                                Key.E -> 5.toChar()
+                                Key.K -> 11.toChar()
+                                Key.R -> 18.toChar()
+                                Key.X -> 24.toChar()
+                                else -> '\u0000'
+                            }
+                            if (ch != '\u0000') {
+                                activeExecutor.writeRaw(ch.toString())
+                                return true
+                            }
+                        }
                     }
                     /* Ctrl+other = consume tapi tidak lakukan apa-apa. */
                     return true
@@ -3049,8 +3102,9 @@ class MainActivity : ComponentActivity() {
                         activeExecutor.writeRaw(activeExecutor.emulator.cursorKey('D')); return true
                     }
                     Key.Escape -> { activeExecutor.writeRaw("\u001B"); return true }
-                    Key.MoveHome -> { activeExecutor.writeRaw("\u001B[H"); return true }
-                    Key.MoveEnd -> { activeExecutor.writeRaw("\u001B[F"); return true }
+                    /* Wave-20: Match ExtraKeys HOME/END (xterm CSI) for bash/readline. */
+                    Key.MoveHome -> { activeExecutor.writeRaw("\u001B[1~"); return true }
+                    Key.MoveEnd -> { activeExecutor.writeRaw("\u001B[4~"); return true }
                     Key.PageUp -> { activeExecutor.writeRaw("\u001B[5~"); return true }
                     Key.PageDown -> { activeExecutor.writeRaw("\u001B[6~"); return true }
                     Key.Delete -> { activeExecutor.writeRaw("\u001B[3~"); return true }

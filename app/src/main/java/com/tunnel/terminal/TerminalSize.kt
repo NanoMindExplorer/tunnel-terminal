@@ -7,9 +7,24 @@ import android.view.WindowManager
 /**
  * Wave-13: Shared initial PTY geometry for local / proot / SSH sessions.
  * Avoids 24×80 first paint then jump when Compose resizes.
+ *
+ * Wave-20: [readPersistedFontSp] so initial rows×cols match zoomed font, not hard-coded 12sp.
  */
 object TerminalSize {
     data class Geometry(val rows: Int, val cols: Int)
+
+    /** Same prefs key as MainActivity / TerminalFontZoom. */
+    fun readPersistedFontSp(context: Context?): Float {
+        if (context == null) return TerminalFontZoom.DEFAULT_SP
+        return try {
+            TerminalFontZoom.snap(
+                context.getSharedPreferences("TunnelUI", Context.MODE_PRIVATE)
+                    .getFloat("fontSize", TerminalFontZoom.DEFAULT_SP)
+            )
+        } catch (_: Exception) {
+            TerminalFontZoom.DEFAULT_SP
+        }
+    }
 
     fun fromDisplay(
         context: Context?,

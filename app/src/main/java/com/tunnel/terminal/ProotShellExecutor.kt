@@ -133,7 +133,8 @@ class ProotShellExecutor(
             }
 
             /* Wave-13: Spawn with display-derived size (was hard-coded 24×80). */
-            val geo = TerminalSize.fromDisplay(bootstrap.appContext, fontSizeSp = 12f)
+            val fontSp = TerminalSize.readPersistedFontSp(bootstrap.appContext)
+            val geo = TerminalSize.fromDisplay(bootstrap.appContext, fontSizeSp = fontSp)
             val outFd = IntArray(1)
             firstByteLatch = CountDownLatch(1)
             val pid = TerminalJni.createSessionExec(

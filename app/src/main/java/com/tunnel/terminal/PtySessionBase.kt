@@ -50,14 +50,35 @@ abstract class PtySessionBase(
     private val _screenDirty = MutableStateFlow(0)
     override val screenDirty: StateFlow<Int> = _screenDirty.asStateFlow()
 
+    /**
+     * Wave-20: Throttle UI refresh to ~30fps BUT always schedule a trailing edge.
+     * OLD BUG: updates inside the 33ms window were dropped entirely — if the last
+     * PTY chunk arrived mid-window, the final prompt/cursor never painted until
+     * another write happened (felt like "missing last line" / frozen prompt).
+     */
     @Volatile
     private var lastScreenDirtyTime: Long = 0
+    private val pendingTrailingDirty = AtomicBoolean(false)
+    private val dirtyHandler by lazy { android.os.Handler(android.os.Looper.getMainLooper()) }
+    private val trailingDirtyRunnable = Runnable {
+        if (pendingTrailingDirty.compareAndSet(true, false)) {
+            lastScreenDirtyTime = System.currentTimeMillis()
+            _screenDirty.value++
+        }
+    }
 
     override fun triggerScreenUpdate() {
         val now = System.currentTimeMillis()
-        if (now - lastScreenDirtyTime >= 33) {
+        val elapsed = now - lastScreenDirtyTime
+        if (elapsed >= 33) {
+            pendingTrailingDirty.set(false)
+            dirtyHandler.removeCallbacks(trailingDirtyRunnable)
             lastScreenDirtyTime = now
             _screenDirty.value++
+        } else {
+            pendingTrailingDirty.set(true)
+            dirtyHandler.removeCallbacks(trailingDirtyRunnable)
+            dirtyHandler.postDelayed(trailingDirtyRunnable, (33 - elapsed).coerceAtLeast(1))
         }
     }
 
@@ -218,6 +239,8 @@ abstract class PtySessionBase(
     override fun destroy() {
         if (!isAlive && masterFd < 0 && childPid < 0 && readThread == null) return
         isAlive = false
+        pendingTrailingDirty.set(false)
+        try { dirtyHandler.removeCallbacks(trailingDirtyRunnable) } catch (_: Exception) {}
 
         try {
             if (fdClosed.compareAndSet(false, true)) {
