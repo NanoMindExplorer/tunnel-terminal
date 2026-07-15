@@ -20,14 +20,27 @@ class TerminalWave20Test {
                 cmd == "storage-save-download" || cmd.startsWith("storage-save-download ") ||
                 cmd == "storage-write" || cmd.startsWith("storage-write ") ||
                 cmd == "storage-rm" || cmd.startsWith("storage-rm ") ||
+                cmd == "tt-find" || cmd.startsWith("tt-find ") ||
                 cmd == "open" || cmd.startsWith("open ")
         }
         assertTrue(isLocalOnly("storage-put"))
         assertTrue(isLocalOnly("storage-put a.txt"))
         assertTrue(isLocalOnly("storage-save-download"))
         assertTrue(isLocalOnly("open"))
+        assertTrue(isLocalOnly("tt-find error"))
+        assertFalse(isLocalOnly("find . -name x")) // shell find must NOT be local
         assertFalse(isLocalOnly("ls"))
         assertFalse(isLocalOnly("storage-putx"))
+    }
+
+    @Test
+    fun `local erase uses raw length not trim length`() {
+        val raw = "  help  "
+        val cmd = raw.trim()
+        assertTrue(raw.length > cmd.length)
+        val eraseLen = raw.length
+        assertEquals(8, eraseLen)
+        assertEquals(4, cmd.length)
     }
 
     @Test

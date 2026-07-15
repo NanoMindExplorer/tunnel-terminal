@@ -1659,7 +1659,22 @@ class MainActivity : ComponentActivity() {
                 /* Navigation. */
                 add(PaletteItem("new_tab", "New tab", "Navigation", Icons.Default.Add, PaletteCategory.NAVIGATION) { lifecycleScope.launch { createNewTab() } })
                 add(PaletteItem("close_tab", "Close current tab", "Navigation", Icons.Default.Close, PaletteCategory.NAVIGATION) { closeTab(activeExecutorId) })
-                add(PaletteItem("toggle_split", "Toggle split pane", "Navigation", Icons.Default.ViewColumn, PaletteCategory.NAVIGATION) { splitMode = !splitMode })
+                add(PaletteItem("toggle_split", "Toggle split pane", "Navigation", Icons.Default.ViewColumn, PaletteCategory.NAVIGATION) {
+                    /* Wave-20: Same create-tab logic as TabBar (was flag-only → empty pane). */
+                    splitMode = !splitMode
+                    if (splitMode) {
+                        val otherTab = shellExecutors.firstOrNull { it.id != activeExecutorId }
+                        if (otherTab != null) {
+                            splitPaneId = otherTab.id
+                        } else {
+                            scope.launch {
+                                createNewTab()
+                                val oldTab = shellExecutors.firstOrNull { it.id != activeExecutorId }
+                                if (oldTab != null) splitPaneId = oldTab.id
+                            }
+                        }
+                    }
+                })
                 add(PaletteItem("toggle_block", "Toggle block mode", "Navigation", Icons.Default.ViewModule, PaletteCategory.NAVIGATION) {
                     blockMode = !blockMode
                     if (blockMode) {
@@ -1686,7 +1701,21 @@ class MainActivity : ComponentActivity() {
                 add(PaletteItem("cmd_ls", "Run: ls -la", "Command", Icons.Default.Terminal, PaletteCategory.COMMAND) { shellExecutors.find { it.id == activeExecutorId }?.executeCommand("ls -la") })
                 add(PaletteItem("cmd_pwd", "Run: pwd", "Command", Icons.Default.Terminal, PaletteCategory.COMMAND) { shellExecutors.find { it.id == activeExecutorId }?.executeCommand("pwd") })
                 add(PaletteItem("cmd_clear", "Run: clear", "Command", Icons.Default.Clear, PaletteCategory.COMMAND) { shellExecutors.find { it.id == activeExecutorId }?.clearScreen() })
-                add(PaletteItem("cmd_help", "Run: help", "Command", Icons.Default.Help, PaletteCategory.COMMAND) { shellExecutors.find { it.id == activeExecutorId }?.executeCommand("help") })
+                add(PaletteItem("cmd_help", "Show built-in help", "Command", Icons.Default.Help, PaletteCategory.COMMAND) {
+                    /* Wave-20: Local help — do NOT shell executeCommand("help") (toybox has no help). */
+                    shellExecutors.find { it.id == activeExecutorId }?.let { exec ->
+                        exec.emulator.process("\u001B[36m${buildHelpText()}\u001B[0m\n")
+                        exec.triggerScreenUpdate()
+                    }
+                })
+                add(PaletteItem("cmd_tt_find", "Search scrollback (tt-find)", "Command", Icons.Default.Search, PaletteCategory.COMMAND) {
+                    shellExecutors.find { it.id == activeExecutorId }?.let { exec ->
+                        exec.emulator.process(
+                            "\u001B[36mUsage: tt-find <query>   (search scrollback; shell find is not intercepted)\u001B[0m\n"
+                        )
+                        exec.triggerScreenUpdate()
+                    }
+                })
                 /* Wave-8: History / export / metrics / permissions. */
                 add(PaletteItem("cmd_history", "Show command history", "Command", Icons.Default.History, PaletteCategory.COMMAND) {
                     shellExecutors.find { it.id == activeExecutorId }?.let { exec ->
@@ -1729,10 +1758,11 @@ class MainActivity : ComponentActivity() {
                 add(PaletteItem("find_scrollback", "Find in scrollback…", "Command", Icons.Default.Search, PaletteCategory.COMMAND) {
                     shellExecutors.find { it.id == activeExecutorId }?.let { exec ->
                         exec.emulator.process(
-                            "\u001B[36mType: find <query>  (e.g. find error)\u001B[0m\n"
+                            "\u001B[36mType: tt-find <query>  (e.g. tt-find error)\n" +
+                                "Shell find is not intercepted.\u001B[0m\n"
                         )
                         exec.triggerScreenUpdate()
-                        insertIntoTerminal("find ")
+                        insertIntoTerminal("tt-find ")
                     }
                 })
                 add(PaletteItem("open_url_from_output", "Open URL from last output", "Command", Icons.Default.Link, PaletteCategory.COMMAND) {
@@ -2446,7 +2476,9 @@ class MainActivity : ComponentActivity() {
             }
 
             fun processInput(input: String) {
-                val cmd = input.trim().replace("\n", "")
+                /* Wave-20: Keep raw line for DEL count (trim shrinks erase → leftover chars on shell). */
+                val rawLine = input.replace("\n", "").replace("\r", "")
+                val cmd = rawLine.trim()
 
                 /* Phase 45 fix Bug #2: Pseudo-command lokal menempel ke command berikutnya.
                  *
@@ -2460,16 +2492,11 @@ class MainActivity : ComponentActivity() {
                  * error "sh: setup-storagels: inaccessible or not found".
                  *
                  * FIX: Sebelum proses pseudo-command lokal, hapus dulu teks itu dari buffer
-                 * baris shell asli dengan mengirim backspace (\u007F) sebanyak panjang cmd.
-                 * Teknik ini valid karena PTY dalam mode "cooked" (default saat menunggu
-                 * prompt) menangani backspace di level kernel: menghapus karakter terakhir
-                 * dari buffer baris internalnya sebelum di-submit.
+                 * baris shell asli dengan mengirim backspace (\u007F) sebanyak panjang baris
+                 * yang benar-benar diketik (rawLine / currentCommandBuffer), bukan trim(cmd).
                  *
-                 * Berlaku untuk SEMUA pseudo-command lokal: help, clear, setup-storage,
-                 * storage-status, storage-reset, ssh-reset-hostkeys, system-info, open,
-                 * dan systemctl intercept di tab Ubuntu. Branch `else` (command shell biasa)
-                 * TIDAK perlu di-backspace karena karakternya memang harus sampai ke shell. */
-                /* Wave-20: bare command names (no args) must also be local-only. */
+                 * Wave-20: `find` is NO LONGER local — use `tt-find` so real shell find works.
+                 */
                 val isLocalOnly = cmd == "help" || cmd == "clear" || cmd == "setup-storage" ||
                     cmd == "storage-status" || cmd == "storage-reset" ||
                     cmd == "storage-grant-all" ||
@@ -2486,17 +2513,19 @@ class MainActivity : ComponentActivity() {
                     cmd == "font-reset" ||
                     cmd == "copy-output" ||
                     cmd == "bookmark" || cmd.startsWith("bookmark ") ||
-                    cmd == "find" || cmd.startsWith("find ") ||
+                    cmd == "tt-find" || cmd.startsWith("tt-find ") ||
+                    cmd == "search-scrollback" || cmd.startsWith("search-scrollback ") ||
                     cmd == "open-url" || cmd.startsWith("open-url ") ||
                     cmd == "open" || cmd.startsWith("open ") ||
                     (activeExecutor.sessionType == "ubuntu" &&
                         (cmd == "systemctl" || cmd.startsWith("systemctl ") ||
                             cmd == "service" || cmd.startsWith("service ")))
 
-                if (isLocalOnly && cmd.isNotEmpty()) {
-                    /* Kirim backspace sebanyak panjang cmd untuk hapus dari buffer shell.
-                     * \u007F = DEL (backspace di terminal). */
-                    repeat(cmd.length) { activeExecutor.writeRaw("\u007F") }
+                if (isLocalOnly && rawLine.isNotEmpty()) {
+                    /* Prefer app line tracker length (matches what was typed into PTY). */
+                    val eraseLen = activeExecutor.currentCommandBuffer.length
+                        .takeIf { it > 0 } ?: rawLine.length
+                    repeat(eraseLen) { activeExecutor.writeRaw("\u007F") }
                 }
 
                 if (cmd.isNotEmpty()) {
@@ -2762,10 +2791,16 @@ class MainActivity : ComponentActivity() {
                             blockManager.completeRunning(msg, CommandBlock.BlockStatus.SUCCESS)
                         }
                     }
-                    cmd == "find" || cmd.startsWith("find ") -> {
-                        val q = cmd.removePrefix("find").trim()
+                    cmd == "tt-find" || cmd.startsWith("tt-find ") ||
+                    cmd == "search-scrollback" || cmd.startsWith("search-scrollback ") -> {
+                        /* Wave-20: Renamed from `find` so shell find/grep pipelines work. */
+                        val q = when {
+                            cmd.startsWith("tt-find") -> cmd.removePrefix("tt-find").trim()
+                            else -> cmd.removePrefix("search-scrollback").trim()
+                        }
                         val msg = if (q.isBlank()) {
-                            "Usage: find <query>   (search scrollback + screen)"
+                            "Usage: tt-find <query>   (search scrollback + screen)\n" +
+                                "Note: shell `find` is not intercepted — use real find for files."
                         } else {
                             val lines = activeExecutor.emulator.exportPlainLines(2000)
                             val hits = ScrollbackSearch.find(lines, q, ignoreCase = true)
@@ -2835,8 +2870,12 @@ class MainActivity : ComponentActivity() {
             fun handleChar(char: Char): String {
                 if (isCtrlActive) {
                     isCtrlActive = false
-                    /* Ctrl+<char> = char code - 'a' + 1 (e.g. Ctrl+C = 3) */
-                    return (char.lowercaseChar() - 'a' + 1).toChar().toString()
+                    /* Wave-20: Only a–z → control codes (digits/symbols were garbage bytes). */
+                    val lower = char.lowercaseChar()
+                    if (lower in 'a'..'z') {
+                        return (lower - 'a' + 1).toChar().toString()
+                    }
+                    return char.toString()
                 }
                 if (isAltActive) {
                     isAltActive = false
@@ -3231,13 +3270,13 @@ class MainActivity : ComponentActivity() {
                             Box(modifier = Modifier.weight(1f)) {
                                 val focusRequester = remember { FocusRequester() }
                                 val keyboardController = LocalSoftwareKeyboardController.current
-                                /* Wave-13: Do NOT clear IME when only re-focusing same tab;
-                                 * clear only when active session id actually changes. */
+                                /* Wave-13/20: On tab change restore IME from that tab's buffer. */
                                 var lastFocusedId by remember { mutableStateOf(-1) }
                                 LaunchedEffect(activeExecutorId) {
-                                    if (lastFocusedId != activeExecutorId && lastFocusedId != -1) {
-                                        imeFieldLast = ""
-                                        imeFieldText = ""
+                                    if (lastFocusedId != activeExecutorId) {
+                                        val buf = shellExecutors.find { it.id == activeExecutorId }
+                                            ?.currentCommandBuffer.orEmpty()
+                                        syncImeLine(buf)
                                     }
                                     lastFocusedId = activeExecutorId
                                     try { focusRequester.requestFocus(); if (!hasPhysicalKeyboard) keyboardController?.show() } catch (_: Exception) {}
@@ -3304,8 +3343,9 @@ class MainActivity : ComponentActivity() {
                             val focusRequester = remember { FocusRequester() }
                             val keyboardController = LocalSoftwareKeyboardController.current
                             LaunchedEffect(activeExecutorId, blockMode) {
-                                imeFieldLast = ""
-                                imeFieldText = ""
+                                val buf = shellExecutors.find { it.id == activeExecutorId }
+                                    ?.currentCommandBuffer.orEmpty()
+                                syncImeLine(buf)
                                 try { focusRequester.requestFocus(); if (!hasPhysicalKeyboard) keyboardController?.show() } catch (_: Exception) {}
                             }
                             BasicTextField(
@@ -3350,14 +3390,14 @@ class MainActivity : ComponentActivity() {
 
                         /* Auto-focus saat tab aktif berubah, agar input langsung ready. */
                         LaunchedEffect(activeExecutorId) {
-                            /* Phase 40 fix (H7): Reset enterHandledByKeyEvent saat pindah tab.
-                             * OLD BUG: flag tidak di-reset → Enter di tab B tidak jalan setelah
-                             * physical keyboard Enter di tab A (flag masih true dari tab A). */
+                            /* Phase 40 fix (H7): Reset enterHandledByKeyEvent saat pindah tab. */
                             enterHandledByKeyEvent = false
-                            /* Wave-11: Drop stale IME buffer when switching tabs so the next
-                             * keystroke is not treated as a replace/delete of another tab. */
-                            imeFieldLast = ""
-                            imeFieldText = ""
+                            /* Wave-20: Restore IME from per-tab buffer — do NOT wipe to "".
+                             * Clearing IME while currentCommandBuffer still holds text desyncs
+                             * next keystroke deltas vs shell line. */
+                            val buf = shellExecutors.find { it.id == activeExecutorId }
+                                ?.currentCommandBuffer.orEmpty()
+                            syncImeLine(buf)
                             try {
                                 focusRequester.requestFocus()
                                 if (!hasPhysicalKeyboard) keyboardController?.show()
@@ -3586,7 +3626,7 @@ class MainActivity : ComponentActivity() {
         - export-output     Export terminal transcript ke filesDir/exports/
         - export-chat       Export percakapan AI
         - copy-output       Salin output terminal ke clipboard
-        - find <query>      Cari teks di scrollback + layar
+        - tt-find <query>   Cari teks di scrollback (shell find tidak di-intercept)
         - open-url [url]    Buka URL http(s) (atau deteksi dari output)
         - bookmark list     Daftar bookmark direktori
         - bookmark add <n> [path]  Simpan bookmark (default: app home)
