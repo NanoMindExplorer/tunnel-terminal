@@ -3648,7 +3648,7 @@ class MainActivity : ComponentActivity() {
                                     "Output terminal kosong",
                                     Toast.LENGTH_SHORT
                                 ).show()
-                                null
+                                null as String?
                             } else {
                                 Toast.makeText(
                                     this@MainActivity,
