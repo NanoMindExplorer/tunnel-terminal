@@ -35,7 +35,9 @@ class AgentTaskRunner(
     private val permissionManager: PermissionManager,
     private val markerExecutor: MarkerExecutor,
     /* Wave-2: MCP tools in agent mode. */
-    private val mcpManager: McpManager? = null
+    private val mcpManager: McpManager? = null,
+    /* Wave-25: AI skills injection for agent loop. */
+    private val skillManager: SkillManager? = null
 ) {
     companion object {
         private const val TAG = "AgentTaskRunner"
@@ -166,12 +168,18 @@ class AgentTaskRunner(
                 session.environmentDescription, pathHint, isUbuntu
             )
             val response = try {
+                val skillsCtx = skillManager?.buildSkillsContext(
+                    sessionType = session.sessionType,
+                    mode = "agent",
+                    userPrompt = goal
+                ).orEmpty()
                 aiAgent.askAIStreaming(
                     settings,
                     listOf(ChatMessage("user", prompt, false)),
                     session.getCleanOutput(),
                     session.sessionType,
-                    session.environmentDescription
+                    session.environmentDescription,
+                    skillsContext = skillsCtx
                 ).toList().joinToString("")
             } catch (e: Exception) {
                 events(AgentEvent.StoppedForSafety("Error memanggil AI: ${e.message}"))

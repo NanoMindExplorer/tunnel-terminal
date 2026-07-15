@@ -101,6 +101,11 @@ class MainActivity : ComponentActivity() {
 
     private lateinit var snippetManager: SnippetManager
     private val snippetsState = mutableStateListOf<Snippet>()
+    /** Wave-25: AI Skills manager + live list for Skills tab. */
+    private lateinit var skillManager: SkillManager
+    private val skillsState = mutableStateListOf<AiSkill>()
+    private var skillsGlobalOn by mutableStateOf(true)
+    private var skillsMaxChars by mutableStateOf(SkillManager.DEFAULT_MAX_CHARS)
 
     /** Shared command buffer for the currently focused tab's input line.
      * Phase 19.5: Moved to ShellExecutor (per-tab). These kept for backward-compat
@@ -330,6 +335,11 @@ class MainActivity : ComponentActivity() {
 
         snippetManager = SnippetManager(this)
         snippetsState.addAll(snippetManager.snippets)
+        skillManager = SkillManager(this)
+        skillsState.clear()
+        skillsState.addAll(skillManager.skills)
+        skillsGlobalOn = skillManager.globalEnabled
+        skillsMaxChars = skillManager.maxInjectChars
         storageManager = StorageManager(this)
         workspaceManager = WorkspaceManager(this)
         workspaceSessions.addAll(workspaceManager.sessions)
@@ -354,7 +364,9 @@ class MainActivity : ComponentActivity() {
         aiAgent.setMcpManager(mcpManager)
         agentWorkflowManager = AgentWorkflowManager(this)
         /* Phase 47 (Bagian 2) + Wave-2: AgentTaskRunner with MCP support. */
-        agentTaskRunner = AgentTaskRunner(aiAgent, toolExecutor, permissionManager, markerExecutor, mcpManager)
+        agentTaskRunner = AgentTaskRunner(
+            aiAgent, toolExecutor, permissionManager, markerExecutor, mcpManager, skillManager
+        )
         /* Phase 50 fix (B-5): Init ProjectContext for AI awareness. */
         projectContext = ProjectContext(this)
         voiceInputManager = VoiceInputManager(this)
@@ -1191,6 +1203,14 @@ class MainActivity : ComponentActivity() {
         snippetsState.clear(); snippetsState.addAll(snippetManager.snippets)
     }
 
+    /** Wave-25: Refresh Compose skill list from SkillManager. */
+    private fun refreshSkillsState() {
+        skillsState.clear()
+        skillsState.addAll(skillManager.skills)
+        skillsGlobalOn = skillManager.globalEnabled
+        skillsMaxChars = skillManager.maxInjectChars
+    }
+
     private suspend fun createNewTab() {
         val newExecutor = ShellExecutor(themeHolder, this)
         /* Phase 24.5: Add to list BEFORE start() agar Compose bisa observe.
@@ -1755,6 +1775,9 @@ class MainActivity : ComponentActivity() {
                 })
                 /* Settings. */
                 add(PaletteItem("open_settings", "Open AI Settings", "Setting", Icons.Default.Settings, PaletteCategory.SETTING) {
+                    openAiPanel(3)
+                })
+                add(PaletteItem("open_skills", "Open AI Skills", "AI", Icons.Default.Psychology, PaletteCategory.AI) {
                     openAiPanel(2)
                 })
                 add(PaletteItem("open_file_explorer", "Open File Explorer", "Setting", Icons.Default.Folder, PaletteCategory.SETTING) { showFileExplorer = true })
@@ -3634,6 +3657,42 @@ class MainActivity : ComponentActivity() {
                                 ).show()
                                 "```\n$out\n```\n"
                             }
+                        },
+                        /* Wave-25: AI Skills CRUD + settings */
+                        skills = skillsState.toList(),
+                        skillsGlobalEnabled = skillsGlobalOn,
+                        skillsMaxChars = skillsMaxChars,
+                        onSkillsGlobalEnabled = {
+                            skillManager.globalEnabled = it
+                            skillsGlobalOn = it
+                        },
+                        onSkillsMaxChars = {
+                            skillManager.maxInjectChars = it
+                            skillsMaxChars = skillManager.maxInjectChars
+                        },
+                        onSkillAdd = { name, desc, content, scopes, prio, kws ->
+                            skillManager.add(
+                                name, desc, content, scopes, prio,
+                                kws.split(',').map { it.trim() }.filter { it.isNotEmpty() }
+                            )
+                            refreshSkillsState()
+                        },
+                        onSkillUpdate = { skill ->
+                            skillManager.update(skill)
+                            refreshSkillsState()
+                        },
+                        onSkillDelete = { id ->
+                            skillManager.remove(id)
+                            refreshSkillsState()
+                        },
+                        onSkillToggle = { id, en ->
+                            skillManager.setEnabled(id, en)
+                            refreshSkillsState()
+                        },
+                        onSkillsRestoreBuiltIns = {
+                            skillManager.restoreBuiltIns()
+                            refreshSkillsState()
+                            Toast.makeText(this@MainActivity, "Built-in skills di-restore", Toast.LENGTH_SHORT).show()
                         }
                     )
                 }
@@ -3993,6 +4052,11 @@ class MainActivity : ComponentActivity() {
             } else {
                 toolExecutor.workspaceRootFile()
             }
+            val skillsCtx = skillManager.buildSkillsContext(
+                sessionType = sessionType,
+                mode = "chat",
+                userPrompt = cleanPrompt
+            )
             aiAgent.askAIStreaming(
                 aiSettings, chatMessages.toList(), fullContext,
                 sessionType,
@@ -4000,7 +4064,9 @@ class MainActivity : ComponentActivity() {
                 /* Phase 50 fix (B-5): Inject project context (git, manifests, file tree). */
                 projectContext.buildContext(projectRoot, sessionType),
                 /* Phase 58 fix (§4.6): Inject task plan (imun dari cap 20 pesan). */
-                taskPlanManager.renderForSystemPrompt()
+                taskPlanManager.renderForSystemPrompt(),
+                /* Wave-25: Active user/built-in skills for this session. */
+                skillsContext = skillsCtx
             ).collect { delta ->
                 if (abortedWithError != null) return@collect  /* skip further chunks */
                 if (firstChunk) {
