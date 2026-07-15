@@ -3611,7 +3611,30 @@ class MainActivity : ComponentActivity() {
                             autoPilotJob?.cancel()
                         },
                         initialTab = chatInitialTab,
-                        sidePanelMode = true
+                        sidePanelMode = true,
+                        /* Wave-24: Insert last terminal output into chat (>_ button). */
+                        onGetTerminalSnippet = {
+                            val out = shellExecutors.find { it.id == activeExecutorId }
+                                ?.getCleanOutput()
+                                ?.takeLast(2500)
+                                ?.trim()
+                                .orEmpty()
+                            if (out.isBlank()) {
+                                Toast.makeText(
+                                    this@MainActivity,
+                                    "Output terminal kosong",
+                                    Toast.LENGTH_SHORT
+                                ).show()
+                                null
+                            } else {
+                                Toast.makeText(
+                                    this@MainActivity,
+                                    "Output terminal ditempel (${out.length} char)",
+                                    Toast.LENGTH_SHORT
+                                ).show()
+                                "```\n$out\n```\n"
+                            }
+                        }
                     )
                 }
             }

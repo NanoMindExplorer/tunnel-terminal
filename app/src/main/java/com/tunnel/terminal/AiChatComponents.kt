@@ -308,3 +308,56 @@ fun rememberCopyToClipboard(): (String) -> Unit {
         }
     }
 }
+
+/**
+ * Wave-24: Read clipboard text for pasting into AI chat / Agent fields.
+ * Returns null if empty; shows toast with reason.
+ */
+@Composable
+fun rememberPasteFromClipboard(): () -> String? {
+    val clipboard = LocalClipboardManager.current
+    val context = LocalContext.current
+    return {
+        val text = clipboard.getText()?.text
+        when {
+            text.isNullOrEmpty() -> {
+                Toast.makeText(context, "Clipboard kosong", Toast.LENGTH_SHORT).show()
+                null
+            }
+            else -> {
+                Toast.makeText(
+                    context,
+                    "Ditempel ${text.length} karakter",
+                    Toast.LENGTH_SHORT
+                ).show()
+                text
+            }
+        }
+    }
+}
+
+/**
+ * Wave-24: Compact paste control for AI chat / agent inputs.
+ * Native long-press paste often fails in nested side panels — explicit button is reliable.
+ */
+@Composable
+fun AiPasteButton(
+    theme: TerminalTheme,
+    enabled: Boolean = true,
+    onPaste: (String) -> Unit
+) {
+    val paste = rememberPasteFromClipboard()
+    Button(
+        onClick = {
+            paste()?.let { onPaste(it) }
+        },
+        enabled = enabled,
+        colors = ButtonDefaults.buttonColors(
+            containerColor = theme.uiSurface,
+            disabledContainerColor = theme.uiSurface.copy(alpha = 0.4f)
+        ),
+        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp)
+    ) {
+        Text("📋", fontSize = 14.sp)
+    }
+}

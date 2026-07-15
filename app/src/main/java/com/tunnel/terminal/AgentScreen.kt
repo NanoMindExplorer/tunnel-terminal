@@ -14,9 +14,13 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
@@ -39,11 +43,20 @@ fun AgentScreen(
     onDismiss: () -> Unit,
     onAnswerClarification: ((answer: String) -> Unit)? = null
 ) {
-    var goalText by remember { mutableStateOf("") }
+    var goalValue by remember { mutableStateOf(TextFieldValue("")) }
     var useUbuntu by remember { mutableStateOf(true) }
-    var clarifyAnswer by remember { mutableStateOf("") }
+    var clarifyValue by remember { mutableStateOf(TextFieldValue("")) }
     val emptyScroll = rememberScrollState()
     val listState = rememberLazyListState()
+    val goalFocus = remember { FocusRequester() }
+
+    fun insertInto(field: TextFieldValue, chunk: String): TextFieldValue {
+        val start = field.selection.min.coerceIn(0, field.text.length)
+        val end = field.selection.max.coerceIn(0, field.text.length)
+        val newText = field.text.replaceRange(start, end, chunk)
+        val caret = (start + chunk.length).coerceAtMost(newText.length)
+        return TextFieldValue(text = newText, selection = TextRange(caret))
+    }
 
     /* Wave-17: Auto-scroll event LazyColumn when near bottom. */
     LaunchedEffect(events.size) {
@@ -109,37 +122,52 @@ fun AgentScreen(
         text = {
             Column(modifier = Modifier.fillMaxSize()) {
                 if (!isRunning) {
-                    OutlinedTextField(
-                        value = goalText,
-                        onValueChange = { goalText = it },
-                        label = {
-                            Text(
-                                "Goal — deskripsikan tugas",
-                                color = theme.uiTextMuted,
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.Top,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        OutlinedTextField(
+                            value = goalValue,
+                            onValueChange = { goalValue = it },
+                            label = {
+                                Text(
+                                    "Goal — ketik / tempel tugas",
+                                    color = theme.uiTextMuted,
+                                    fontFamily = FontFamily.Monospace,
+                                    fontSize = 11.sp
+                                )
+                            },
+                            placeholder = {
+                                Text(
+                                    "Mis: Buat CLI Python factorial, compile dan test",
+                                    color = theme.uiTextMuted,
+                                    fontSize = 11.sp,
+                                    fontFamily = FontFamily.Monospace
+                                )
+                            },
+                            modifier = Modifier
+                                .weight(1f)
+                                .heightIn(min = 88.dp)
+                                .focusRequester(goalFocus),
+                            minLines = 3,
+                            maxLines = 8,
+                            textStyle = androidx.compose.ui.text.TextStyle(
+                                color = theme.uiText,
                                 fontFamily = FontFamily.Monospace,
-                                fontSize = 11.sp
+                                fontSize = 12.sp
+                            ),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = theme.uiAccent,
+                                unfocusedBorderColor = theme.uiSurface,
+                                cursorColor = theme.uiAccent
                             )
-                        },
-                        placeholder = {
-                            Text(
-                                "Mis: Buat CLI Python factorial, compile dan test",
-                                color = theme.uiTextMuted,
-                                fontSize = 11.sp,
-                                fontFamily = FontFamily.Monospace
-                            )
-                        },
-                        modifier = Modifier.fillMaxWidth().height(88.dp),
-                        textStyle = androidx.compose.ui.text.TextStyle(
-                            color = theme.uiText,
-                            fontFamily = FontFamily.Monospace,
-                            fontSize = 12.sp
-                        ),
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = theme.uiAccent,
-                            unfocusedBorderColor = theme.uiSurface,
-                            cursorColor = theme.uiAccent
                         )
-                    )
+                        AiPasteButton(theme = theme) { pasted ->
+                            goalValue = insertInto(goalValue, pasted)
+                            try { goalFocus.requestFocus() } catch (_: Exception) {}
+                        }
+                    }
                     Spacer(modifier = Modifier.height(8.dp))
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text("Environment: ", color = theme.uiTextMuted, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
@@ -188,48 +216,54 @@ fun AgentScreen(
                         }
                     }
                     Spacer(modifier = Modifier.height(6.dp))
-                    OutlinedTextField(
-                        value = clarifyAnswer,
-                        onValueChange = { clarifyAnswer = it },
-                        label = {
-                            Text("Jawaban Anda", color = theme.uiTextMuted, fontFamily = FontFamily.Monospace, fontSize = 11.sp)
-                        },
-                        modifier = Modifier.fillMaxWidth().height(64.dp),
-                        textStyle = androidx.compose.ui.text.TextStyle(
-                            color = theme.uiText,
-                            fontFamily = FontFamily.Monospace,
-                            fontSize = 12.sp
-                        ),
-                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-                        keyboardActions = KeyboardActions(
-                            onSend = {
-                                val a = clarifyAnswer.trim()
-                                if (a.isNotBlank()) {
-                                    onAnswerClarification?.invoke(a)
-                                    clarifyAnswer = ""
-                                }
-                            }
-                        ),
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = theme.uiAccent,
-                            unfocusedBorderColor = theme.uiSurface,
-                            cursorColor = theme.uiAccent
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.Top,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        OutlinedTextField(
+                            value = clarifyValue,
+                            onValueChange = { clarifyValue = it },
+                            label = {
+                                Text(
+                                    "Jawaban Anda (bisa tempel 📋)",
+                                    color = theme.uiTextMuted,
+                                    fontFamily = FontFamily.Monospace,
+                                    fontSize = 11.sp
+                                )
+                            },
+                            modifier = Modifier.weight(1f).heightIn(min = 64.dp),
+                            minLines = 2,
+                            maxLines = 5,
+                            textStyle = androidx.compose.ui.text.TextStyle(
+                                color = theme.uiText,
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 12.sp
+                            ),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = theme.uiAccent,
+                                unfocusedBorderColor = theme.uiSurface,
+                                cursorColor = theme.uiAccent
+                            )
                         )
-                    )
+                        AiPasteButton(theme = theme) { pasted ->
+                            clarifyValue = insertInto(clarifyValue, pasted)
+                        }
+                    }
                     Spacer(modifier = Modifier.height(6.dp))
                     TextButton(
                         onClick = {
-                            val a = clarifyAnswer.trim()
+                            val a = clarifyValue.text.trim()
                             if (a.isNotBlank()) {
                                 onAnswerClarification?.invoke(a)
-                                clarifyAnswer = ""
+                                clarifyValue = TextFieldValue("")
                             }
                         },
-                        enabled = clarifyAnswer.isNotBlank() && onAnswerClarification != null
+                        enabled = clarifyValue.text.isNotBlank() && onAnswerClarification != null
                     ) {
                         Text(
                             "▶ Lanjut dengan jawaban",
-                            color = if (clarifyAnswer.isNotBlank()) theme.uiAccent else theme.uiTextMuted,
+                            color = if (clarifyValue.text.isNotBlank()) theme.uiAccent else theme.uiTextMuted,
                             fontFamily = FontFamily.Monospace
                         )
                     }
@@ -291,12 +325,12 @@ fun AgentScreen(
                     }
                 } else {
                     TextButton(
-                        onClick = { onStart(goalText.trim(), useUbuntu) },
-                        enabled = goalText.isNotBlank()
+                        onClick = { onStart(goalValue.text.trim(), useUbuntu) },
+                        enabled = goalValue.text.isNotBlank()
                     ) {
                         Text(
                             "▶ Start",
-                            color = if (goalText.isNotBlank()) theme.uiAccent else theme.uiTextMuted,
+                            color = if (goalValue.text.isNotBlank()) theme.uiAccent else theme.uiTextMuted,
                             fontFamily = FontFamily.Monospace
                         )
                     }
