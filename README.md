@@ -3,12 +3,12 @@
 **Tunnel Terminal** adalah terminal Android AI-native yang merubah cara developer bekerja di perangkat mobile. Menggabungkan mesin C/C++ NDK (Pseudo-Terminal asli) dengan AI Copilot multi-provider, terminal berbasis blok, command palette, tool calling, **lingkungan Linux Ubuntu asli via proot (tanpa root)**, dan banyak lagi.
 
 ![Architecture](https://img.shields.io/badge/Architecture-NDK%20%2B%20Jetpack%20Compose-purple)
-![AI](https://img.shields.io/badge/AI-Multi%20Provider%20%2B%20Vision%20%2B%20MCP%20%2B%20Tools-cyan)
+![AI](https://img.shields.io/badge/AI-Skills%20%2B%20Copilot%20%2B%20Agent%20%2B%20MCP-cyan)
 ![Linux](https://img.shields.io/badge/Linux-Ubuntu%2024.04%20via%20proot-orange)
-![Version](https://img.shields.io/badge/version-8.1.1-blue)
+![Version](https://img.shields.io/badge/version-8.4.0-blue)
 ![Kotlin](https://img.shields.io/badge/Kotlin-2.0.21-7F52FF)
 ![AGP](https://img.shields.io/badge/AGP-8.5.2-orange)
-![Tests](https://img.shields.io/badge/tests-14%20files-green)
+![Tests](https://img.shields.io/badge/tests-25%20files-green)
 ![Stability](https://img.shields.io/badge/stability-production-green)
 
 ## Quick Links
@@ -40,8 +40,9 @@ Terminal Android konvensional hanya menampilkan teks dan mengeksekusi command. T
 - **Checkpointing/Undo** (Phase 50) — AI edit file disimpan snapshot-nya; satu tap undo
 - **Project Context** (Phase 50) — git branch + manifests + file tree auto-injected ke AI prompt
 - **EncryptedSharedPreferences** (Phase 41) — API key AES256-GCM encrypted at rest
-- **Wave 10-17 UX polish** — bookmarks, safe paste, DECCKM, ExtraKeys, scrollback search, font zoom, AI chat UX
-- **14 test files** — TerminalEmulator, AiToolCall, Permission, Wave utils, history/url, chat export, bookmarks, IME, terminal polish, scrollback select, find/url/mouse, Unicode, font zoom
+- **Wave 10-25 UX + AI polish** — bookmarks, safe paste, ExtraKeys, font zoom, AI side panel, storage SAF, Ubuntu download, AI Skills CRUD
+- **AI Skills** — custom instruction packs (scope always/chat/agent/local/ubuntu/ssh), inject ke semua jalur AI
+- **25 test files** — emulator, tools, IME, layout, selection, Ubuntu paths, skills, storage commands
 
 ## Fitur Utama (Ringkas)
 
@@ -82,11 +83,13 @@ Terminal Android konvensional hanya menampilkan teks dan mengeksekusi command. T
 | 33 | **Project Context** (Phase 50) | **git branch + 10 manifest types + file tree auto-injected ke AI prompt** |
 | 34 | **Scrollback buffer** (Phase 49) | **2000-line ring buffer, LazyColumn virtualized (Wave 15), Unicode code-points** |
 | 35 | **EncryptedSharedPreferences** (Phase 41) | **API key + SSH creds + MCP keys AES256-GCM encrypted at rest** |
-| 36 | **Automated tests** (Phase 51+) | **14 test files (03-16): TerminalEmulator, AiToolCall, Permission, Wave utils, dll** |
-| 37 | **Wave 10-17 UX polish** | **Bookmarks, safe paste, DECCKM, ExtraKeys, scrollback search/find, font zoom, AI chat UX** |
-| 38 | **Anthropic Native API** (Wave 5) | **Claude via Messages API (`apiStyle: anthropic`), bukan hanya OpenAI-compat** |
-| 39 | **HTTPS enforcement** (Phase 60) | **Reject HTTP untuk provider eksternal (kecuali localhost Ollama/LM Studio)** |
-| 40 | **Wide char support** (Wave 15) | **Unicode code-points + combining marks, CJK width 2, emoji width 2** |
+| 36 | **Automated tests** (Phase 51+) | **25 test files (03–25): emulator, tools, IME, selection, Ubuntu, skills** |
+| 37 | **Wave 10-25 UX + AI** | **Bookmarks, ExtraKeys, side panel AI, SAF storage, Ubuntu download, Skills** |
+| 38 | **Anthropic Native API** (Wave 5) | **Claude via Messages API (`apiStyle: anthropic`)** |
+| 39 | **AI Skills** (Wave 25) | **CRUD skill, scope, keyword trigger, inject chat/agent/all sessions** |
+| 40 | **AI side panel** (Wave 21) | **Chat/Flow/Skill/Set di kanan — terminal tetap terlihat** |
+| 41 | **Device storage** (Wave 19) | **SAF + MediaStore Download + storage-* commands** |
+| 42 | **Ubuntu AI paths** (Wave 23) | **write_file → /root guest; Agent cd /root; bind /mnt/workspace** |
 
 ## Built-in Commands
 
@@ -115,13 +118,23 @@ Terminal Android konvensional hanya menampilkan teks dan mengeksekusi command. T
 
 **UX Wave 14/20:** `tt-find <query>` di scrollback (shell `find` tidak di-intercept), `open-url` / Open URL chip, mouse wheel + mode 1000/1006, restart session **tanpa hapus history**, ExtraKeys F1–F4 + `^A`/`^E`.
 
-**UX Wave 21:** AI Copilot sebagai **panel kanan** (Chat / Flow / Settings) — tidak menutupi terminal; bisa lihat AI menulis ke terminal sambil chat terbuka.
+**UX Wave 15–16:** LazyColumn virtualized scrollback, Unicode, ExtraKeys compact, font zoom pinch fix (v8.0.x).
 
-**UX Wave 15 (v8.0):** LazyColumn virtualized scrollback (hingga 2000 baris), Unicode code-point + combining marks, ExtraKeys compact (toggle ▴/▾).
+**UX Wave 17–18:** AI chat UX + terminal display (line metrics, IME wipe guard) (v8.1.x).
 
-**UX Wave 16:** Fix pinch-zoom font (gesture-local size, snap 0.5sp, range 8–28sp), ExtraKeys `A+`/`A−`, palette zoom, debounce persist.
+**UX Wave 19:** Storage nyata ke Download/Documents (SAF DocumentFile + MediaStore + `storage-*`).
 
-**UX Wave 17:** AI chat nyaman — Stop stream, bubble + Copy/Retry, empty chips, Auto-Pilot progress, Agent scroll/pause, API key mask, max tokens, FAB AI.
+**UX Wave 20–20b:** Terminal polish (dirty trail, HOME/END, volume focus) + **seleksi text akurat** (layoutInfo hit-test) (v8.2.x).
+
+**UX Wave 21:** AI Copilot **panel kanan** (Chat / Flow / Skill / Set) — terminal kiri tetap terlihat (v8.3.0).
+
+**UX Wave 22:** Ubuntu rootfs download di **IO thread**, multi-mirror, resume, extract fallback (v8.3.1).
+
+**UX Wave 23:** AI/Agent/path sinkron dengan Ubuntu (`/root`, bind workspace) (v8.3.2).
+
+**UX Wave 24:** Paste di kolom chat AI + Agent (📋), multi-line, snippet `>_` output terminal (v8.3.3).
+
+**UX Wave 25:** **AI Skills** — tambah/edit/hapus, scope, keyword, inject ke chat & agent (v8.4.0).
 
 ## 🐧 Linux Environment (Ubuntu via proot)
 
@@ -143,9 +156,10 @@ PTY layer yang sudah teruji (`native-lib.cpp` → `forkpty()`) **tidak diubah**.
 
 1. Tap tombol 🐧 di TabBar, atau buka Command Palette (Ctrl+K) → "Ubuntu (Linux Environment)"
 2. Pertama kali: dialog instalasi muncul → tap **Install**
-3. App menyalin binary `proot` dari assets, download Ubuntu Base rootfs (~30–60MB) dari `cdimage.ubuntu.com`, ekstrak ke `filesDir/linux/ubuntu/`, setup DNS
-4. Setelah selesai, tab Ubuntu terbuka — langsung bisa `apt update && apt install git`
-5. Untuk uninstall (bebaskan storage): Command Palette → "Manage Linux Environment" → Uninstall
+3. App menyalin binary `proot` dari assets, download Ubuntu Base rootfs (~29MB) dari `cdimage.ubuntu.com` (multi-URL + resume + SHA256), ekstrak ke `filesDir/linux/ubuntu/`, setup DNS
+4. Setelah selesai, tab Ubuntu terbuka — `DEBIAN_FRONTEND=noninteractive apt-get update && apt-get install -y git`
+5. AI di tab Ubuntu: `write_file` → guest `/root/…`; workspace Android di `/mnt/workspace`
+6. Uninstall: Command Palette → "Manage Linux Environment" → Uninstall
 
 ### Skenario penggunaan
 
@@ -179,7 +193,11 @@ Membutuhkan: Android Studio Koala+ (AGP 8.5.2), Android SDK 34, NDK 25.1.8937393
 ./gradlew assembleFullRelease
 # Output: app/build/outputs/apk/full/release/app-full-release.apk
 
-# Run unit tests (14 test files)
+# Full debug (flavor full + proot)
+./gradlew assembleFullDebug
+# Output: app/build/outputs/apk/full/debug/*.apk
+
+# Run unit tests
 ./gradlew testFullDebugUnitTest
 ```
 
@@ -287,48 +305,50 @@ Tanpa binary ini, app tetap jalan normal untuk semua fitur lain (local shell, SS
 | **Wave 12-13** | **Terminal max polish (paste, DECCKM, ExtraKeys, scroll, render), scrollback select/copy, key-repeat, split activate, PTY size (v7.7.0-v7.8.0)** |
 | **Wave 14** | **Find scrollback, open-url, mouse/wheel, reconnect keep history (v7.9.0)** |
 | **Wave 15-16** | **LazyColumn virtualized scrollback, Unicode code-points, compact ExtraKeys, font zoom pinch fix (v8.0.0-v8.0.1)** |
-| **Wave 17** | **AI chat, Auto-Pilot, and Agent UX polish (v8.1.0)** |
+| **Wave 17** | **AI chat, Auto-Pilot, Agent UX polish (v8.1.0)** |
+| **Wave 18** | **Terminal display: line metrics, no clip, IME wipe guard (v8.1.1)** |
+| **Wave 19** | **Device storage SAF + MediaStore Download + storage-* (v8.2.0)** |
+| **Wave 20–20b** | **Terminal polish + accurate text selection hit-test (v8.2.x)** |
+| **Wave 21** | **AI side panel kanan — Chat/Flow/Skill/Set (v8.3.0)** |
+| **Wave 22** | **Ubuntu download IO thread + multi-mirror + resume (v8.3.1)** |
+| **Wave 23** | **AI/Agent path integration with Ubuntu proot (v8.3.2)** |
+| **Wave 24** | **Paste di chat AI & Agent + terminal snippet (v8.3.3)** |
+| **Wave 25** | **AI Skills system — CRUD + inject all AI paths (v8.4.0)** |
 
-**Total: 161 commits, ~18,800 baris code, 55 Kotlin files + 1 C++ file + 14 test files**
+**Total: 60+ Kotlin sources + NDK + 25 unit test files · version 8.4.0 (versionCode 61)**
 
-## Release v8.1.0
+## Release v8.4.0
 
-Release v8.1.0 adalah **major release** yang menggabungkan 17 waves development (Wave 1-17) di atas Phase 60. Total **161 commits, ~18,800 baris code, 55 Kotlin files + 1 C++ file + 14 test files**.
+Release **v8.4.0** menggabungkan Wave 18–25 di atas v8.1.x: storage perangkat, terminal polish, AI side panel, Ubuntu download/AI path, paste chat, dan **AI Skills**.
 
-### Highlights v8.1.0
+### Highlights v8.4.0
 
-- **Anthropic Native API** (Wave 5) — Claude via Messages API, bukan hanya OpenAI-compat
-- **PtySessionBase** (Wave 5) — shared PTY session core untuk local + proot
-- **Persistent command history** (Wave 8) — survive app restart, shared for autocomplete
-- **Chat + transcript export** (Wave 8-9) — export AI chat ke txt, terminal output ke txt
-- **URL validator** (Wave 8) — auto-prepend https://, reject HTTP untuk non-localhost
-- **Bookmarks** (Wave 10) — `bookmark add/list/go/remove`, quick cd
-- **Tab rename** (Wave 10) — long-press tab untuk rename label
-- **Safe paste** (Wave 12) — bracketed paste mode, flatten newlines, 64KB cap
-- **DECCKM** (Wave 12) — application cursor keys untuk vim/less
-- **ExtraKeys** (Wave 12-14) — `^C ^D ^Z ^L ^U ^W` + F1-F12 + `^A`/`^E` + `A+`/`A−`
-- **Scrollback select/copy** (Wave 13) — select dari scrollback, copy ke clipboard
-- **Find scrollback** (Wave 14/20) — `tt-find <query>` search di scrollback (shell find bebas)
-- **Open URL** (Wave 14) — detect http(s) URL di output, open external browser
-- **Mouse wheel** (Wave 14) — mode 1000/1006 (SGR), scroll terminal
-- **Reconnect keep history** (Wave 14) — restart session tanpa hapus scrollback
-- **LazyColumn virtualized** (Wave 15) — render 2000 scrollback rows tanpa lag
-- **Unicode code-points** (Wave 15) — combining marks, CJK width 2, emoji width 2
-- **Font zoom fix** (Wave 16) — pinch-zoom gesture-local, 0.5sp snap, range 8-28sp
-- **AI chat UX** (Wave 17) — Stop stream, bubble + Copy/Retry, empty chips, Auto-Pilot progress, Agent scroll/pause, API key mask, max tokens, FAB AI
-- **14 test files** — TerminalEmulator, AiToolCall, Permission, Wave utils (06-16)
+- **AI Skills** — skill custom + built-in; scope always/chat/agent/local/ubuntu/ssh; keyword trigger; budget inject
+- **AI side panel** — Chat | Flow | Skill | Set di kanan; terminal kiri tetap terlihat saat AI bekerja
+- **Paste chat** — tombol 📋 + multi-line; `>_` tempel output terminal ke chat
+- **Device storage** — `setup-storage`, `storage-ls/put/get/write`, `storage-save-download` (Download publik)
+- **Text selection** — long-press/drag hit-test akurat (LazyList layoutInfo)
+- **Ubuntu install** — download di IO thread (bukan Main), multi-URL, Range resume, SHA256, extract fallback
+- **Ubuntu AI** — `write_file` → `/root/…`; Agent `cd /root`; bind `/mnt/workspace`
+- **Terminal polish** — dirty trailing-edge, HOME/END xterm, volume keys tidak curi media di drawer
+
+### AI Skills (cara pakai)
+
+1. Buka panel AI → tab **Skill**
+2. **+ Skill** atau edit built-in (Ubuntu Expert, Safety, dll.)
+3. Set **scope** (mis. hanya `ubuntu` + `chat`) dan opsional **keywords**
+4. Chat / Agent otomatis inject skill yang cocok ke system prompt
 
 ### Backlog Status
 
-| ID | Item | Status | Phase |
-|---|---|---|---|
-| B-1 | Native API tool-calling | ✅ DONE | 59 |
-| B-4 | Checkpointing/Undo | ✅ DONE | 50 |
-| B-5 | Project Context Awareness | ✅ DONE | 50 |
-| C-2 | AGP + Kotlin upgrade | ✅ DONE | 59 |
-| C-5 | Automated tests | ✅ DONE | 51+ (14 files) |
+| ID | Item | Status |
+|---|---|---|
+| B-1 | Native API tool-calling | ✅ |
+| B-4 / B-5 | Checkpoint + Project Context | ✅ |
+| C-2 / C-5 | AGP/Kotlin + unit tests | ✅ |
+| Wave 19–25 | Storage, selection, side panel, Ubuntu, paste, skills | ✅ |
 
-Lihat [GitHub Release v8.1.0](https://github.com/NanoMindExplorer/tunnel-terminal/releases/tag/v8.1.0) untuk changelog lengkap.
+Lihat [GitHub Releases](https://github.com/NanoMindExplorer/tunnel-terminal/releases) untuk APK terbaru.
 
 ## Credits
 
