@@ -113,7 +113,7 @@ Terminal Android konvensional hanya menampilkan teks dan mengeksekusi command. T
 
 **UX Wave 13:** select/copy dari scrollback, ExtraKeys key-repeat (panah/BKSP), split pane tap-to-activate, ukuran PTY awal dari display (local/Ubuntu/SSH).
 
-**UX Wave 14:** `find <query>` di scrollback, `open-url` / Open URL chip, mouse wheel + mode 1000/1006, restart session **tanpa hapus history**, ExtraKeys F1–F4 + `^A`/`^E`.
+**UX Wave 14/20:** `tt-find <query>` di scrollback (shell `find` tidak di-intercept), `open-url` / Open URL chip, mouse wheel + mode 1000/1006, restart session **tanpa hapus history**, ExtraKeys F1–F4 + `^A`/`^E`.
 
 **UX Wave 15 (v8.0):** LazyColumn virtualized scrollback (hingga 2000 baris), Unicode code-point + combining marks, ExtraKeys compact (toggle ▴/▾).
 
@@ -306,7 +306,7 @@ Release v8.1.0 adalah **major release** yang menggabungkan 17 waves development 
 - **DECCKM** (Wave 12) — application cursor keys untuk vim/less
 - **ExtraKeys** (Wave 12-14) — `^C ^D ^Z ^L ^U ^W` + F1-F12 + `^A`/`^E` + `A+`/`A−`
 - **Scrollback select/copy** (Wave 13) — select dari scrollback, copy ke clipboard
-- **Find scrollback** (Wave 14) — `find <query>` search di scrollback
+- **Find scrollback** (Wave 14/20) — `tt-find <query>` search di scrollback (shell find bebas)
 - **Open URL** (Wave 14) — detect http(s) URL di output, open external browser
 - **Mouse wheel** (Wave 14) — mode 1000/1006 (SGR), scroll terminal
 - **Reconnect keep history** (Wave 14) — restart session tanpa hapus scrollback
