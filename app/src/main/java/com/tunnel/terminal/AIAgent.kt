@@ -211,7 +211,9 @@ class AIAgent(
         sessionType: String = "local",
         environmentDescription: String = "",
         projectContext: String = "",
-        taskPlan: String = ""
+        taskPlan: String = "",
+        /* Wave-25: User AI skills markdown block. */
+        skillsContext: String = ""
     ): Flow<String> = callbackFlow {
         if (!isConfigured(settings)) {
             trySend(configErrorMessage(settings))
@@ -233,13 +235,15 @@ class AIAgent(
                 buildAnthropicRequestBody(
                     settings, conversation, terminalContext, streaming = true,
                     sessionType = sessionType, environmentDescription = environmentDescription,
-                    projectContext = projectContext, taskPlan = taskPlan
+                    projectContext = projectContext, taskPlan = taskPlan,
+                    skillsContext = skillsContext
                 )
             } else {
                 buildRequestBody(
                     settings, conversation, terminalContext, streaming = true,
                     sessionType = sessionType, environmentDescription = environmentDescription,
-                    projectContext = projectContext, taskPlan = taskPlan
+                    projectContext = projectContext, taskPlan = taskPlan,
+                    skillsContext = skillsContext
                 )
             }
             requestChars = requestBody.length
@@ -489,7 +493,8 @@ class AIAgent(
         sessionType: String = "local",
         environmentDescription: String = "",
         projectContext: String = "",
-        taskPlan: String = ""
+        taskPlan: String = "",
+        skillsContext: String = ""
     ): String {
         /* Phase 40 fix (H2+H3): System prompt yang session-aware.
          * OLD BUGS:
@@ -642,10 +647,15 @@ class AIAgent(
              * supaya AI tahu struktur project tanpa user perlu @mention manual.
              * Append terminal context as additional system message if present. */
             val cleanContext = stripAnsi(terminalContext).take(1500)
-            if (cleanContext.isNotBlank() || environmentDescription.isNotBlank() || projectContext.isNotBlank() || taskPlan.isNotBlank()) {
+            if (cleanContext.isNotBlank() || environmentDescription.isNotBlank() ||
+                projectContext.isNotBlank() || taskPlan.isNotBlank() || skillsContext.isNotBlank()
+            ) {
                 val contextParts = mutableListOf<String>()
                 if (environmentDescription.isNotBlank()) {
                     contextParts.add("Lingkungan terminal aktif: $environmentDescription")
+                }
+                if (skillsContext.isNotBlank()) {
+                    contextParts.add(skillsContext)
                 }
                 if (projectContext.isNotBlank()) {
                     contextParts.add(projectContext)
@@ -736,12 +746,13 @@ class AIAgent(
         sessionType: String,
         environmentDescription: String,
         projectContext: String,
-        taskPlan: String
+        taskPlan: String,
+        skillsContext: String = ""
     ): String {
         /* Reuse system prompt construction via OpenAI builder's shell section logic. */
         val openAiBody = JSONObject(buildRequestBody(
             settings, conversation, terminalContext, streaming,
-            sessionType, environmentDescription, projectContext, taskPlan
+            sessionType, environmentDescription, projectContext, taskPlan, skillsContext
         ))
         val messagesIn = openAiBody.getJSONArray("messages")
         val systemParts = mutableListOf<String>()

@@ -1067,16 +1067,28 @@ fun AIChatPanel(
     /** Wave-21: Compact chrome for right-side panel (terminal stays visible left). */
     sidePanelMode: Boolean = false,
     /** Wave-24: Optional paste of last terminal clean output into chat. */
-    onGetTerminalSnippet: (() -> String)? = null
+    onGetTerminalSnippet: (() -> String)? = null,
+    /* Wave-25: AI Skills */
+    skills: List<AiSkill> = emptyList(),
+    skillsGlobalEnabled: Boolean = true,
+    skillsMaxChars: Int = SkillManager.DEFAULT_MAX_CHARS,
+    onSkillsGlobalEnabled: (Boolean) -> Unit = {},
+    onSkillsMaxChars: (Int) -> Unit = {},
+    onSkillAdd: (String, String, String, Set<String>, Int, String) -> Unit = { _, _, _, _, _, _ -> },
+    onSkillUpdate: (AiSkill) -> Unit = {},
+    onSkillDelete: (Long) -> Unit = {},
+    onSkillToggle: (Long, Boolean) -> Unit = { _, _ -> },
+    onSkillsRestoreBuiltIns: () -> Unit = {}
 ) {
     /* Wave-24: TextFieldValue keeps cursor/selection so paste inserts at caret, not only append. */
     var inputValue by remember { mutableStateOf(TextFieldValue("")) }
-    var selectedTab by remember { mutableStateOf(initialTab.coerceIn(0, 2)) }
+    /* Wave-25: 0=Chat 1=Flow 2=Skills 3=Settings */
+    var selectedTab by remember { mutableStateOf(initialTab.coerceIn(0, 3)) }
     val chatFocus = remember { FocusRequester() }
     val keyboardController = LocalSoftwareKeyboardController.current
     /* Re-apply deep-link tab when parent opens panel on a specific tab. */
     LaunchedEffect(initialTab) {
-        selectedTab = initialTab.coerceIn(0, 2)
+        selectedTab = initialTab.coerceIn(0, 3)
     }
     /* Focus chat field when Chat tab is shown (side panel open). */
     LaunchedEffect(selectedTab, sidePanelMode) {
@@ -1271,7 +1283,7 @@ fun AIChatPanel(
             }
         }
 
-        /* Modern segmented tabs. */
+        /* Wave-25: Chat | Flow | Skills | Set */
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -1280,9 +1292,10 @@ fun AIChatPanel(
                 .padding(3.dp),
             horizontalArrangement = Arrangement.spacedBy(2.dp)
         ) {
-            listOf("Chat", "Flow", "Set").forEachIndexed { idx, label ->
-                val full = listOf("Chat", "Workflows", "Settings")[idx]
-                val shown = if (sidePanelMode) label else full
+            val shortTabs = listOf("Chat", "Flow", "Skill", "Set")
+            val fullTabs = listOf("Chat", "Workflows", "Skills", "Settings")
+            shortTabs.forEachIndexed { idx, label ->
+                val shown = if (sidePanelMode) label else fullTabs[idx]
                 Box(
                     modifier = Modifier
                         .weight(1f)
@@ -1297,7 +1310,7 @@ fun AIChatPanel(
                     Text(
                         shown,
                         color = if (selectedTab == idx) Color.White else theme.uiText,
-                        fontSize = if (sidePanelMode) 11.sp else 13.sp,
+                        fontSize = if (sidePanelMode) 10.sp else 12.sp,
                         fontFamily = FontFamily.Monospace,
                         fontWeight = if (selectedTab == idx) FontWeight.Bold else FontWeight.Normal
                     )
@@ -1330,7 +1343,7 @@ fun AIChatPanel(
                                 needsApiKey = settings.apiKey.isBlank() &&
                                     !settings.baseUrl.contains("localhost", ignoreCase = true) &&
                                     !settings.baseUrl.contains("127.0.0.1"),
-                                onOpenSettings = { selectedTab = 2 },
+                                onOpenSettings = { selectedTab = 3 },
                                 onSuggestion = { tip ->
                                     inputValue = TextFieldValue(
                                         text = tip,
@@ -1534,6 +1547,24 @@ fun AIChatPanel(
                         Text("Kirim", fontSize = 12.sp)
                     }
                 }
+            }
+        } else if (selectedTab == 2) {
+            /* ─── Wave-25: Skills Tab ─── */
+            Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+                SkillsPanel(
+                    theme = theme,
+                    skills = skills,
+                    globalEnabled = skillsGlobalEnabled,
+                    maxInjectChars = skillsMaxChars,
+                    onGlobalEnabledChange = onSkillsGlobalEnabled,
+                    onMaxCharsChange = onSkillsMaxChars,
+                    onAdd = onSkillAdd,
+                    onUpdate = onSkillUpdate,
+                    onDelete = onSkillDelete,
+                    onToggle = onSkillToggle,
+                    onRestoreBuiltIns = onSkillsRestoreBuiltIns,
+                    compact = sidePanelMode
+                )
             }
         } else if (selectedTab == 1) {
             /* ─── Workflows Tab ─── */
