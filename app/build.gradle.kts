@@ -23,9 +23,9 @@ android {
         // Phase 52: Agent Mode audit fixes (Bug #1 approval dialog, Bug #2 success detection, Bug #3 Stop cancel)
         // Phase 58: TaskPlanManager (plan/act/observe/verify) + SFTP for SSH file I/O
         // Phase 59: Native API tool-calling (B-1) + AGP/Kotlin upgrade (C-2)
-        /* Wave 20: terminal polish — dirty trailing edge, HOME/END, volume focus, font size PTY. */
-        versionCode = 55
-        versionName = "8.2.1"
+        /* Wave 20b: accurate terminal selection hit-test (layoutInfo, not drifted metrics). */
+        versionCode = 56
+        versionName = "8.2.2"
 
         /* Phase 40 fix (M10): Restrict ke arm64-v8a saja — proot binary di assets
          * hanya arm64. Tanpa abiFilters, APK universal akan crash di device x86_64

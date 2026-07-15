@@ -27,6 +27,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.key.*
 import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.PointerType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.layout.onSizeChanged
@@ -457,7 +458,8 @@ fun TerminalScreenView(
     val sbCount = scrollbackSnapshot.size
     val totalContentRows = (sbCount + renderRows).coerceAtLeast(1)
 
-    /* Wave-15: Auto-scroll only when user is already near the bottom. */
+    /* Wave-15: Auto-scroll only when user is already near the bottom.
+     * Wave-20b: Never auto-scroll while selecting — content would slide under the finger. */
     LaunchedEffect(screenDirty, isSelecting, totalContentRows) {
         val lastIndex = (totalContentRows - 1).coerceAtLeast(0)
         val lastVisible = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
@@ -469,6 +471,7 @@ fun TerminalScreenView(
     }
     /* Wave-18/20: After zoom, pin to bottom so last rows are not cut off. */
     LaunchedEffect(gestureFontSp) {
+        if (isSelecting) return@LaunchedEffect
         val lastIndex = (totalContentRows - 1).coerceAtLeast(0)
         listState.scrollToItem(lastIndex)
         showJumpToBottom = false
@@ -479,20 +482,28 @@ fun TerminalScreenView(
         showJumpToBottom = lastVisible < lastIndex - 2 && totalContentRows > renderRows
     }
 
-    /* Phase 53: Selection toolbar helpers. */
+    /* Wave-20b: Map selection cells → screen rect via real LazyList item geometry. */
     fun selectionBoundsToRect(start: Pair<Int, Int>, end: Pair<Int, Int>): androidx.compose.ui.geometry.Rect {
-        val charW = TerminalLayoutMetrics.charWidthPx(gestureFontSp, density)
-        val charH = TerminalLayoutMetrics.lineHeightPx(gestureFontSp, density)
+        val fallbackCharH = TerminalLayoutMetrics.lineHeightPx(gestureFontSp, density)
+        val fallbackCharW = TerminalLayoutMetrics.charWidthPx(gestureFontSp, density)
         val (sRow, sCol) = if (start.first < end.first || (start.first == end.first && start.second <= end.second)) start else end
         val (eRow, eCol) = if (start.first < end.first || (start.first == end.first && start.second <= end.second)) end else start
         val paddingPx = TerminalLayoutMetrics.padPx(density)
-        /* Wave-15: Map content rows to viewport via LazyList first-visible offset. */
-        val firstIdx = listState.firstVisibleItemIndex
-        val firstOff = listState.firstVisibleItemScrollOffset
+        val layoutInfo = listState.layoutInfo
+        val visible = layoutInfo.visibleItemsInfo.map {
+            TerminalSelectionHitTest.VisibleItem(it.index, it.offset, it.size)
+        }
+        val charW = TerminalSelectionHitTest.cellWidthPx(
+            layoutInfo.viewportSize.width, renderCols, fallbackCharW
+        )
+        val topInner = TerminalSelectionHitTest.rowTopInViewport(sRow, visible, fallbackCharH)
+            ?: ((sRow - listState.firstVisibleItemIndex) * fallbackCharH - listState.firstVisibleItemScrollOffset)
+        val bottomInner = TerminalSelectionHitTest.rowBottomInViewport(eRow, visible, fallbackCharH)
+            ?: (topInner + fallbackCharH)
         val left = sCol * charW + paddingPx
-        val top = (sRow - firstIdx) * charH + paddingPx - firstOff
         val right = (eCol + 1) * charW + paddingPx
-        val bottom = (eRow - firstIdx + 1) * charH + paddingPx - firstOff
+        val top = topInner + paddingPx
+        val bottom = bottomInner + paddingPx
         return androidx.compose.ui.geometry.Rect(left, top, right, bottom)
     }
 
@@ -565,46 +576,42 @@ fun TerminalScreenView(
              *
              * Pinch-zoom tetap di pointerInput terpisah (detectTransformGestures)
              * karena pinch butuh 2 pointer — tidak conflict dengan single-pointer gestures. */
-            .pointerInput(Unit) {
+            .pointerInput(renderCols, totalContentRows) {
                 awaitEachGesture {
                     val down = awaitFirstDown(requireUnconsumed = true)
                     val downTime = System.currentTimeMillis()
                     val downPos = down.position
+                    val isMouse = down.type == PointerType.Mouse
                     var isLongPress = false
                     var selectionStarted = false
                     val touchSlop = with(density) { 8.dp.toPx() }
                     val longPressTimeout = 500L
 
-                    /* Helper: convert pixel position → (row, col)
-                     * Phase 53 fix: Use with(density) { fontSize.sp.toPx() } for fontScale support.
-                     * Phase 55 fix: Compensate for scrollState.offset + padding(4.dp) —
-                     * pos.y dari pointerInput adalah relatif ke Composable, tapi text grid
-                     * ada di dalam Column yang di-scroll + di-padding. Tanpa kompensasi,
-                     * seleksi meleset ke atas (terutama saat sudah scroll ke bawah).
-                     *
-                     * Phase 60 fix (audit #3): Comment sebelumnya keliru — bilang "pos.y perlu
-                     * dikurangi scroll offset" padahal kode menambahkan (+ scrollState.value).
-                     * Setelah analisis matematis: kode BENAR, comment SALAH. Saat scroll ke
-                     * bawah, content bergerak ke atas → touch di pos.y yang sama sekarang
-                     * menunjuk ke row yang LEBIH BESAR. Maka adjustedY = pos.y + scrollState.value
-                     * - paddingPx adalah formula yang benar. Comment diperbaiki supaya konsisten.
-                     *
-                     * Added debug log untuk verifikasi di device (kalau masih meleset,
-                     * enable Logcat filter "Selection" untuk lihat nilai aktual). */
-                    val paddingPx = TerminalLayoutMetrics.padPx(density)
+                    /**
+                     * Wave-20b: Convert Box-local pointer → (contentRow, col) using
+                     * LazyListLayoutInfo item offsets (not assumed charH arithmetic).
+                     * Fixes selection landing on the line above the touch.
+                     */
                     fun posToCell(pos: androidx.compose.ui.geometry.Offset): Pair<Int, Int> {
-                        /* Wave-20: Use gestureFontSp so selection matches painted cells while pinching. */
-                        val charW = TerminalLayoutMetrics.charWidthPx(gestureFontSp, density)
-                        val charH = TerminalLayoutMetrics.lineHeightPx(gestureFontSp, density)
-                        /* Wave-15: LazyColumn — content row from firstVisibleItem + local Y. */
-                        val firstIdx = listState.firstVisibleItemIndex
-                        val firstOff = listState.firstVisibleItemScrollOffset
-                        val adjustedY = pos.y - paddingPx + firstOff
-                        val adjustedX = pos.x - paddingPx
-                        val col = (adjustedX / charW).toInt().coerceIn(0, (renderCols - 1).coerceAtLeast(0))
-                        val maxRow = (totalContentRows - 1).coerceAtLeast(0)
-                        val row = (firstIdx + (adjustedY / charH).toInt()).coerceIn(0, maxRow)
-                        return Pair(row, col)
+                        val paddingPx = TerminalLayoutMetrics.padPx(density)
+                        val localX = pos.x - paddingPx
+                        val localY = pos.y - paddingPx
+                        val layoutInfo = listState.layoutInfo
+                        val visible = layoutInfo.visibleItemsInfo.map {
+                            TerminalSelectionHitTest.VisibleItem(it.index, it.offset, it.size)
+                        }
+                        return TerminalSelectionHitTest.posToCell(
+                            localX = localX,
+                            localY = localY,
+                            visibleItems = visible,
+                            viewportWidthPx = layoutInfo.viewportSize.width,
+                            cols = renderCols,
+                            totalRows = totalContentRows,
+                            fallbackCharW = TerminalLayoutMetrics.charWidthPx(gestureFontSp, density),
+                            fallbackCharH = TerminalLayoutMetrics.lineHeightPx(gestureFontSp, density),
+                            firstVisibleIndex = listState.firstVisibleItemIndex,
+                            firstVisibleScrollOffset = listState.firstVisibleItemScrollOffset
+                        )
                     }
 
                     while (true) {
@@ -615,38 +622,44 @@ fun TerminalScreenView(
                         val distance = (change.position - downPos).getDistance()
 
                         when {
-                            /* Finger lifted → gesture selesai */
+                            /* Finger / button lifted → gesture selesai */
                             !change.pressed -> {
                                 if (selectionStarted) {
-                                    /* Phase 53: JANGAN auto-copy — biarkan seleksi persisten,
-                                     * munculkan toolbar COPY/PASTE. */
+                                    /* Phase 53: persistent selection + COPY/PASTE toolbar. */
                                     showSelectionToolbar()
                                 } else if (!isLongPress && distance < touchSlop) {
                                     if (isSelecting) {
-                                        /* Tap di luar seleksi yang sedang aktif → batalkan. */
                                         hideSelectionToolbar()
                                     } else {
-                                        /* Tap → focus keyboard */
                                         onTap()
                                     }
                                 }
                                 change.consume()
                                 break
                             }
-                            /* Long-press detected → start selection */
-                            !selectionStarted && !isLongPress && duration > longPressTimeout && distance < touchSlop -> {
+                            /* Mouse drag: start selection without long-press (desktop UX). */
+                            !selectionStarted && isMouse && distance > touchSlop -> {
+                                selectionStarted = true
+                                isSelecting = true
+                                val start = posToCell(downPos)
+                                selectionStart = start
+                                selectionEnd = posToCell(change.position)
+                                change.consume()
+                            }
+                            /* Touch long-press → start selection (doesn't fight scroll). */
+                            !selectionStarted && !isMouse && !isLongPress &&
+                                duration > longPressTimeout && distance < touchSlop -> {
                                 isLongPress = true
                                 selectionStarted = true
                                 isSelecting = true
-                                val (row, col) = posToCell(downPos)
-                                selectionStart = Pair(row, col)
-                                selectionEnd = Pair(row, col)
+                                val cell = posToCell(downPos)
+                                selectionStart = cell
+                                selectionEnd = cell
                                 change.consume()
                             }
-                            /* Drag while selecting → extend selection */
-                            selectionStarted && distance > touchSlop -> {
-                                val (row, col) = posToCell(change.position)
-                                selectionEnd = Pair(row, col)
+                            /* Drag while selecting → extend selection (live hit-test). */
+                            selectionStarted -> {
+                                selectionEnd = posToCell(change.position)
                                 change.consume()
                             }
                         }
