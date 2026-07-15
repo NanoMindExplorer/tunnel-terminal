@@ -23,6 +23,8 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.key.*
@@ -31,6 +33,7 @@ import androidx.compose.ui.input.pointer.PointerType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.PlatformTextStyle
 import androidx.compose.ui.text.SpanStyle
@@ -40,7 +43,10 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.LineHeightStyle
 import androidx.compose.ui.text.withStyle
@@ -1059,13 +1065,27 @@ fun AIChatPanel(
     onStopAutoPilot: () -> Unit = {},
     initialTab: Int = 0,
     /** Wave-21: Compact chrome for right-side panel (terminal stays visible left). */
-    sidePanelMode: Boolean = false
+    sidePanelMode: Boolean = false,
+    /** Wave-24: Optional paste of last terminal clean output into chat. */
+    onGetTerminalSnippet: (() -> String)? = null
 ) {
-    var inputText by remember { mutableStateOf("") }
+    /* Wave-24: TextFieldValue keeps cursor/selection so paste inserts at caret, not only append. */
+    var inputValue by remember { mutableStateOf(TextFieldValue("")) }
     var selectedTab by remember { mutableStateOf(initialTab.coerceIn(0, 2)) }
+    val chatFocus = remember { FocusRequester() }
+    val keyboardController = LocalSoftwareKeyboardController.current
     /* Re-apply deep-link tab when parent opens panel on a specific tab. */
     LaunchedEffect(initialTab) {
         selectedTab = initialTab.coerceIn(0, 2)
+    }
+    /* Focus chat field when Chat tab is shown (side panel open). */
+    LaunchedEffect(selectedTab, sidePanelMode) {
+        if (selectedTab == 0) {
+            try {
+                chatFocus.requestFocus()
+                if (sidePanelMode) keyboardController?.show()
+            } catch (_: Exception) { /* not yet composed */ }
+        }
     }
     /* Settings sub-tab: 0=AI Provider, 1=Theme, 2=About. */
     var settingsSubTab by remember { mutableStateOf(0) }
@@ -1312,7 +1332,10 @@ fun AIChatPanel(
                                     !settings.baseUrl.contains("127.0.0.1"),
                                 onOpenSettings = { selectedTab = 2 },
                                 onSuggestion = { tip ->
-                                    inputText = tip
+                                    inputValue = TextFieldValue(
+                                        text = tip,
+                                        selection = androidx.compose.ui.text.TextRange(tip.length)
+                                    )
                                 }
                             )
                         }
@@ -1393,56 +1416,106 @@ fun AIChatPanel(
                     modifier = Modifier.padding(horizontal = 16.dp)
                 )
             }
-            /* Wave-17: Multi-line input + Stop while streaming. */
+            /* Wave-17/24: Multi-line input, paste button, caret-aware paste. */
+            fun insertAtCursor(chunk: String) {
+                if (chunk.isEmpty()) return
+                val cur = inputValue
+                val start = cur.selection.min.coerceIn(0, cur.text.length)
+                val end = cur.selection.max.coerceIn(0, cur.text.length)
+                val newText = cur.text.replaceRange(start, end, chunk)
+                val caret = (start + chunk.length).coerceAtMost(newText.length)
+                inputValue = TextFieldValue(
+                    text = newText,
+                    selection = androidx.compose.ui.text.TextRange(caret)
+                )
+            }
+            fun sendChat() {
+                val text = inputValue.text
+                if ((text.isNotEmpty() || pendingImages.isNotEmpty()) && !isProcessingAI && !autoPilotRunning) {
+                    onSendPrompt(text)
+                    inputValue = TextFieldValue("")
+                }
+            }
             Row(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
-                verticalAlignment = Alignment.Bottom
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.Bottom,
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
             ) {
                 Button(
                     onClick = onAttachImage,
                     enabled = !isProcessingAI && !autoPilotRunning,
                     colors = ButtonDefaults.buttonColors(containerColor = theme.uiSurface),
-                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
-                    modifier = Modifier.padding(end = 6.dp)
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp)
                 ) {
                     Text("📎", fontSize = 14.sp)
                 }
+                AiPasteButton(
+                    theme = theme,
+                    enabled = !isProcessingAI && !autoPilotRunning
+                ) { pasted ->
+                    insertAtCursor(pasted)
+                    try { chatFocus.requestFocus() } catch (_: Exception) {}
+                }
+                if (onGetTerminalSnippet != null) {
+                    Button(
+                        onClick = {
+                            val snip = onGetTerminalSnippet.invoke()
+                            if (!snip.isNullOrBlank()) {
+                                insertAtCursor(
+                                    if (inputValue.text.isEmpty()) snip
+                                    else "\n$snip"
+                                )
+                                try { chatFocus.requestFocus() } catch (_: Exception) {}
+                            }
+                        },
+                        enabled = !isProcessingAI && !autoPilotRunning,
+                        colors = ButtonDefaults.buttonColors(containerColor = theme.uiSurface),
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp)
+                    ) {
+                        Text(">_", fontSize = 12.sp, fontFamily = FontFamily.Monospace, color = theme.uiText)
+                    }
+                }
                 OutlinedTextField(
-                    value = inputText,
-                    onValueChange = { inputText = it },
-                    modifier = Modifier.weight(1f),
+                    value = inputValue,
+                    onValueChange = { inputValue = it },
+                    modifier = Modifier
+                        .weight(1f)
+                        .focusRequester(chatFocus),
                     enabled = !isProcessingAI && !autoPilotRunning,
-                    maxLines = 4,
-                    textStyle = TextStyle(color = theme.uiText, fontFamily = FontFamily.Monospace, fontSize = 13.sp),
+                    minLines = 1,
+                    maxLines = 6,
+                    textStyle = TextStyle(
+                        color = theme.uiText,
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 13.sp
+                    ),
                     placeholder = {
                         Text(
                             when {
                                 autoPilotRunning -> "Auto-Pilot berjalan…"
                                 isProcessingAI -> "AI merespons… (Stop untuk batalkan)"
-                                else -> "Tanya AI atau minta tugas…"
+                                else -> "Ketik / tempel (📋) pesan ke AI…"
                             },
                             color = theme.uiTextMuted,
                             fontSize = 12.sp
                         )
                     },
-                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-                    keyboardActions = KeyboardActions(
-                        onSend = {
-                            if ((inputText.isNotEmpty() || pendingImages.isNotEmpty()) && !isProcessingAI && !autoPilotRunning) {
-                                onSendPrompt(inputText)
-                                inputText = ""
-                            }
-                        }
+                    /* Wave-24: Default IME (not Send-only) so multi-line paste + newlines work. */
+                    keyboardOptions = KeyboardOptions(
+                        capitalization = KeyboardCapitalization.Sentences,
+                        keyboardType = KeyboardType.Text,
+                        imeAction = ImeAction.Default
                     ),
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedBorderColor = theme.uiAccent,
                         unfocusedBorderColor = theme.uiSurface,
+                        disabledBorderColor = theme.uiSurface.copy(alpha = 0.5f),
                         cursorColor = theme.uiAccent,
                         focusedTextColor = theme.uiText,
-                        unfocusedTextColor = theme.uiText
+                        unfocusedTextColor = theme.uiText,
+                        disabledTextColor = theme.uiTextMuted
                     )
                 )
-                Spacer(modifier = Modifier.width(6.dp))
                 if (isProcessingAI || autoPilotRunning) {
                     Button(
                         onClick = { if (autoPilotRunning) onStopAutoPilot() else onStopAI() },
@@ -1453,13 +1526,8 @@ fun AIChatPanel(
                     }
                 } else {
                     Button(
-                        onClick = {
-                            if (inputText.isNotEmpty() || pendingImages.isNotEmpty()) {
-                                onSendPrompt(inputText)
-                                inputText = ""
-                            }
-                        },
-                        enabled = inputText.isNotEmpty() || pendingImages.isNotEmpty(),
+                        onClick = { sendChat() },
+                        enabled = inputValue.text.isNotEmpty() || pendingImages.isNotEmpty(),
                         colors = ButtonDefaults.buttonColors(containerColor = theme.uiAccent),
                         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)
                     ) {

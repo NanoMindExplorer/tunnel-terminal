@@ -23,9 +23,9 @@ android {
         // Phase 52: Agent Mode audit fixes (Bug #1 approval dialog, Bug #2 success detection, Bug #3 Stop cancel)
         // Phase 58: TaskPlanManager (plan/act/observe/verify) + SFTP for SSH file I/O
         // Phase 59: Native API tool-calling (B-1) + AGP/Kotlin upgrade (C-2)
-        /* Wave 23: AI/copilot/agent path + cwd integration with Ubuntu proot. */
-        versionCode = 59
-        versionName = "8.3.2"
+        /* Wave 24: AI chat paste + multi-line input; terminal snippet into chat. */
+        versionCode = 60
+        versionName = "8.3.3"
 
         /* Phase 40 fix (M10): Restrict ke arm64-v8a saja — proot binary di assets
          * hanya arm64. Tanpa abiFilters, APK universal akan crash di device x86_64
