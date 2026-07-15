@@ -1066,8 +1066,8 @@ fun AIChatPanel(
     initialTab: Int = 0,
     /** Wave-21: Compact chrome for right-side panel (terminal stays visible left). */
     sidePanelMode: Boolean = false,
-    /** Wave-24: Optional paste of last terminal clean output into chat. */
-    onGetTerminalSnippet: (() -> String)? = null,
+    /** Wave-24: Optional paste of last terminal clean output into chat (null = empty/unavailable). */
+    onGetTerminalSnippet: (() -> String?)? = null,
     /* Wave-25: AI Skills */
     skills: List<AiSkill> = emptyList(),
     skillsGlobalEnabled: Boolean = true,
