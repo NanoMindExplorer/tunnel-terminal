@@ -1057,10 +1057,16 @@ fun AIChatPanel(
     autoPilotTotal: Int = 0,
     autoPilotCommand: String = "",
     onStopAutoPilot: () -> Unit = {},
-    initialTab: Int = 0
+    initialTab: Int = 0,
+    /** Wave-21: Compact chrome for right-side panel (terminal stays visible left). */
+    sidePanelMode: Boolean = false
 ) {
     var inputText by remember { mutableStateOf("") }
     var selectedTab by remember { mutableStateOf(initialTab.coerceIn(0, 2)) }
+    /* Re-apply deep-link tab when parent opens panel on a specific tab. */
+    LaunchedEffect(initialTab) {
+        selectedTab = initialTab.coerceIn(0, 2)
+    }
     /* Settings sub-tab: 0=AI Provider, 1=Theme, 2=About. */
     var settingsSubTab by remember { mutableStateOf(0) }
     /* Wave-17: Separate scroll per tab (was one shared state). */
@@ -1152,72 +1158,129 @@ fun AIChatPanel(
         )
     }
 
-    Column(modifier = Modifier.fillMaxSize().background(theme.uiBg)) {
-        /* Header dengan title + clear chat + close. */
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(theme.uiBg)
+    ) {
+        /* Wave-21: Compact side-panel header + live status (watch AI + terminal together). */
+        val hPad = if (sidePanelMode) 10.dp else 16.dp
+        val vPad = if (sidePanelMode) 8.dp else 12.dp
         Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(theme.uiSurface.copy(alpha = 0.55f))
+                .padding(horizontal = hPad, vertical = vPad),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Column {
-                Text("AI Copilot", color = theme.uiText, fontSize = 18.sp, fontFamily = FontFamily.Monospace)
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    if (sidePanelMode) "AI" else "AI Copilot",
+                    color = theme.uiText,
+                    fontSize = if (sidePanelMode) 14.sp else 18.sp,
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.Bold
+                )
                 Text(
                     when {
                         autoPilotRunning -> "● Auto-Pilot $autoPilotStep/$autoPilotTotal"
-                        isProcessingAI -> "● Streaming…"
+                        isProcessingAI -> "● Menulis / tool call… (lihat terminal ←)"
                         else -> "${messages.size} pesan · ${settings.modelName.ifBlank { settings.providerName }}"
                     },
                     color = when {
                         autoPilotRunning || isProcessingAI -> theme.uiAccent
                         else -> theme.uiTextMuted
                     },
-                    fontSize = 10.sp,
-                    fontFamily = FontFamily.Monospace
+                    fontSize = 9.sp,
+                    fontFamily = FontFamily.Monospace,
+                    maxLines = 2
                 )
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                /* Wave-9: Export chat. */
-                Button(
-                    onClick = { onExportChat() },
-                    enabled = messages.isNotEmpty(),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = theme.uiSurface,
-                        disabledContainerColor = theme.uiSurface.copy(alpha = 0.5f)
-                    ),
-                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
-                ) {
-                    Text("💾", color = theme.uiText, fontSize = 14.sp)
-                }
-                /* Clear chat button. */
-                Button(
-                    onClick = { onClearChat() },
-                    enabled = messages.isNotEmpty() && !isProcessingAI,
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = theme.uiSurface,
-                        disabledContainerColor = theme.uiSurface.copy(alpha = 0.5f)
-                    ),
-                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
-                ) {
-                    Text("🗑", color = theme.uiText, fontSize = 14.sp)
+            Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                if (!sidePanelMode || messages.isNotEmpty()) {
+                    Button(
+                        onClick = { onExportChat() },
+                        enabled = messages.isNotEmpty(),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = theme.uiSurface,
+                            disabledContainerColor = theme.uiSurface.copy(alpha = 0.5f)
+                        ),
+                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)
+                    ) { Text("💾", color = theme.uiText, fontSize = 12.sp) }
+                    Button(
+                        onClick = { onClearChat() },
+                        enabled = messages.isNotEmpty() && !isProcessingAI,
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = theme.uiSurface,
+                            disabledContainerColor = theme.uiSurface.copy(alpha = 0.5f)
+                        ),
+                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)
+                    ) { Text("🗑", color = theme.uiText, fontSize = 12.sp) }
                 }
                 Button(
                     onClick = onClose,
-                    colors = ButtonDefaults.buttonColors(containerColor = theme.uiSurface)
+                    colors = ButtonDefaults.buttonColors(containerColor = theme.uiSurface),
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
                 ) {
-                    Text("X", color = theme.uiText)
+                    Text(if (sidePanelMode) "›" else "X", color = theme.uiText, fontSize = 14.sp)
                 }
             }
         }
-        /* Tab selector. */
-        Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            listOf("Chat", "Workflows", "Settings").forEachIndexed { idx, label ->
-                Button(
-                    onClick = { selectedTab = idx },
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = if (selectedTab == idx) theme.uiAccent else theme.uiSurface
-                    )
+
+        /* Live strip when AI drives the terminal. */
+        if (isProcessingAI || autoPilotRunning) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(theme.uiAccent.copy(alpha = 0.18f))
+                    .padding(horizontal = hPad, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    if (autoPilotRunning) {
+                        "▶ Terminal: $autoPilotCommand".take(80)
+                    } else {
+                        "▶ AI aktif — output muncul di terminal kiri"
+                    },
+                    color = theme.uiAccent,
+                    fontSize = 10.sp,
+                    fontFamily = FontFamily.Monospace,
+                    maxLines = 1
+                )
+            }
+        }
+
+        /* Modern segmented tabs. */
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = hPad, vertical = 6.dp)
+                .background(theme.uiSurface, RoundedCornerShape(8.dp))
+                .padding(3.dp),
+            horizontalArrangement = Arrangement.spacedBy(2.dp)
+        ) {
+            listOf("Chat", "Flow", "Set").forEachIndexed { idx, label ->
+                val full = listOf("Chat", "Workflows", "Settings")[idx]
+                val shown = if (sidePanelMode) label else full
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .background(
+                            if (selectedTab == idx) theme.uiAccent else Color.Transparent,
+                            RoundedCornerShape(6.dp)
+                        )
+                        .clickable { selectedTab = idx }
+                        .padding(vertical = 8.dp),
+                    contentAlignment = Alignment.Center
                 ) {
-                    Text(label, color = theme.uiText)
+                    Text(
+                        shown,
+                        color = if (selectedTab == idx) Color.White else theme.uiText,
+                        fontSize = if (sidePanelMode) 11.sp else 13.sp,
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = if (selectedTab == idx) FontWeight.Bold else FontWeight.Normal
+                    )
                 }
             }
         }

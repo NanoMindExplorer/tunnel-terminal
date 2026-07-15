@@ -115,6 +115,8 @@ Terminal Android konvensional hanya menampilkan teks dan mengeksekusi command. T
 
 **UX Wave 14/20:** `tt-find <query>` di scrollback (shell `find` tidak di-intercept), `open-url` / Open URL chip, mouse wheel + mode 1000/1006, restart session **tanpa hapus history**, ExtraKeys F1–F4 + `^A`/`^E`.
 
+**UX Wave 21:** AI Copilot sebagai **panel kanan** (Chat / Flow / Settings) — tidak menutupi terminal; bisa lihat AI menulis ke terminal sambil chat terbuka.
+
 **UX Wave 15 (v8.0):** LazyColumn virtualized scrollback (hingga 2000 baris), Unicode code-point + combining marks, ExtraKeys compact (toggle ▴/▾).
 
 **UX Wave 16:** Fix pinch-zoom font (gesture-local size, snap 0.5sp, range 8–28sp), ExtraKeys `A+`/`A−`, palette zoom, debounce persist.
