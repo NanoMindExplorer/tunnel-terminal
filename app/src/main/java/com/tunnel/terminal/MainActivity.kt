@@ -38,6 +38,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
@@ -1328,19 +1330,24 @@ class MainActivity : ComponentActivity() {
         ubuntuInstallStage = "Memulai instalasi"
         ubuntuInstallPercent = 0
 
-        /* Phase 60 fix (audit C-5): NonCancellable context supaya download
-         * tidak dibatalkan saat app di-background. Download 29MB butuh waktu
-         * lama di koneksi lambat. lifecycleScope akan cancel coroutine kalau
-         * Activity di-destroy, tapi NonCancellable memastikan install() selesai. */
+        /*
+         * Wave-22 CRITICAL FIX: install() MUST run on Dispatchers.IO.
+         * OLD BUG: withContext(NonCancellable) alone stayed on Main (lifecycleScope).
+         * HttpURLConnection on Main → NetworkOnMainThreadException / ANR / "download always fails".
+         * FIX: Dispatchers.IO + NonCancellable; hop to Main only for Compose state updates.
+         */
+        val mainHandler = android.os.Handler(mainLooper)
         lifecycleScope.launch {
             try {
-                kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
+                withContext(Dispatchers.IO + NonCancellable) {
                     prootBootstrap.install(ProotBootstrap.ProgressListener { stage, percent ->
-                        ubuntuInstallStage = stage
-                        ubuntuInstallPercent = percent
+                        /* Never touch Compose state from the IO thread. */
+                        mainHandler.post {
+                            ubuntuInstallStage = stage
+                            ubuntuInstallPercent = percent
+                        }
                     })
                 }
-                // Sukses — tutup dialog, buka tab Ubuntu.
                 ubuntuInstalling = false
                 showUbuntuInstallDialog = false
                 Toast.makeText(this@MainActivity, "Ubuntu siap digunakan", Toast.LENGTH_SHORT).show()

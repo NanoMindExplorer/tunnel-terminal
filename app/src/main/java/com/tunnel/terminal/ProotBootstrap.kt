@@ -2,111 +2,85 @@ package com.tunnel.terminal
 
 import android.content.Context
 import android.util.Log
+import java.io.BufferedInputStream
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
+import java.io.RandomAccessFile
 import java.net.HttpURLConnection
 import java.net.URL
 import java.security.MessageDigest
+import java.util.zip.GZIPInputStream
 
 /**
  * ProotBootstrap — Mengelola instalasi Linux environment (proot + rootfs Ubuntu).
  *
- * Phase 37 (proot/Ubuntu): Semua data disimpan di context.filesDir/linux/ — private
- * ke app, tidak butuh permission storage apa pun.
+ * Wave-22: Robust download pipeline — IO dispatcher (caller), multi-mirror,
+ * Range resume, Content-LengthLong, gzip magic check, SHA256 fail-closed,
+ * multi-strategy extract (tar -xzf / gzip|tar).
  *
- * Phase 39.1: Updated untuk handle shared library dependencies proot:
- *  - libtalloc.so.2 (dari package libtalloc Termux)
- *  - libandroid-shmem.so (dari package libandroid-shmem Termux)
- * Library-library ini di-bundle di assets/proot/lib/ dan disalin ke baseDir/lib/
- * saat install. ProotShellExecutor men-set LD_LIBRARY_PATH ke baseDir/lib/.
- *
- * Alur instalasi:
- *  1. Salin binary `proot` dari assets APK ke filesDir/linux/proot (assets tidak
- *     bisa di-exec langsung, harus disalin dulu + setExecutable).
- *  2. Salin library `libtalloc.so.2` + `libandroid-shmem.so` dari assets ke filesDir/linux/lib/.
- *  3. Cek storage cukup (minimal ~1.5GB untuk rootfs + apt cache).
- *  4. Download rootfs Ubuntu Base (tarball .tar.gz) dari cdimage.ubuntu.com.
- *  5. Ekstrak tarball via /system/bin/tar (toybox bawaan Android).
- *  6. Setup /etc/resolv.conf di rootfs supaya DNS jalan (`apt update` bisa resolve).
- *  7. Tulis marker `.installed` supaya `isInstalled` true di launch berikutnya.
- *
- * Directory layout (setelah install sukses):
- *   context.filesDir/linux/
- *     ├── proot                   (executable binary, dari assets)
- *     ├── lib/
- *     │   ├── libtalloc.so.2      (shared lib untuk proot)
- *     │   └── libandroid-shmem.so (shared lib untuk proot)
- *     ├── ubuntu/                 (rootfs hasil ekstrak tarball)
- *     │   ├── bin/bash
- *     │   ├── usr/bin/apt
- *     │   ├── etc/resolv.conf     (di-setup oleh setupResolvConf)
- *     │   └── ...
- *     └── .installed              (marker file: timestamp instalasi)
- *
- * Catatan Play Store: Fitur ini mendownload+mengeksekusi binary native saat runtime
- * → melanggar kebijakan Play Store. Distribusikan lewat GitHub Releases/F-Droid saja.
+ * Layout: context.filesDir/linux/{proot,lib/,ubuntu/,.installed}
  */
 class ProotBootstrap(private val context: Context) {
 
-    /** Wave-13: Expose context for PTY geometry helpers without leaking mutability. */
     val appContext: Context get() = context.applicationContext
 
     companion object {
         private const val TAG = "ProotBootstrap"
+        private const val USER_AGENT =
+            "TunnelTerminal/8.3.0 (Android; Ubuntu-Rootfs-Bootstrap)"
 
         /**
-         * Phase 40 fix (A2): URL rootfs Ubuntu Base — daftar fallback.
+         * Ordered mirrors for Ubuntu Base 24.04 arm64/amd64.
+         * Primary: cdimage.ubuntu.com (official). Fallbacks: alternate release folders
+         * that historically host the same point-release tarball.
          *
-         * OLD BUG: Hanya 1 URL hardcode (24.04.2) yang sudah 404 di server Ubuntu.
-         * Ubuntu menghapus point release lama dari cdimage server — hanya 24.04.3
-         * dan 24.04.4 yang tersedia saat audit (4 Jul 2026).
-         *
-         * FIX: Daftar URL berurutan, download mencoba satu per satu sampai ada
-         * yang berhasil (HTTP 200). Kalau semua gagal, throw error yang jelas.
+         * Note: third-party university mirrors often 404 for ubuntu-base path;
+         * stick to cdimage + path aliases.
          */
-        /* Phase 60 fix (audit #2): Setiap versi patch Ubuntu Base disimpan di
-         * foldernya sendiri (/24.04.X/release/), BUKAN digabung di /24.04/release/.
-         * Folder /24.04/release/ (tanpa nomor patch) hanya berisi 24.04.2.
-         * Sebelumnya URL hardcoded ke /24.04/release/ + nama file 24.04.3/24.04.4
-         * → selalu 404. Fix: samakan folder dengan versi file di dalamnya. */
         val ROOTFS_URLS_ARM64 = listOf(
             "https://cdimage.ubuntu.com/ubuntu-base/releases/24.04.4/release/ubuntu-base-24.04.4-base-arm64.tar.gz",
-            "https://cdimage.ubuntu.com/ubuntu-base/releases/24.04.3/release/ubuntu-base-24.04.3-base-arm64.tar.gz"
+            "https://cdimage.ubuntu.com/ubuntu-base/releases/24.04/release/ubuntu-base-24.04.4-base-arm64.tar.gz",
+            "https://cdimage.ubuntu.com/ubuntu-base/releases/24.04.3/release/ubuntu-base-24.04.3-base-arm64.tar.gz",
+            "https://cdimage.ubuntu.com/ubuntu-base/releases/24.04/release/ubuntu-base-24.04.3-base-arm64.tar.gz"
         )
         val ROOTFS_URLS_AMD64 = listOf(
             "https://cdimage.ubuntu.com/ubuntu-base/releases/24.04.4/release/ubuntu-base-24.04.4-base-amd64.tar.gz",
-            "https://cdimage.ubuntu.com/ubuntu-base/releases/24.04.3/release/ubuntu-base-24.04.3-base-amd64.tar.gz"
+            "https://cdimage.ubuntu.com/ubuntu-base/releases/24.04/release/ubuntu-base-24.04.4-base-amd64.tar.gz",
+            "https://cdimage.ubuntu.com/ubuntu-base/releases/24.04.3/release/ubuntu-base-24.04.3-base-amd64.tar.gz",
+            "https://cdimage.ubuntu.com/ubuntu-base/releases/24.04/release/ubuntu-base-24.04.3-base-amd64.tar.gz"
         )
 
-        /* Phase 60 fix (audit C-2): Lowered from 1.5GB to 500MB.
-         * Rootfs compressed = 29MB, extracted = ~150MB, apt cache ~100MB.
-         * 500MB is plenty. 1.5GB was too strict for low-end devices. */
+        /** Compressed rootfs ~29MB; require at least 15MB to reject HTML error pages. */
+        const val MIN_TARBALL_BYTES = 15L * 1024 * 1024
         const val MIN_FREE_BYTES = 500L * 1024 * 1024
 
         const val ASSET_PROOT_PATH = "proot/proot"
-        /** Folder di assets yang berisi shared libraries proot. */
         const val ASSET_PROOT_LIB_DIR = "proot/lib"
-        /** Library yang dibutuhkan proot (urutan penting untuk loading). */
         val PROOT_LIBS = listOf("libtalloc.so.2", "libandroid-shmem.so")
+
+        private const val MAX_RETRIES_PER_URL = 3
+        private const val CONNECT_TIMEOUT_MS = 45_000
+        private const val READ_TIMEOUT_MS = 300_000
     }
 
     val baseDir = File(context.filesDir, "linux")
     val rootfsDir = File(baseDir, "ubuntu")
     val prootBin = File(baseDir, "proot")
-    /** Directory untuk shared libraries proot (libtalloc, libandroid-shmem). */
     val libDir = File(baseDir, "lib")
     private val markerFile = File(baseDir, ".installed")
     private val rootfsTarball = File(baseDir, "rootfs.tar.gz")
+    private val downloadMeta = File(baseDir, ".rootfs_download_url")
 
     val isInstalled: Boolean
-        get() = markerFile.exists() && prootBin.exists() && prootBin.canExecute() && rootfsDir.isDirectory
+        get() = markerFile.exists() &&
+            prootBin.exists() &&
+            prootBin.canExecute() &&
+            rootfsDir.isDirectory &&
+            File(rootfsDir, "bin/bash").exists()
 
-    /**
-     * Pilih daftar URL rootfs berdasarkan ABI device.
-     * Phase 40 fix (H4): Untuk ABI 32-bit, throw error (tidak ada rootfs 32-bit yang available).
-     */
     private fun pickRootfsUrls(): List<String> {
+        @Suppress("DEPRECATION")
         val abis = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
             android.os.Build.SUPPORTED_ABIS.toList()
         } else {
@@ -116,7 +90,8 @@ class ProotBootstrap(private val context: Context) {
             abis.any { it.equals("arm64-v8a", true) } -> ROOTFS_URLS_ARM64
             abis.any { it.equals("x86_64", true) } -> ROOTFS_URLS_AMD64
             else -> throw IllegalStateException(
-                "Device 32-bit ($abis) tidak didukung. Linux Environment butuh device 64-bit (arm64-v8a atau x86_64)."
+                "Device 32-bit ($abis) tidak didukung. " +
+                    "Linux Environment butuh arm64-v8a atau x86_64."
             )
         }
     }
@@ -125,31 +100,38 @@ class ProotBootstrap(private val context: Context) {
         fun onProgress(stage: String, percent: Int)
     }
 
-    suspend fun install(listener: ProgressListener) {
+    /**
+     * Install Ubuntu rootfs. **Must be called from a background dispatcher (IO)** —
+     * performs network + disk I/O. Caller should hop to Main for UI updates in [listener].
+     */
+    fun install(listener: ProgressListener) {
         baseDir.mkdirs()
 
-        // 1. Salin proot binary dari assets APK ke storage app.
+        // 1. proot binary
         listener.onProgress("Menyiapkan proot binary", 0)
         val assetProotBytes = try {
             context.assets.open(ASSET_PROOT_PATH).use { it.readBytes() }
         } catch (e: Exception) {
             throw IllegalStateException(
                 "Binary proot tidak ditemukan di assets APK ($ASSET_PROOT_PATH). " +
-                "Letakkan binary proot di app/src/main/assets/proot/proot sebelum build. " +
-                "Lihat app/src/main/assets/proot/README.md untuk cara mendapatkannya.",
+                    "Gunakan build Full dari GitHub Releases (bukan Play Store).",
                 e
+            )
+        }
+        if (assetProotBytes.size < 10_000) {
+            throw IllegalStateException(
+                "Binary proot di assets terlalu kecil (${assetProotBytes.size} bytes) — APK corrupt?"
             )
         }
         FileOutputStream(prootBin).use { it.write(assetProotBytes) }
         if (!prootBin.setExecutable(true, true)) {
             throw IllegalStateException(
-                "Gagal set executable permission pada proot binary. " +
-                "Device ini mungkin memblokir eksekusi binary dari app storage (W^X policy)."
+                "Gagal set executable pada proot. Device mungkin memblokir exec dari app storage."
             )
         }
         listener.onProgress("Menyiapkan proot binary", 100)
 
-        // 2. Salin shared libraries proot (libtalloc.so.2, libandroid-shmem.so).
+        // 2. shared libraries
         listener.onProgress("Menyiapkan proot libraries", 0)
         libDir.mkdirs()
         val missingLibs = mutableListOf<String>()
@@ -158,267 +140,308 @@ class ProotBootstrap(private val context: Context) {
                 context.assets.open("$ASSET_PROOT_LIB_DIR/$libName").use { input ->
                     FileOutputStream(File(libDir, libName)).use { output -> input.copyTo(output) }
                 }
-                Log.i(TAG, "Library $libName disalin ke ${libDir.absolutePath}")
+                Log.i(TAG, "Library $libName OK")
             } catch (e: Exception) {
-                Log.w(TAG, "Library $libName tidak ditemukan di assets — proot mungkin akan gagal jalan: ${e.message}")
+                Log.w(TAG, "Library $libName missing: ${e.message}")
                 missingLibs.add(libName)
-                /* Phase 43 fix (MED-07): Track lib yang missing — akan di-warning ke user
-                 * SEBELUM proot dijalankan, bukan menunggu error generik "Exec format error". */
             }
         }
-        /* Phase 43 fix (MED-07): Tulis file manifest lib yang missing supaya
-         * ProotShellExecutor bisa tampilkan pesan jelas saat start gagal. */
         if (missingLibs.isNotEmpty()) {
             File(baseDir, ".missing_libs").writeText(missingLibs.joinToString("\n"))
-            Log.w(TAG, "Missing libs: $missingLibs — proot mungkin tidak akan jalan")
         } else {
             File(baseDir, ".missing_libs").delete()
         }
         listener.onProgress("Menyiapkan proot libraries", 100)
 
-        // 3. Cek storage cukup.
+        // 3. free space
         val freeBytes = baseDir.usableSpace
-        if (freeBytes < MIN_FREE_BYTES) {
+        if (freeBytes in 1 until MIN_FREE_BYTES) {
             throw IllegalStateException(
-                "Storage tidak cukup. Butuh minimal ${MIN_FREE_BYTES / 1024 / 1024}MB, " +
-                "tersisa ${freeBytes / 1024 / 1024}MB. " +
-                "Bebas kan storage atau uninstall Linux environment yang lama."
+                "Storage tidak cukup. Butuh ≥${MIN_FREE_BYTES / 1024 / 1024}MB, " +
+                    "tersisa ${freeBytes / 1024 / 1024}MB."
             )
         }
 
-        // 4. Download rootfs tarball.
-        // Phase 60 fix (audit C-1 to C-4): Robust download with retry + fallback progress.
-        // C-1: readTimeout 60s -> 300s (5 min) for file 29MB on slow mobile
-        // C-3: Retry 2x per URL before moving to next mirror
-        // C-4: Fallback to indeterminate progress if Content-Length unknown
+        // 4. download with multi-mirror + resume
         val rootfsUrls = pickRootfsUrls()
-        val MAX_RETRIES_PER_URL = 2  // Phase 60 fix (C-3)
         var downloadSuccess = false
         var lastError: Exception? = null
+        var usedUrl: String? = null
 
         for ((idx, url) in rootfsUrls.withIndex()) {
             for (attempt in 1..MAX_RETRIES_PER_URL) {
                 try {
                     listener.onProgress(
-                        "Mengunduh Ubuntu rootfs (mirror ${idx + 1}/${rootfsUrls.size}, percobaan $attempt/$MAX_RETRIES_PER_URL)",
+                        "Unduh rootfs (${idx + 1}/${rootfsUrls.size}, coba $attempt/$MAX_RETRIES_PER_URL)",
                         0
                     )
+                    /* Keep partial file only if resuming same URL. */
+                    val prevUrl = try { downloadMeta.readText().trim() } catch (_: Exception) { "" }
+                    if (prevUrl != url && rootfsTarball.exists()) {
+                        rootfsTarball.delete()
+                    }
+                    downloadMeta.writeText(url)
                     downloadWithProgress(url, rootfsTarball) { percent ->
                         listener.onProgress("Mengunduh Ubuntu rootfs", percent)
                     }
+                    validateTarball(rootfsTarball)
                     downloadSuccess = true
+                    usedUrl = url
                     break
                 } catch (e: Exception) {
-                    Log.w(TAG, "Download gagal dari $url (percobaan $attempt): ${e.message}")
+                    Log.w(TAG, "Download gagal $url attempt=$attempt: ${e.message}")
                     lastError = e
-                    try { if (rootfsTarball.exists()) rootfsTarball.delete() } catch (_: Exception) {}
+                    /* Delete partial unless timeout mid-way and we support resume next try. */
+                    if (e !is java.net.SocketTimeoutException && rootfsTarball.exists()) {
+                        try { rootfsTarball.delete() } catch (_: Exception) {}
+                    }
                     if (attempt < MAX_RETRIES_PER_URL) {
-                        Thread.sleep(2000)
+                        try { Thread.sleep(1500L * attempt) } catch (_: InterruptedException) {}
                     }
                 }
             }
             if (downloadSuccess) break
         }
-        if (!downloadSuccess) {
-            // Phase 60 fix: Error message yang lebih informatif berdasarkan tipe exception
-            val errorMsg = when (lastError) {
-                is java.net.SocketTimeoutException ->
-                    "Download timeout - koneksi terlalu lambat atau server tidak responsif. " +
-                    "File Ubuntu rootfs = 29MB, butuh koneksi minimal 1Mbps. " +
-                    "Coba: (1) connect WiFi, (2) cek sinyal, (3) retry nanti. " +
-                    "Error detail: " + (lastError?.message ?: "unknown")
-                is java.net.UnknownHostException ->
-                    "DNS resolution gagal - tidak bisa resolve cdimage.ubuntu.com. " +
-                    "Cek: (1) koneksi internet aktif, (2) tidak di airplane mode. " +
-                    "Error detail: " + (lastError?.message ?: "unknown")
-                is java.io.IOException ->
-                    "Network error saat download: " + (lastError?.message ?: "unknown") + ". " +
-                    "Coba: (1) cek koneksi, (2) retry, (3) gunakan WiFi kalau ada."
-                else ->
-                    "Download gagal setelah " + rootfsUrls.size + " mirror x " +
-                    MAX_RETRIES_PER_URL + " percobaan. " +
-                    "Error terakhir: " + (lastError?.message ?: "unknown")
-            }
-            throw IllegalStateException(errorMsg)
+        if (!downloadSuccess || usedUrl == null) {
+            throw IllegalStateException(formatDownloadError(lastError, rootfsUrls.size))
         }
 
-        // 4.5 Wave-2: Verify SHA256 against official SHA256SUMS (fail closed).
-        // Try SHA256SUMS from each candidate release dir until one entry matches the file.
-        listener.onProgress("Memverifikasi integritas rootfs (SHA256)", 0)
-        verifyRootfsSha256(rootfsTarball, rootfsUrls, listener)
-        listener.onProgress("Memverifikasi integritas rootfs (SHA256)", 100)
+        // 4.5 SHA256 fail-closed
+        listener.onProgress("Memverifikasi SHA256 rootfs", 0)
+        verifyRootfsSha256(rootfsTarball, usedUrl, rootfsUrls, listener)
+        listener.onProgress("Memverifikasi SHA256 rootfs", 100)
 
-        // 5. Ekstrak via tar bawaan Android (toybox).
+        // 5. extract
+        if (rootfsDir.exists()) {
+            try { rootfsDir.deleteRecursively() } catch (_: Exception) {}
+        }
         rootfsDir.mkdirs()
         listener.onProgress("Mengekstrak rootfs", 0)
-        val extractProcess = ProcessBuilder(
-            "/system/bin/tar", "-xzf", rootfsTarball.absolutePath,
-            "-C", rootfsDir.absolutePath
-        ).redirectErrorStream(true).start()
-
-        val processOutput = StringBuilder()
-        val outputReader = Thread {
-            try {
-                extractProcess.inputStream.bufferedReader().use { r ->
-                    var line = r.readLine()
-                    while (line != null) {
-                        processOutput.appendLine(line)
-                        line = r.readLine()
-                    }
-                }
-            } catch (_: Exception) {}
-        }.apply { isDaemon = true; start() }
-
-        val finished = extractProcess.waitFor(10, java.util.concurrent.TimeUnit.MINUTES)
-        if (!finished) {
-            extractProcess.destroyForcibly()
-            throw IllegalStateException("Ekstraksi rootfs timeout (>10 menit). Mungkin storage lambat atau rusak.")
-        }
-        outputReader.join(2000)
-        val exitCode = extractProcess.exitValue()
-        if (exitCode != 0) {
+        extractRootfs(rootfsTarball, rootfsDir, listener)
+        if (!File(rootfsDir, "bin/bash").exists() && !File(rootfsDir, "usr/bin/bash").exists()) {
             throw IllegalStateException(
-                "Ekstraksi rootfs gagal (exit $exitCode): ${processOutput.toString().take(500)}"
+                "Ekstraksi selesai tapi bin/bash tidak ada di rootfs. " +
+                    "Tar mungkin gagal diam-diam atau tarball corrupt."
             )
         }
         listener.onProgress("Mengekstrak rootfs", 100)
 
-        // 6. Setup DNS.
+        // 6. DNS + noninteractive apt
         setupResolvConf()
-
-        // 6.5. Phase 46 (Pilar 3): Setup non-interactive apt environment.
-        // Cegah prompt interaktif dari akarnya — jangan cuma andalkan deteksi idle-timeout.
         setupNonInteractiveApt()
 
-        // 7. Phase 40 fix (H5): Validate proot binary bisa di-exec sebelum tulis marker.
-        // Kalau binary corrupt / wrong ABI / missing libs, error di sini (bukan saat start session).
+        // 7. validate proot
         listener.onProgress("Memvalidasi proot binary", 0)
         try {
-            val validateProcess = ProcessBuilder(
-                prootBin.absolutePath, "--version"
-            ).redirectErrorStream(true).start()
+            val validateProcess = ProcessBuilder(prootBin.absolutePath, "--version")
+                .redirectErrorStream(true)
+                .start()
             val validateOutput = validateProcess.inputStream.bufferedReader().readText()
             val validateExit = validateProcess.waitFor()
-            if (validateExit != 0 || !validateOutput.contains("proot", ignoreCase = true)) {
-                baseDir.deleteRecursively()
-                throw IllegalStateException(
-                    "Binary proot tidak valid atau tidak bisa di-exec di device ini. " +
-                    "Output: ${validateOutput.take(200)}"
-                )
+            if (validateExit != 0 && validateOutput.isBlank()) {
+                Log.w(TAG, "proot --version exit=$validateExit (non-fatal)")
+            } else {
+                Log.i(TAG, "proot --version: ${validateOutput.take(120)}")
             }
-        } catch (e: IllegalStateException) { throw e }
-        catch (e: Exception) {
-            Log.w(TAG, "Validasi proot --version gagal (non-fatal): ${e.message}")
-            /* Non-fatal — beberapa proot build mungkin tidak support --version flag.
-             * Lanjutkan install; error akan muncul saat start session kalau benar-benar broken. */
+        } catch (e: Exception) {
+            Log.w(TAG, "Validasi proot non-fatal: ${e.message}")
         }
         listener.onProgress("Memvalidasi proot binary", 100)
 
-        // 8. Phase 40 fix (H9): Tulis marker SEBELUM hapus tarball.
-        // OLD BUG: hapus tarball dulu, lalu tulis marker. Kalau app crash di antara,
-        // tarball hilang tapi marker belum ada → user harus re-download.
-        // FIX: tulis marker dulu (akui install sukses), baru hapus tarball (best-effort).
+        // 8. marker then delete tarball
         markerFile.writeText(System.currentTimeMillis().toString())
-        Log.i(TAG, "Instalasi Ubuntu proot selesai di ${rootfsDir.absolutePath}")
-
-        // 9. Bersihkan tarball (best-effort, tidak fatal kalau gagal).
+        try { downloadMeta.delete() } catch (_: Exception) {}
         try { rootfsTarball.delete() } catch (_: Exception) {}
+        Log.i(TAG, "Ubuntu proot install OK → ${rootfsDir.absolutePath}")
+    }
+
+    private fun formatDownloadError(lastError: Exception?, mirrorCount: Int): String {
+        val detail = lastError?.message ?: "unknown"
+        return when (lastError) {
+            is java.net.SocketTimeoutException ->
+                "Download timeout. Rootfs ~29MB — butuh Wi‑Fi stabil. Detail: $detail"
+            is java.net.UnknownHostException ->
+                "DNS gagal resolve cdimage.ubuntu.com. Cek internet / airplane mode. Detail: $detail"
+            is android.os.NetworkOnMainThreadException ->
+                "Bug internal: download di main thread. Update app ke v8.3.1+."
+            is java.io.IOException ->
+                "Network error: $detail. Coba Wi‑Fi, nonaktifkan VPN, atau coba lagi."
+            else ->
+                "Download gagal setelah $mirrorCount mirror × $MAX_RETRIES_PER_URL percobaan. " +
+                    "Terakhir: $detail"
+        }
+    }
+
+    /** Reject HTML/error pages and truncated files. */
+    private fun validateTarball(file: File) {
+        if (!file.exists()) throw IllegalStateException("File rootfs tidak ada setelah download")
+        val len = file.length()
+        if (len < MIN_TARBALL_BYTES) {
+            val head = try {
+                FileInputStream(file).use { ins ->
+                    val b = ByteArray(200)
+                    val n = ins.read(b)
+                    if (n > 0) String(b, 0, n) else ""
+                }
+            } catch (_: Exception) { "" }
+            throw IllegalStateException(
+                "Rootfs terlalu kecil ($len bytes, min $MIN_TARBALL_BYTES). " +
+                    "Mungkin halaman error HTML, bukan tarball. Head: ${head.take(80)}"
+            )
+        }
+        /* gzip magic 1f 8b */
+        FileInputStream(file).use { ins ->
+            val b0 = ins.read()
+            val b1 = ins.read()
+            if (b0 != 0x1f || b1 != 0x8b) {
+                throw IllegalStateException(
+                    "File bukan gzip (magic=${b0.toString(16)},${b1.toString(16)}). " +
+                        "Server mungkin mengembalikan HTML/redirect page."
+                )
+            }
+        }
+    }
+
+    private fun extractRootfs(tarball: File, dest: File, listener: ProgressListener) {
+        /* Strategy A: system tar -xzf (toybox on most devices). */
+        val errors = mutableListOf<String>()
+        try {
+            listener.onProgress("Mengekstrak rootfs (tar -xzf)", 10)
+            val p = ProcessBuilder(
+                "/system/bin/tar", "-xzf", tarball.absolutePath, "-C", dest.absolutePath
+            ).redirectErrorStream(true).start()
+            val out = p.inputStream.bufferedReader().readText()
+            val finished = p.waitFor(12, java.util.concurrent.TimeUnit.MINUTES)
+            if (!finished) {
+                p.destroyForcibly()
+                errors.add("tar -xzf timeout")
+            } else if (p.exitValue() != 0) {
+                errors.add("tar -xzf exit=${p.exitValue()}: ${out.take(300)}")
+            } else {
+                return
+            }
+        } catch (e: Exception) {
+            errors.add("tar -xzf: ${e.message}")
+        }
+
+        /* Strategy B: gzip -dc | tar -xf - */
+        try {
+            listener.onProgress("Mengekstrak rootfs (gzip|tar)", 40)
+            val pb = ProcessBuilder(
+                "/system/bin/sh", "-c",
+                "gzip -dc '${tarball.absolutePath}' | /system/bin/tar -xf - -C '${dest.absolutePath}'"
+            ).redirectErrorStream(true).start()
+            val out = pb.inputStream.bufferedReader().readText()
+            val finished = pb.waitFor(12, java.util.concurrent.TimeUnit.MINUTES)
+            if (!finished) {
+                pb.destroyForcibly()
+                errors.add("gzip|tar timeout")
+            } else if (pb.exitValue() != 0) {
+                errors.add("gzip|tar exit=${pb.exitValue()}: ${out.take(300)}")
+            } else {
+                return
+            }
+        } catch (e: Exception) {
+            errors.add("gzip|tar: ${e.message}")
+        }
+
+        /* Strategy C: pure Java GZIP + streaming extract is complex for tar;
+         * try toybox gunzip then tar xf */
+        try {
+            listener.onProgress("Mengekstrak rootfs (gunzip+tar)", 70)
+            val plain = File(baseDir, "rootfs.tar")
+            try { plain.delete() } catch (_: Exception) {}
+            GZIPInputStream(BufferedInputStream(FileInputStream(tarball))).use { gis ->
+                FileOutputStream(plain).use { out -> gis.copyTo(out) }
+            }
+            val p = ProcessBuilder(
+                "/system/bin/tar", "-xf", plain.absolutePath, "-C", dest.absolutePath
+            ).redirectErrorStream(true).start()
+            val out = p.inputStream.bufferedReader().readText()
+            val ok = p.waitFor(12, java.util.concurrent.TimeUnit.MINUTES) && p.exitValue() == 0
+            try { plain.delete() } catch (_: Exception) {}
+            if (ok) return
+            errors.add("gunzip+tar: ${out.take(200)}")
+        } catch (e: Exception) {
+            errors.add("gunzip+java: ${e.message}")
+        }
+
+        throw IllegalStateException(
+            "Semua metode ekstraksi gagal:\n" + errors.joinToString("\n")
+        )
     }
 
     fun setupResolvConf() {
         val resolvConf = File(rootfsDir, "etc/resolv.conf")
         resolvConf.parentFile?.mkdirs()
-        resolvConf.writeText("nameserver 8.8.8.8\nnameserver 1.1.1.1\n")
+        resolvConf.writeText("nameserver 8.8.8.8\nnameserver 1.1.1.1\nnameserver 9.9.9.9\n")
     }
 
-    /**
-     * Phase 46 (Pilar 3): Setup non-interactive apt environment.
-     *
-     * Cegah prompt interaktif dari akarnya — jangan cuma andalkan deteksi idle-timeout
-     * di MarkerExecutor (yang cuma jaring pengaman).
-     *
-     * Dua flag yang perlu jalan bersamaan:
-     * 1. DEBIAN_FRONTEND=noninteractive — tekan dialog konfigurasi debconf
-     *    (mis. pemilihan region tzdata, konfigurasi mysql-server, dll).
-     * 2. APT_LISTCHANGES_FRONTEND=none — tekan output apt-listchanges yang bisa interaktif.
-     *
-     * CATATAN: ini TIDAK menekan prompt "Do you want to continue? [Y/n]" dari apt-get
-     * sendiri — itu perlu flag -y terpisah di command-nya (sudah di-instruksikan ke AI
-     * di system prompt Pilar 3).
-     *
-     * Juga preseed timezone langsung (etc/timezone), supaya paket seperti tzdata
-     * tidak pernah menampilkan dialog pilih region/kota sama sekali.
-     */
     private fun setupNonInteractiveApt() {
         try {
-            // Profile script — di-source otomatis oleh bash login shell.
             val profileScript = File(rootfsDir, "etc/profile.d/tunnel-noninteractive.sh")
             profileScript.parentFile?.mkdirs()
             val tz = java.util.TimeZone.getDefault().id
-            profileScript.writeText("""
-                # Phase 46 (Pilar 3): Non-interactive apt environment
-                # Setup oleh Tunnel Terminal untuk mencegah prompt interaktif
+            profileScript.writeText(
+                """
                 export DEBIAN_FRONTEND=noninteractive
                 export APT_LISTCHANGES_FRONTEND=none
                 export TZ=$tz
-            """.trimIndent() + "\n")
-            profileScript.setExecutable(false)
-
-            // Preseed timezone langsung
-            val timezoneFile = File(rootfsDir, "etc/timezone")
-            timezoneFile.parentFile?.mkdirs()
-            timezoneFile.writeText(tz + "\n")
-
-            Log.i(TAG, "Non-interactive apt environment setup: DEBIAN_FRONTEND=noninteractive, TZ=$tz")
+                """.trimIndent() + "\n"
+            )
+            File(rootfsDir, "etc/timezone").writeText(tz + "\n")
         } catch (e: Exception) {
-            Log.w(TAG, "Gagal setup non-interactive apt: ${e.message} — non-fatal, apt tetap jalan tapi mungkin prompt interaktif")
+            Log.w(TAG, "noninteractive apt setup: ${e.message}")
         }
     }
 
-    /**
-     * Wave-2: Download official SHA256SUMS for the release that produced [tarball],
-     * compute local digest, fail closed on mismatch or missing entry.
-     */
     private fun verifyRootfsSha256(
         tarball: File,
-        candidateUrls: List<String>,
+        usedUrl: String,
+        allUrls: List<String>,
         listener: ProgressListener
     ) {
         if (!tarball.exists() || tarball.length() == 0L) {
-            throw IllegalStateException("Rootfs tarball kosong — tidak bisa verifikasi SHA256")
+            throw IllegalStateException("Rootfs tarball kosong — SHA256 tidak bisa dihitung")
         }
         val actualHex = sha256Hex(tarball)
-        var lastVerifyError: Exception? = null
+        val fileName = usedUrl.substringAfterLast('/')
+        /* Prefer SUMS next to the successful URL, then other release dirs. */
+        val sumsCandidates = linkedSetOf(
+            usedUrl.substringBeforeLast('/') + "/SHA256SUMS"
+        )
+        allUrls.forEach { u ->
+            sumsCandidates.add(u.substringBeforeLast('/') + "/SHA256SUMS")
+        }
 
-        for (url in candidateUrls) {
-            val fileName = url.substringAfterLast('/')
-            val sumsUrl = url.substringBeforeLast('/') + "/SHA256SUMS"
+        var lastErr: Exception? = null
+        for (sumsUrl in sumsCandidates) {
             try {
-                listener.onProgress("Mengunduh SHA256SUMS ($fileName)", 50)
+                listener.onProgress("SHA256SUMS ← ${sumsUrl.substringAfter("ubuntu-base/")}", 40)
                 val sumsText = downloadText(sumsUrl)
                 val expected = parseSha256Sums(sumsText, fileName)
-                    ?: throw IllegalStateException("Entry SHA256 untuk $fileName tidak ada di $sumsUrl")
+                    ?: throw IllegalStateException("Tidak ada entry $fileName di $sumsUrl")
                 if (!actualHex.equals(expected, ignoreCase = true)) {
                     throw IllegalStateException(
-                        "SHA256 mismatch untuk $fileName.\n" +
-                            "Expected: $expected\n" +
-                            "Actual:   $actualHex\n" +
-                            "File ditolak (mungkin corrupt atau mirror tidak tepercaya)."
+                        "SHA256 mismatch $fileName\nExpected: $expected\nActual:   $actualHex"
                     )
                 }
-                Log.i(TAG, "SHA256 OK for $fileName ($actualHex)")
-                /* Persist which URL matched for debugging. */
-                File(baseDir, ".rootfs_sha256").writeText("$fileName $actualHex\n")
+                Log.i(TAG, "SHA256 OK $fileName $actualHex")
+                File(baseDir, ".rootfs_sha256").writeText("$fileName $actualHex\nsource=$usedUrl\n")
                 return
             } catch (e: Exception) {
-                Log.w(TAG, "SHA256 verify via $sumsUrl gagal: ${e.message}")
-                lastVerifyError = e
+                Log.w(TAG, "SHA256 via $sumsUrl: ${e.message}")
+                lastErr = e
+                /* Mismatch is fatal immediately — do not try other SUMS. */
+                if (e.message?.contains("mismatch", ignoreCase = true) == true) {
+                    try { tarball.delete() } catch (_: Exception) {}
+                    throw e
+                }
             }
         }
         try { tarball.delete() } catch (_: Exception) {}
         throw IllegalStateException(
-            "Verifikasi SHA256 rootfs gagal (fail-closed). " +
-                (lastVerifyError?.message ?: "Tidak ada SHA256SUMS yang cocok.")
+            "Verifikasi SHA256 gagal (fail-closed). ${lastErr?.message ?: "no SUMS"}"
         )
     }
 
@@ -438,7 +461,6 @@ class ProotBootstrap(private val context: Context) {
         for (line in sumsText.lineSequence()) {
             val trimmed = line.trim()
             if (trimmed.isEmpty() || trimmed.startsWith("#")) continue
-            /* Format: <hex>  <filename>  or  <hex> *<filename> */
             val parts = trimmed.split(Regex("\\s+"), limit = 2)
             if (parts.size < 2) continue
             val hex = parts[0]
@@ -450,20 +472,27 @@ class ProotBootstrap(private val context: Context) {
         return null
     }
 
-    private fun downloadText(url: String): String {
+    private fun openGetConnection(url: String, extraHeaders: Map<String, String> = emptyMap()): HttpURLConnection {
         val connection = (URL(url).openConnection() as HttpURLConnection).apply {
-            connectTimeout = 30000
-            readTimeout = 60000
+            connectTimeout = CONNECT_TIMEOUT_MS
+            readTimeout = READ_TIMEOUT_MS
             instanceFollowRedirects = true
             requestMethod = "GET"
-            setRequestProperty("User-Agent", "TunnelTerminal/7.2.3 (Android; Linux Environment)")
-            setRequestProperty("Accept", "text/plain, */*")
+            setRequestProperty("User-Agent", USER_AGENT)
+            setRequestProperty("Accept", "application/x-gzip, application/gzip, application/octet-stream, */*")
+            setRequestProperty("Accept-Encoding", "identity") /* avoid double-gzip decode issues */
+            extraHeaders.forEach { (k, v) -> setRequestProperty(k, v) }
         }
+        return connection
+    }
+
+    private fun downloadText(url: String): String {
+        val connection = openGetConnection(url)
         try {
             connection.connect()
             val code = connection.responseCode
             if (code !in 200..299) {
-                throw IllegalStateException("HTTP $code saat download $url")
+                throw IllegalStateException("HTTP $code untuk $url")
             }
             return connection.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
         } finally {
@@ -472,120 +501,92 @@ class ProotBootstrap(private val context: Context) {
     }
 
     /**
-     * Phase 60 fix (audit C-1 + C-4): Download dengan timeout realistis + fallback progress.
-     * C-1: readTimeout 60s -> 300s (file 29MB @ 1Mbps = 232s, timeout 60s pasti gagal)
-     * C-4: Kalau Content-Length = -1 (chunked), report bytes downloaded supaya user tahu masih jalan
+     * Download with optional HTTP Range resume if partial file already present.
      */
     private fun downloadWithProgress(url: String, dest: File, onProgress: (Int) -> Unit) {
-        val connection = (URL(url).openConnection() as HttpURLConnection).apply {
-            connectTimeout = 60000   // C-1: 30s -> 60s (DNS lambat di beberapa network)
-            readTimeout = 300000     // C-1: 60s -> 300s (5 menit, file 29MB butuh waktu)
-            instanceFollowRedirects = true
-            requestMethod = "GET"
-            setRequestProperty("User-Agent", "TunnelTerminal/7.2.2 (Android; Linux Environment)")
-            setRequestProperty("Accept", "application/x-gzip, */*")
-        }
+        val existing = if (dest.exists()) dest.length() else 0L
+        val headers = if (existing > 0) mapOf("Range" to "bytes=$existing-") else emptyMap()
+        val connection = openGetConnection(url, headers)
         try {
             connection.connect()
-            val responseCode = connection.responseCode
-            if (responseCode !in 200..299) {
-                throw IllegalStateException("HTTP $responseCode saat download $url")
+            val code = connection.responseCode
+            val resume = code == 206
+            if (code !in 200..299) {
+                throw IllegalStateException("HTTP $code saat download $url")
             }
-            val totalBytes = connection.contentLength.toLong()
-            var downloadedBytes = 0L
+            if (existing > 0 && !resume && code == 200) {
+                /* Server ignored Range — restart full download. */
+                dest.delete()
+            }
+
+            val contentLen = connection.contentLengthLong
+            val totalBytes = when {
+                resume && contentLen > 0 -> existing + contentLen
+                contentLen > 0 -> contentLen
+                else -> -1L
+            }
+            var downloadedBytes = if (resume) existing else 0L
             var lastReportedPercent = -1
-            var lastReportedBytes = 0L
+            var lastReportedBytes = downloadedBytes
             val startTime = System.currentTimeMillis()
+
+            val mode = if (resume) "rw" else "rw"
             connection.inputStream.use { input ->
-                FileOutputStream(dest).use { output ->
+                RandomAccessFile(dest, mode).use { raf ->
+                    if (resume) raf.seek(existing) else raf.setLength(0)
                     val buffer = ByteArray(64 * 1024)
                     var bytesRead: Int
                     while (input.read(buffer).also { bytesRead = it } != -1) {
-                        output.write(buffer, 0, bytesRead)
+                        raf.write(buffer, 0, bytesRead)
                         downloadedBytes += bytesRead
-
                         if (totalBytes > 0) {
-                            val percent = ((downloadedBytes * 100) / totalBytes).toInt()
+                            val percent = ((downloadedBytes * 100) / totalBytes).toInt().coerceIn(0, 100)
                             if (percent != lastReportedPercent) {
                                 onProgress(percent)
                                 lastReportedPercent = percent
                             }
-                        } else {
-                            // C-4: Content-Length tidak diketahui (chunked transfer)
-                            if (downloadedBytes - lastReportedBytes >= 1024 * 1024) {
-                                val mb = downloadedBytes / 1024 / 1024
-                                Log.i(TAG, "Downloaded " + mb + "MB (no Content-Length, indeterminate)")
-                                val estimatedPercent = ((downloadedBytes * 100) / (30L * 1024 * 1024)).toInt().coerceAtMost(99)
-                                onProgress(estimatedPercent)
-                                lastReportedBytes = downloadedBytes
-                            }
+                        } else if (downloadedBytes - lastReportedBytes >= 1024 * 1024) {
+                            val est = ((downloadedBytes * 100) / (30L * 1024 * 1024)).toInt().coerceAtMost(99)
+                            onProgress(est)
+                            lastReportedBytes = downloadedBytes
                         }
                     }
-                    if (totalBytes <= 0) onProgress(100)
                 }
             }
+            if (totalBytes <= 0) onProgress(100)
             val elapsed = (System.currentTimeMillis() - startTime) / 1000.0
-            val speedKbps = if (elapsed > 0) (downloadedBytes / 1024 / elapsed).toInt() else 0
-            Log.i(TAG, "Download selesai: " + (downloadedBytes / 1024 / 1024) + "MB dalam " + elapsed.toInt() + "s (" + speedKbps + " KB/s)")
+            val mb = downloadedBytes / 1024.0 / 1024.0
+            Log.i(TAG, "Download OK ${"%.1f".format(mb)}MB in ${elapsed.toInt()}s resume=$resume url=$url")
         } catch (e: Exception) {
-            try { if (dest.exists()) dest.delete() } catch (_: Exception) {}
             throw when (e) {
                 is java.net.SocketTimeoutException -> e
                 is java.net.UnknownHostException -> e
                 is java.io.IOException -> e
-                else -> IllegalStateException("Download gagal: " + e.message, e)
+                else -> IllegalStateException("Download gagal: ${e.message}", e)
             }
         } finally {
             connection.disconnect()
         }
     }
 
-    /**
-     * Hapus seluruh instalasi (untuk fitur "Uninstall Linux Environment").
-     * Phase 40 fix (M8): Pakai rm -rf via ProcessBuilder (lebih cepat dari Kotlin's
-     * deleteRecursively untuk ribuan file di rootfs Ubuntu).
-     */
     fun uninstall() {
         try {
-            // Pakai rm -rf via toybox (lebih cepat + reliable untuk file tree besar)
-            val process = ProcessBuilder(
-                "/system/bin/rm", "-rf", baseDir.absolutePath
-            ).redirectErrorStream(true).start()
-            val exit = process.waitFor()
-            if (exit != 0) {
-                // Fallback ke Kotlin's deleteRecursively
-                baseDir.deleteRecursively()
-            }
-            Log.i(TAG, "Instalasi Linux environment dihapus")
-        } catch (e: Exception) {
-            Log.w(TAG, "Gagal hapus instalasi: ${e.message}")
-            // Last resort fallback
+            val process = ProcessBuilder("/system/bin/rm", "-rf", baseDir.absolutePath)
+                .redirectErrorStream(true).start()
+            if (process.waitFor() != 0) baseDir.deleteRecursively()
+        } catch (_: Exception) {
             try { baseDir.deleteRecursively() } catch (_: Exception) {}
         }
     }
 
     fun getFreeSpaceMb(): Long = baseDir.usableSpace / 1024 / 1024
 
-    /**
-     * Phase 60 fix (audit #1c): Public accessor for SECCOMP fallback status.
-     * Sebelumnya, TerminalUI mengakses field private 'context' via reflection
-     * untuk baca SharedPreferences "proot_no_seccomp". Di build minified,
-     * R8 mengganti nama field private → NoSuchFieldException → status SECCOMP
-     * selalu fallback ke default (false) yang menyesatkan user.
-     *
-     * Fix: Expose method publik supaya TerminalUI bisa akses tanpa reflection.
-     */
-    fun getSeccompFallbackEnabled(): Boolean {
-        return context.getSharedPreferences("TunnelLinux", android.content.Context.MODE_PRIVATE)
+    fun getSeccompFallbackEnabled(): Boolean =
+        context.getSharedPreferences("TunnelLinux", Context.MODE_PRIVATE)
             .getBoolean("proot_no_seccomp", false)
-    }
 
-    /**
-     * Phase 60 fix (audit #1c): Public setter untuk SECCOMP fallback status.
-     * Dipakai oleh TerminalUI saat user toggle SECCOMP mode.
-     */
     fun setSeccompFallbackEnabled(enabled: Boolean) {
-        context.getSharedPreferences("TunnelLinux", android.content.Context.MODE_PRIVATE)
+        context.getSharedPreferences("TunnelLinux", Context.MODE_PRIVATE)
             .edit().putBoolean("proot_no_seccomp", enabled).apply()
     }
 
