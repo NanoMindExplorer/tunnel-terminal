@@ -3,17 +3,15 @@ package com.tunnel.terminal
 import java.io.File
 
 /**
- * SessionTargetResolver — Lapisan Abstraksi Path & Eksekusi.
+ * SessionTargetResolver - path abstraction for AI tools per active session.
  *
- * Phase 57 + Wave-23: ToolExecutor path resolution per active session.
+ * Phase 57 + Wave-23:
+ * - Local: workspaceRoot (filesDir/workspace)
+ * - Ubuntu: host rootfs (filesDir/linux/ubuntu) so write_file matches proot bash
+ *   under /root; guest /mnt/workspace maps to Android workspace (proot bind)
+ * - SSH: SFTP via ToolExecutor (resolver returns placeholder File only)
  *
- * - Local → workspaceRoot (filesDir/workspace/...)
- * - Ubuntu → rootfs on disk (filesDir/linux/ubuntu/...) so write_file lands where
- *   proot bash sees it under /root or absolute guest paths.
- *   Guest `/mnt/workspace/*` maps to Android workspace (bind-mounted by proot).
- * - SSH → SFTP via ToolExecutor (resolver returns placeholder File only).
- *
- * File I/O for Ubuntu uses java.io.File on the host rootfs tree (not shell typing).
+ * Ubuntu file I/O uses java.io.File on the host rootfs tree (not shell typing).
  */
 class SessionTargetResolver(
     val sessionType: String,
@@ -28,10 +26,9 @@ class SessionTargetResolver(
         }
 
     /**
-     * Resolve path AI ke File fisik Android yang benar, berdasarkan sesi aktif.
+     * Resolve AI path to the correct physical Android File for this session.
      *
-     * @param logicalPath Path yang AI "lihat" (mis. "/root/app.py" atau "main.py")
-     * @return File fisik yang bisa di-read/write langsung dengan java.io.File
+     * @param logicalPath path the AI sees (e.g. "/root/app.py" or "main.py")
      */
     fun resolvePhysicalPath(logicalPath: String): File {
         return when (sessionType) {
@@ -39,7 +36,7 @@ class SessionTargetResolver(
                 val rootfs = rootfsDir
                     ?: throw IllegalStateException("Ubuntu rootfs belum diinstall")
                 val path = logicalPath.trim().ifEmpty { "." }
-                /* Bind-mount alias: /mnt/workspace → Android workspaceRoot */
+                // Bind-mount alias: /mnt/workspace -> Android workspaceRoot
                 if (path == "/mnt/workspace" || path.startsWith("/mnt/workspace/")) {
                     val rel = path.removePrefix("/mnt/workspace").trimStart('/')
                     return if (rel.isEmpty()) workspaceRoot else File(workspaceRoot, rel)
@@ -47,7 +44,7 @@ class SessionTargetResolver(
                 if (path.startsWith("/")) {
                     File(rootfs, path.removePrefix("/"))
                 } else {
-                    /* Relative → guest $HOME (/root/...) */
+                    // Relative -> guest HOME /root
                     val rel = if (path == ".") "" else path.removePrefix("./")
                     if (rel.isEmpty()) File(rootfs, "root")
                     else File(rootfs, "root/$rel")
@@ -70,7 +67,7 @@ class SessionTargetResolver(
         }
     }
 
-    /** Cek apakah path berada di dalam area yang diizinkan (sandbox check). */
+    /** Sandbox check: path must stay inside workspace and/or Ubuntu rootfs. */
     fun isPathAllowed(file: File): Boolean {
         val canonicalPath = try { file.canonicalPath } catch (e: Exception) { file.absolutePath }
         val workspacePath = try { workspaceRoot.canonicalPath } catch (e: Exception) { workspaceRoot.absolutePath }
@@ -86,8 +83,7 @@ class SessionTargetResolver(
 
     companion object {
         /**
-         * Wave-1: Prefix check with path boundary — prevents `workspace_evil` matching
-         * prefix of `.../workspace`.
+         * Boundary-aware prefix check (prevents workspace_evil matching workspace).
          */
         fun isPathInside(childPath: String, parentPath: String): Boolean {
             val parent = parentPath.trimEnd('/')
@@ -95,15 +91,15 @@ class SessionTargetResolver(
         }
     }
 
-    /** Deskripsi target untuk AI context + tool prompts. */
+    /** Human-readable target description for AI context. */
     fun describeTarget(): String {
         return when (sessionType) {
             "ubuntu" -> buildString {
                 append("Ubuntu 24.04 proot rootfs")
                 rootfsDir?.let { append(" (host: ${it.absolutePath})") }
                 append(". Guest cwd default: /root. ")
-                append("write_file path relatif → /root/… ; absolute /foo → rootfs/foo. ")
-                append("Android workspace ter-bind di /mnt/workspace.")
+                append("write_file relative path -> /root/ ; absolute /foo -> rootfs/foo. ")
+                append("Android workspace bind-mounted at /mnt/workspace.")
             }
             "ssh" -> "SSH remote (file I/O via SFTP; prefer run_command for shell ops)"
             else -> "Local workspace (${workspaceRoot.absolutePath})"
@@ -112,14 +108,14 @@ class SessionTargetResolver(
 
     /**
      * Map a host File under rootfs back to the path the Ubuntu shell sees.
-     * E.g. …/linux/ubuntu/root/demo.py → /root/demo.py
+     * Example: .../linux/ubuntu/root/demo.py -> /root/demo.py
      */
     fun guestPathForPhysical(file: File): String? {
         if (sessionType != "ubuntu" || rootfsDir == null) return null
         val rootfsPath = try { rootfsDir.canonicalPath } catch (_: Exception) { rootfsDir.absolutePath }
         val filePath = try { file.canonicalPath } catch (_: Exception) { file.absolutePath }
         if (!isPathInside(filePath, rootfsPath)) {
-            /* Maybe under Android workspace bind */
+            // Maybe under Android workspace bind
             val ws = try { workspaceRoot.canonicalPath } catch (_: Exception) { workspaceRoot.absolutePath }
             if (isPathInside(filePath, ws)) {
                 val rel = filePath.removePrefix(ws).trimStart('/')
@@ -131,15 +127,15 @@ class SessionTargetResolver(
         return if (rel.isEmpty()) "/" else "/$rel"
     }
 
-    /** Tool-prompt fragment: how paths work for this session. */
+    /** Tool-prompt fragment describing how paths work for this session. */
     fun pathInstructionsForAi(): String {
         return when (sessionType) {
             "ubuntu" -> """
                 ## PATH FILE DI SESI UBUNTU (WAJIB IKUTI)
-                - Path RELATIF (mis. "demo.py", "src/main.py") → file di /root/ di dalam Ubuntu.
-                  Host disk: linux/ubuntu/root/… — shell proot melihat /root/demo.py.
-                - Path ABSOLUT guest (mis. "/tmp/x.txt", "/root/app.py") → di rootfs Ubuntu.
-                - /mnt/workspace/... → workspace Android (bind-mount), jarang dipakai.
+                - Path RELATIF (mis. "demo.py", "src/main.py") -> file di /root/ di dalam Ubuntu.
+                  Host disk: linux/ubuntu/root/... - shell proot melihat /root/demo.py.
+                - Path ABSOLUT guest (mis. "/tmp/x.txt", "/root/app.py") -> di rootfs Ubuntu.
+                - /mnt/workspace/... -> workspace Android (bind-mount), jarang dipakai.
                 - run_command dijalankan di bash Ubuntu (cwd biasanya /root).
                   Setelah write_file "x.py", jalankan: python3 /root/x.py atau python3 x.py
                 - JANGAN pakai path Android /data/data/... di run_command.
@@ -152,7 +148,7 @@ class SessionTargetResolver(
             """.trimIndent()
             else -> """
                 ## PATH DI SESI LOCAL ANDROID
-                - Path relatif → workspace app (filesDir/workspace/...).
+                - Path relatif -> workspace app (filesDir/workspace/...).
                 - Path absolut device (Download) hanya setelah setup-storage (SAF).
             """.trimIndent()
         }
