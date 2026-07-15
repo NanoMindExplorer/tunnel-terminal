@@ -608,11 +608,12 @@ class MainActivity : ComponentActivity() {
             call.tool == "run_command" -> {
                 /* Phase 37: run_command pakai MarkerExecutor — bukan fire-and-forget.
                  * Phase 46 (Pilar 1b): Handle ExecutionOutcome (3 kemungkinan).
-                 * Hasil (output + exit code) dikirim balik ke AI sebagai context. */
+                 * Wave-23: Ensure resolver matches active session (Ubuntu bash). */
                 val cmd = call.args["cmd"] ?: return
                 val session = shellExecutors.find { it.id == activeExecutorId }
                 if (session != null) {
-                    chatMessages.add(ChatMessage("assistant", "🔧 Running: $cmd", false))
+                    syncToolExecutorToSession(session)
+                    chatMessages.add(ChatMessage("assistant", "🔧 Running [${session.sessionType}]: $cmd", false))
                     lifecycleScope.launch {
                         val outcome = markerExecutor.executeWithMarker(
                             session, cmd,
@@ -623,14 +624,18 @@ class MainActivity : ComponentActivity() {
                         chatMessages.add(ChatMessage("assistant", "📋 Result:\n$outcomeText", false))
                         continueToolLoop(outcomeText)
                     }
+                } else {
+                    chatMessages.add(ChatMessage("assistant", "Error: no active terminal session", false, isError = true))
+                    continueToolLoop("Error: no active terminal session")
                 }
             }
             call.tool == "write_file" -> {
                 /* Phase 23: Inline diff view untuk AI file edits.
-                 * Wave-1: Resolve path via ToolExecutor sandbox — never raw File(path). */
+                 * Wave-1/23: Resolve path via ToolExecutor sandbox (Ubuntu → rootfs /root). */
                 val path = call.args["path"] ?: return
                 val content = call.args["content"] ?: return
                 try {
+                    syncToolExecutorToSession(shellExecutors.find { it.id == activeExecutorId })
                     val file = toolExecutor.resolvePathForAccess(path)
                     val original = if (file.exists() && file.isFile) {
                         try { file.readText() } catch (e: Exception) { "" }
@@ -871,6 +876,10 @@ class MainActivity : ComponentActivity() {
                     )
                     return@launch
                 }
+
+                /* Wave-23: Point AI file tools + active tab at the Agent session (esp. Ubuntu). */
+                activeExecutorId = session.id
+                syncToolExecutorToSession(session)
 
                 agentTaskRunner.run(
                     goal = goal,
@@ -1191,6 +1200,7 @@ class MainActivity : ComponentActivity() {
         activeExecutorId = newExecutor.id
         /* Wave-8: Seed persisted command history into new tab. */
         CommandHistoryStore.seedInto(newExecutor, this)
+        syncToolExecutorToSession(newExecutor)
         newExecutor.start()
 
         /* Tampilkan MOTD dinamis. */
@@ -1232,6 +1242,7 @@ class MainActivity : ComponentActivity() {
         shellExecutors.add(sshExecutor)
         activeExecutorId = sshExecutor.id
         CommandHistoryStore.seedInto(sshExecutor, this)
+        syncToolExecutorToSession(sshExecutor)
         sshExecutor.start()
     }
 
@@ -1247,6 +1258,28 @@ class MainActivity : ComponentActivity() {
      * destroy + retry sekali dengan disableSeccomp=true. Preferensi disimpan
      * supaya percobaan berikutnya pakai flag yang sama.
      */
+    /**
+     * Wave-23: Keep ToolExecutor path sandbox aligned with the active tab.
+     * Without this, write_file on Ubuntu tab still targets Android workspace.
+     */
+    private fun syncToolExecutorToSession(session: TerminalSession?) {
+        if (session == null) return
+        val resolver = SessionTargetResolver(
+            sessionType = session.sessionType,
+            workspaceRoot = toolExecutor.workspaceRootFile(),
+            rootfsDir = if (session.sessionType == "ubuntu" && ::prootBootstrap.isInitialized) {
+                prootBootstrap.rootfsDir
+            } else null
+        )
+        toolExecutor.setSessionTargetResolver(resolver)
+        if (session is SshShellExecutor) {
+            toolExecutor.setSshExecutor(session)
+        } else {
+            toolExecutor.setSshExecutor(null)
+        }
+        permissionManager.setActiveSession(session.id)
+    }
+
     private suspend fun createUbuntuTab() {
         /* Phase 41 fix (CRIT-04): Nonaktifkan fitur Ubuntu di playstore flavor. */
         if (!com.tunnel.terminal.BuildConfig.ENABLE_PROOT) {
@@ -1275,13 +1308,15 @@ class MainActivity : ComponentActivity() {
         shellExecutors.add(executor)
         activeExecutorId = executor.id
         CommandHistoryStore.seedInto(executor, this)
+        syncToolExecutorToSession(executor)
         executor.start()
 
         // Beri MOTD khusus Ubuntu.
         executor.emulator.process(
             "\u001B[32m┌─ Ubuntu 24.04 (proot) ─────────────────────────────┐\u001B[0m\n" +
             "\u001B[32m│ Linux environment via proot — no root required     │\u001B[0m\n" +
-            "\u001B[32m│ apt update && apt install <pkg> untuk install tool │\u001B[0m\n" +
+            "\u001B[32m│ apt update && apt install <pkg> · HOME=/root       │\u001B[0m\n" +
+            "\u001B[32m│ AI write_file → /root/ · workspace → /mnt/workspace│\u001B[0m\n" +
             "\u001B[32m└────────────────────────────────────────────────────┘\u001B[0m\n\n"
         )
         executor.triggerScreenUpdate()
@@ -1308,6 +1343,7 @@ class MainActivity : ComponentActivity() {
                         )
                         shellExecutors.add(retryExecutor)
                         activeExecutorId = retryExecutor.id
+                        syncToolExecutorToSession(retryExecutor)
                         retryExecutor.start()
                         retryExecutor.emulator.process(
                             "\u001B[33m[RETRY] Sesi sebelumnya mati prematur — menggunakan PROOT_NO_SECCOMP=1.\u001B[0m\n\n"
@@ -3142,28 +3178,8 @@ class MainActivity : ComponentActivity() {
                         tabs = tabsData, activeTabId = activeExecutorId,
                         onTabSelected = {
                             activeExecutorId = it
-                            /* Phase 43 fix (HIGH-05): Update session aktif di PermissionManager
-                             * supaya permission "Always Allow" di-scope per-tab. */
-                            permissionManager.setActiveSession(it)
-                            /* Phase 57 fix (§4.1): Update SessionTargetResolver saat pindah tab
-                             * supaya write_file/read_file tahu target yang benar (Local/Ubuntu/SSH). */
-                            val activeExec = shellExecutors.find { exec -> exec.id == it }
-                            if (activeExec != null) {
-                                val resolver = SessionTargetResolver(
-                                    sessionType = activeExec.sessionType,
-                                    workspaceRoot = toolExecutor.workspaceRootFile(),
-                                    rootfsDir = if (activeExec.sessionType == "ubuntu" && ::prootBootstrap.isInitialized) prootBootstrap.rootfsDir else null
-                                )
-                                toolExecutor.setSessionTargetResolver(resolver)
-                                /* Phase 58 fix (§4.1-D): Set SshShellExecutor reference untuk SFTP. */
-                                if (activeExec is SshShellExecutor) {
-                                    toolExecutor.setSshExecutor(activeExec)
-                                } else {
-                                    toolExecutor.setSshExecutor(null)
-                                }
-                            }
-                            /* Phase 19.5: currentCommandBuffer & historyIndex sekarang per-tab
-                             * (disimpan di ShellExecutor), tidak perlu reset di sini. */
+                            /* Wave-23: Centralize resolver + permission session scope. */
+                            syncToolExecutorToSession(shellExecutors.find { exec -> exec.id == it })
                         },
                         onNewTab = { lifecycleScope.launch { createNewTab() } },
                         onTabClosed = { closeTab(it) },
@@ -3886,7 +3902,10 @@ class MainActivity : ComponentActivity() {
         pendingImages.clear()
 
         val activeExecutor = shellExecutors.find { it.id == activeExecutorId }
+        /* Wave-23: Always re-sync path resolver before tools/AI path advice (Ubuntu/local/SSH). */
+        syncToolExecutorToSession(activeExecutor)
         val terminalContext = activeExecutor?.getCleanOutput() ?: ""
+        val sessionPathAdvice = toolExecutor.sessionPathInstructions()
 
         /* Phase 23: Resolve @context mentions (@file, @block, @command, @terminal, @snippet).
          * Phase 37: @command: sekarang dieksekusi secara nyata via MarkerExecutor. */
@@ -3908,7 +3927,15 @@ class MainActivity : ComponentActivity() {
             sb.toString()
         } else ""
 
-        val fullContext = terminalContext + mentionContext + asyncCommandContext
+        val fullContext = buildString {
+            append(terminalContext)
+            append(mentionContext)
+            append(asyncCommandContext)
+            /* Wave-23: Remind model of path rules for active tab every turn. */
+            if (sessionPathAdvice.isNotBlank()) {
+                append("\n\n").append(sessionPathAdvice)
+            }
+        }
 
         /* Placeholder assistant message yang akan di-update selama streaming.
          * Placeholder assistant message updated during streaming. */
@@ -3930,15 +3957,25 @@ class MainActivity : ComponentActivity() {
         try {
             /* Koleksi token-by-token dari streaming Flow. */
             /* Phase 23: Pass fullContext (dengan @mentions resolved) ke AI. */
+            val sessionType = activeExecutor?.sessionType ?: "local"
+            val envDesc = buildString {
+                append(activeExecutor?.environmentDescription ?: "")
+                if (sessionType == "ubuntu") {
+                    append(" | AI file tools → guest /root ; bind workspace → /mnt/workspace")
+                }
+            }
+            /* Wave-23: Project context from Ubuntu /root when on proot tab. */
+            val projectRoot = if (sessionType == "ubuntu" && ::prootBootstrap.isInitialized) {
+                File(prootBootstrap.rootfsDir, "root")
+            } else {
+                toolExecutor.workspaceRootFile()
+            }
             aiAgent.askAIStreaming(
                 aiSettings, chatMessages.toList(), fullContext,
-                activeExecutor?.sessionType ?: "local",
-                activeExecutor?.environmentDescription ?: "",
+                sessionType,
+                envDesc,
                 /* Phase 50 fix (B-5): Inject project context (git, manifests, file tree). */
-                projectContext.buildContext(
-                    toolExecutor.workspaceRootFile(),
-                    activeExecutor?.sessionType ?: "local"
-                ),
+                projectContext.buildContext(projectRoot, sessionType),
                 /* Phase 58 fix (§4.6): Inject task plan (imun dari cap 20 pesan). */
                 taskPlanManager.renderForSystemPrompt()
             ).collect { delta ->

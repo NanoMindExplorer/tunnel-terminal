@@ -105,6 +105,12 @@ class ProotShellExecutor(
                 }
             }
 
+            /* Wave-23: Bind-mount Android app workspace into guest at /mnt/workspace
+             * so AI tools + shell can share files when needed. HOME stays /root. */
+            val androidWorkspace = java.io.File(
+                bootstrap.appContext.filesDir, "workspace"
+            ).apply { mkdirs() }.absolutePath
+
             val argv = mutableListOf(
                 prootPath,
                 "--link2symlink",
@@ -113,12 +119,14 @@ class ProotShellExecutor(
                 "-b", "/dev",
                 "-b", "/proc",
                 "-b", "/sys",
+                "-b", "$androidWorkspace:/mnt/workspace",
                 "-w", "/root",
                 "/usr/bin/env", "-i",
                 "HOME=/root",
                 "TERM=xterm-256color",
                 "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
                 "LANG=C.UTF-8",
+                "DEBIAN_FRONTEND=noninteractive",
                 "/bin/bash", "--login"
             )
 
