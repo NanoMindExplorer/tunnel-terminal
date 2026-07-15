@@ -30,13 +30,15 @@ object TerminalSize {
         val density = dm.density.takeIf { it > 0f } ?: 2f
         val widthPx = dm.widthPixels.takeIf { it > 0 } ?: (1080 * density).toInt()
         val heightPx = dm.heightPixels.takeIf { it > 0 } ?: (1920 * density).toInt()
-        /* Approximate: ~60% of screen height usable for terminal (bars + extra keys). */
+        /* Approximate: ~55% of screen height usable for terminal (bars + extra keys). */
         val usableH = (heightPx * 0.55f).toInt().coerceAtLeast(200)
         val usableW = widthPx
-        val charW = (fontSizeSp * density * 0.6f).coerceAtLeast(1f)
-        val charH = (fontSizeSp * density * 1.2f).coerceAtLeast(1f)
+        /* Wave-18: Match TerminalLayoutMetrics em ratios. */
+        val charW = (fontSizeSp * density * TerminalLayoutMetrics.CHAR_WIDTH_EM).coerceAtLeast(1f)
+        val charH = (fontSizeSp * density * TerminalLayoutMetrics.LINE_HEIGHT_EM).coerceAtLeast(1f)
         val cols = (usableW / charW).toInt().coerceIn(minCols, maxCols)
-        val rows = (usableH / charH).toInt().coerceIn(minRows, maxRows)
+        val rows = ((usableH / charH) - TerminalLayoutMetrics.BOTTOM_ROW_MARGIN)
+            .toInt().coerceIn(minRows, maxRows)
         return Geometry(rows = rows, cols = cols)
     }
 }

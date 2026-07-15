@@ -5,7 +5,7 @@
 ![Architecture](https://img.shields.io/badge/Architecture-NDK%20%2B%20Jetpack%20Compose-purple)
 ![AI](https://img.shields.io/badge/AI-Multi%20Provider%20%2B%20Vision%20%2B%20MCP%20%2B%20Tools-cyan)
 ![Linux](https://img.shields.io/badge/Linux-Ubuntu%2024.04%20via%20proot-orange)
-![Version](https://img.shields.io/badge/version-8.1.0-blue)
+![Version](https://img.shields.io/badge/version-8.1.1-blue)
 ![Kotlin](https://img.shields.io/badge/Kotlin-2.0.21-7F52FF)
 ![AGP](https://img.shields.io/badge/AGP-8.5.2-orange)
 ![Tests](https://img.shields.io/badge/tests-14%20files-green)
