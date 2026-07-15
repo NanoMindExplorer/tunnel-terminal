@@ -27,7 +27,7 @@
 19. [Agent Workflows](#19-agent-workflows)
 20. [Agent Mode](#20-agent-mode)
 21. [MCP Protocol](#21-mcp-protocol)
-22. [Storage Access (SAF)](#22-storage-access-saf)
+22. [Storage Access (SAF + Download)](#20-storage-access-saf--download)
 23. [Pinch-to-Zoom & Font Size](#23-pinch-to-zoom--font-size)
 24. [Bookmarks](#24-bookmarks)
 25. [Scrollback Search & URL Open](#25-scrollback-search--url-open)
@@ -83,7 +83,8 @@ Saat app pertama dibuka, Anda akan melihat:
   ...
 ─ Quick Help ─────────────────────────────────────────────────
   help              Tampilkan menu bantuan lengkap
-  setup-storage     Bridge ke /sdcard via SAF
+  setup-storage     Pilih folder perangkat (Download disarankan)
+  storage-ls / put / save-download / status
   ...
 ```
 
@@ -123,9 +124,11 @@ Tunnel Terminal menggunakan `/system/bin/sh` Android sebagai shell. Command yang
 |---------|--------|
 | `help` | Menu bantuan |
 | `clear` | Bersihkan layar |
-| `setup-storage` | Bridge ke /sdcard |
-| `storage-status` | Status storage |
-| `storage-reset` | Reset storage |
+| `setup-storage` | Pilih folder perangkat (SAF; Download) |
+| `storage-ls` / `put` / `get` / `write` | List / salin / tulis di folder SAF |
+| `storage-save-download` | Simpan ke Download publik |
+| `storage-grant-all` | Opsional akses semua file |
+| `storage-status` / `storage-reset` | Status / cabut grant |
 | `system-info` | Info sistem (MOTD) |
 | `open <file>` | Buka file di editor |
 
@@ -720,29 +723,59 @@ MCP (Model Context Protocol) adalah standard dari Anthropic untuk AI tool intero
 
 ---
 
-## 20. Storage Access (SAF)
+## 20. Storage Access (SAF + Download)
+
+Android 11+ **tidak** mengizinkan shell/`java.io.File` menulis ke `/sdcard` atau
+`Download` hanya karena path terlihat valid. Tunnel Terminal memakai tiga jalur:
+
+1. **SAF (disarankan)** — `setup-storage` → pilih folder (mis. **Download**)
+2. **MediaStore** — `storage-save-download` langsung ke Download publik
+3. **All-files (opsional)** — `storage-grant-all` agar path shell `/storage/emulated/0/...` bisa dipakai
 
 ### Setup
 
-Ketik `setup-storage` di terminal → SAF folder picker terbuka
+```
+setup-storage
+```
 
-### Pilih Folder
+Picker folder terbuka (awal disarankan di **Download**). Pilih folder → **Use this folder** / Allow.
 
-1. Pilih folder (misal: /sdcard atau Documents)
-2. Tap **Allow**
-3. Bridge dibuat di `~/storage/shared/`
+### Perintah storage
 
-### Akses File
+| Perintah | Fungsi |
+|----------|--------|
+| `storage-status` | Status grant, path map, all-files |
+| `storage-ls [sub]` | List isi folder SAF |
+| `storage-put <file> [dest]` | Salin dari workspace → folder SAF |
+| `storage-get <file> [local]` | Salin dari folder SAF → workspace |
+| `storage-write <path> <teks>` | Tulis teks ke file di folder SAF |
+| `storage-save-download <file> [name]` | Simpan ke **Download publik** (terlihat di app Files) |
+| `storage-grant-all` | Buka pengaturan “Akses semua file” (opsional) |
+| `storage-rm <path>` | Hapus file di folder SAF |
+| `storage-reset` | Cabut izin & reset setup |
 
-Setelah setup, Anda bisa:
-- `cd ~/storage/shared/` → akses file dari file manager
-- `cat ~/storage/shared/Documents/notes.txt`
-- `open ~/storage/shared/test.py`
+### Contoh alur: simpan ke Download
 
-### Status
+```
+# 1) sekali saja: pilih folder Download
+setup-storage
 
-- `storage-status` → cek konfigurasi
-- `storage-reset` → reset konfigurasi
+# 2a) tulis langsung di folder yang di-grant
+storage-write catatan.txt Halo dari Tunnel
+
+# 2b) atau dari file di workspace app
+echo hello > $HOME/../workspace/hello.txt
+storage-put hello.txt
+# atau tanpa SAF tree:
+storage-save-download hello.txt
+
+# 3) verifikasi
+storage-ls
+storage-status
+```
+
+AI (`write_file`) ke path absolut di tree yang di-grant (mis.
+`/storage/emulated/0/Download/x.txt`) juga memakai bridge SAF yang sama.
 
 ---
 
@@ -901,7 +934,8 @@ Jika model support vision → **👁 Vision** badge muncul
 │  ⌘K     Command Palette      AI   AI Copilot drawer         │
 ├─────────────────────────────────────────────────────────────┤
 │ Built-in commands:                                           │
-│  help  clear  setup-storage  storage-status  storage-reset  │
+│  help  clear  setup-storage  storage-status  storage-ls     │
+│  storage-put/get/write  storage-save-download  storage-reset│
 │  system-info  open <file>                                   │
 ├─────────────────────────────────────────────────────────────┤
 │ @mentions: @file: @block: @command: @terminal @snippet:     │

@@ -98,9 +98,11 @@ Terminal Android konvensional hanya menampilkan teks dan mengeksekusi command. T
 | `export-output` / `export-chat` | Export transcript / chat AI |
 | `copy-output` | Salin output terminal ke clipboard |
 | `bookmark list\|add\|go\|remove` | Bookmark direktori + quick `cd` |
-| `setup-storage` | Bridge ke /sdcard via SAF |
-| `storage-status` | Status konfigurasi storage |
-| `storage-reset` | Reset storage |
+| `setup-storage` | Pilih folder perangkat (SAF; disarankan Download) |
+| `storage-ls` / `put` / `get` / `write` | List/salin/tulis di folder SAF |
+| `storage-save-download` | Simpan file ke Download publik (MediaStore) |
+| `storage-grant-all` | Opsional: akses semua file untuk path shell |
+| `storage-status` / `storage-reset` | Status / cabut grant |
 | `system-info` | Info sistem (MOTD) |
 | `open <file>` | Edit file di Tunnel Editor |
 | `ssh-list-hostkeys` / `ssh-reset-hostkeys` | TOFU host keys |

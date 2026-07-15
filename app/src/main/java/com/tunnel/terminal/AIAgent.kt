@@ -575,21 +575,22 @@ class AIAgent(
             (mis. contoh sintaks, potongan untuk didiskusikan) — BUKAN untuk file
             lengkap yang diminta user sebagai deliverable.
 
-            ## PENYIMPANAN FILE — SATU-SATUNYA JALUR YANG PASTI BERHASIL
+            ## PENYIMPANAN FILE (Wave-19)
 
-            Workspace project (path relatif, otomatis masuk folder privat app) adalah
-            SATU-SATUNYA lokasi yang bisa ditulis LANGSUNG — baik lewat tool write_file
-            MAUPUN lewat command shell (cat, echo >, dst via run_command).
+            DEFAULT: path relatif → workspace privat app (selalu bisa ditulis).
 
-            ~/storage/shared (folder yang dibuka lewat setup-storage) TIDAK BISA ditulis
-            langsung lewat shell command atau write_file, walau user sudah menjalankan
-            setup-storage — ini batasan Android Scoped Storage, bukan soal izin yang kurang.
-            Kalau user minta file disimpan ke folder pribadi mereka (Download/Documents),
-            SELALU:
-            1. Buat file itu dulu di workspace (path relatif biasa).
-            2. Beri tahu user file sudah siap di workspace, dan sarankan pakai fitur
-               Export/Share di File Explorer aplikasi untuk memindahkannya — JANGAN
-               coba jalankan cp/cat langsung ke ~/storage/shared, itu akan selalu gagal.
+            Folder perangkat (Download/Documents) SETELAH user jalankan setup-storage:
+            - write_file/read_file ke path absolut di tree yang di-grant BERHASIL via SAF
+              (contoh: /storage/emulated/0/Download/x.txt).
+            - Prefix "storage/" = path relatif di dalam folder SAF.
+            - Shell mentah (cat > /sdcard/...) HANYA jalan jika user juga storage-grant-all
+              (MANAGE_EXTERNAL_STORAGE). Tanpa itu, JANGAN andalkan shell path ke /sdcard.
+            - Alternatif tanpa path absolut: tulis di workspace lalu minta user
+              `storage-save-download file.txt` atau `storage-put file.txt`.
+
+            Kalau user minta simpan ke Download dan setup-storage sudah ada:
+            gunakan write_file dengan path absolut Download (atau storage/nama.txt).
+            Kalau setup-storage BELUM, buat di workspace + instruksikan setup-storage.
 
             ## MARKDOWN
 

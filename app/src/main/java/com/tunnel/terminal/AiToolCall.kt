@@ -136,17 +136,25 @@ data class AiToolCall(
             project privat (selalu bisa ditulis, tidak perlu izin apa pun). Gunakan
             ini sebagai DEFAULT, contoh: {"path":"main.py"} atau {"path":"src/utils.py"}.
 
-            Kalau user secara eksplisit minta simpan ke folder pribadi mereka (Download,
-            Documents, dst) — user harus sudah menjalankan "setup-storage" satu kali.
-            Baru gunakan path absolut seperti "/storage/emulated/0/Download/x.txt".
-            JANGAN pakai path absolut untuk file kerja biasa — selalu default ke path
-            relatif workspace.
+            Kalau user minta simpan ke folder perangkat (Download/Documents):
+            1) Prefer path absolut di bawah folder yang sudah di-grant via setup-storage,
+               mis. "/storage/emulated/0/Download/catatan.txt" — app menulis lewat SAF
+               (bukan java.io.File mentah), jadi benar-benar masuk folder Download.
+            2) Atau prefix "storage/" = path relatif di dalam tree SAF
+               (mis. {"path":"storage/catatan.txt"}).
+            3) Alternatif: tulis dulu di workspace, lalu user jalankan
+               storage-save-download <file> atau storage-put <file>.
+            User harus sudah setup-storage (pilih Download) sebelum path absolut device
+            atau storage/ dipakai. JANGAN pakai path absolut device untuk file kerja biasa.
 
-            Contoh workflow:
+            Contoh workflow workspace:
             1. User: "Buat file hello.py yang print Hello World"
             2. AI: <tool_call>{"tool":"write_file","args":{"path":"hello.py","content":"print('Hello World')"}}</tool_call>
-            3. System: OK: wrote 22 chars to /data/data/com.tunnel.terminal/files/workspace/hello.py
-            4. AI: "File hello.py sudah dibuat di workspace kamu."
+            3. System: OK: wrote 22 chars to .../files/workspace/hello.py
+            4. AI: "File hello.py sudah dibuat di workspace."
+
+            Contoh simpan ke Download (setelah setup-storage pilih Download):
+            <tool_call>{"tool":"write_file","args":{"path":"/storage/emulated/0/Download/hello.txt","content":"halo"}}</tool_call>
 
             Untuk memanggil tool, sertakan dalam response:
             <tool_call>{"tool":"read_file","args":{"path":"main.py"}}</tool_call>
@@ -218,14 +226,33 @@ class ToolExecutor(
     }
 
     /**
-     * Phase 47 (Bagian 1 Fix 1): Resolve path AI ke File asli, dengan sandbox.
+     * Phase 47 (Bagian 1 Fix 1) + Wave-19: Resolve path AI ke File asli, dengan sandbox.
      *
      * - Path relatif (tidak diawali "/") → workspaceRoot/path (selalu diizinkan)
+     * - Prefix "storage/" → file virtual di bawah tree SAF (absolute mapped path)
      * - Path absolut di dalam workspaceRoot → diizinkan
-     * - Path absolut di dalam tree SAF yang sudah di-grant → diizinkan
+     * - Path absolut di dalam tree SAF yang sudah di-grant → diizinkan (I/O via SAF)
      * - Selain itu → SecurityException dengan pesan jelas
      */
     private fun resolvePath(rawPath: String): File {
+        val sm = storageManager
+        /* Wave-19: storage/foo.txt → relative path under granted SAF tree. */
+        if (sm != null && sm.isSetupDone()) {
+            val storageRel = when {
+                rawPath.startsWith("storage/") -> rawPath.removePrefix("storage/")
+                rawPath == "storage" || rawPath == "storage/" -> ""
+                rawPath.startsWith("~/storage/shared/") -> rawPath.removePrefix("~/storage/shared/")
+                rawPath.startsWith("~/storage/shared") -> rawPath.removePrefix("~/storage/shared").trimStart('/')
+                else -> null
+            }
+            if (storageRel != null) {
+                val root = sm.getGrantedRootPath()
+                    ?: throw SecurityException("setup-storage belum memetakan path root. Jalankan setup-storage lagi.")
+                val mapped = if (storageRel.isBlank()) File(root) else File(root, storageRel)
+                return mapped
+            }
+        }
+
         /* Phase 57 fix (§4.1): Pakai SessionTargetResolver kalau ada (untuk support Ubuntu).
          * Fallback ke resolvePath lama kalau resolver belum di-set (backward compat). */
         val resolver = sessionTargetResolver
@@ -235,7 +262,7 @@ class ToolExecutor(
 
             /* Sandbox check: izinkan kalau di dalam workspace, rootfs Ubuntu, atau SAF tree. */
             if (!resolver.isPathAllowed(canonical)) {
-                val insideGrantedStorage = storageManager?.isPathWithinGrantedTree(canonical) ?: false
+                val insideGrantedStorage = sm?.isPathWithinGrantedTree(canonical) ?: false
                 if (!insideGrantedStorage) {
                     throw SecurityException(
                         "Path '$rawPath' di luar workspace project dan di luar folder yang " +
@@ -256,7 +283,7 @@ class ToolExecutor(
         /* Wave-1: boundary-aware prefix check (not bare startsWith). */
         val insideWorkspace = SessionTargetResolver.isPathInside(canonical.canonicalPath, workspacePath)
 
-        val insideGrantedStorage = storageManager?.isPathWithinGrantedTree(canonical) ?: false
+        val insideGrantedStorage = sm?.isPathWithinGrantedTree(canonical) ?: false
 
         if (!insideWorkspace && !insideGrantedStorage) {
             throw SecurityException(
@@ -267,6 +294,65 @@ class ToolExecutor(
             )
         }
         return canonical
+    }
+
+    /**
+     * Wave-19: If this absolute path is under the granted SAF tree, return the
+     * relative DocumentFile path so we use ContentResolver I/O (real device write).
+     * Raw java.io.File fails on Android 11+ even when path is "allowed" by sandbox.
+     */
+    private fun safRelativeFor(file: File): String? {
+        val sm = storageManager ?: return null
+        if (!sm.isSetupDone()) return null
+        val abs = try { file.canonicalPath } catch (_: Exception) { file.absolutePath }
+        if (sm.shouldUseSafForAbsolutePath(abs)) {
+            return sm.relativePathUnderGrant(abs) ?: ""
+        }
+        /* Bridge marker ~/storage/shared/... when symlink is not a real bind. */
+        val bridge = try { sm.sharedLinkFile.canonicalPath } catch (_: Exception) { sm.sharedLinkFile.absolutePath }
+        if (SessionTargetResolver.isPathInside(abs, bridge)) {
+            return abs.removePrefix(bridge).trimStart('/')
+        }
+        return null
+    }
+
+    private fun safWriteText(file: File, content: String): String? {
+        val rel = safRelativeFor(file) ?: return null
+        val sm = storageManager ?: return null
+        return sm.writeTextRelative(rel, content).fold(
+            onSuccess = { it },
+            onFailure = { "Error: ${it.message}" }
+        )
+    }
+
+    private fun safReadText(file: File, maxChars: Int): String? {
+        val rel = safRelativeFor(file) ?: return null
+        val sm = storageManager ?: return null
+        return sm.readTextRelative(rel, maxChars).fold(
+            onSuccess = { it },
+            onFailure = { "Error: ${it.message}" }
+        )
+    }
+
+    private fun listViaSaf(file: File): String? {
+        val rel = safRelativeFor(file) ?: return null
+        val sm = storageManager ?: return null
+        return sm.listRelative(rel).fold(
+            onSuccess = { rows ->
+                if (rows.isEmpty()) "(empty) ${sm.getDisplayName()}/$rel"
+                else rows.joinToString("\n")
+            },
+            onFailure = { "Error: ${it.message}" }
+        )
+    }
+
+    private fun safDelete(file: File): String? {
+        val rel = safRelativeFor(file) ?: return null
+        val sm = storageManager ?: return null
+        return sm.deleteRelative(rel).fold(
+            onSuccess = { it },
+            onFailure = { "Error: ${it.message}" }
+        )
     }
 
     /**
@@ -313,9 +399,18 @@ class ToolExecutor(
         }
 
         val file = resolvePath(path)
-        if (!file.exists()) return "Error: file not found: ${file.absolutePath}"
-        val original = try { file.readText() } catch (e: Exception) {
-            return "Error: cannot read file: ${e.message}"
+        /* Wave-19: SAF read for device paths under granted tree. */
+        val original = when (val safBody = safReadText(file, 500_000)) {
+            null -> {
+                if (!file.exists()) return "Error: file not found: ${file.absolutePath}"
+                try { file.readText() } catch (e: Exception) {
+                    return "Error: cannot read file: ${e.message}"
+                }
+            }
+            else -> {
+                if (safBody.startsWith("Error:")) return safBody
+                safBody
+            }
         }
         val occurrences = Regex(Regex.escape(oldString)).findAll(original).count()
         return when {
@@ -324,8 +419,14 @@ class ToolExecutor(
             else -> {
                 checkpointManager?.saveCheckpointBeforeWrite(file.absolutePath)
                 val updated = original.replaceFirst(oldString, newString)
-                file.writeText(updated)
-                "OK: edited ${file.absolutePath} (replaced 1 occurrence)"
+                val safResult = safWriteText(file, updated)
+                if (safResult != null) {
+                    if (safResult.startsWith("Error:")) safResult
+                    else "OK: edited ${file.absolutePath} via SAF (replaced 1 occurrence)"
+                } else {
+                    file.writeText(updated)
+                    "OK: edited ${file.absolutePath} (replaced 1 occurrence)"
+                }
             }
         }
     }
@@ -348,6 +449,12 @@ class ToolExecutor(
                         if (text != null) formatReadResult(path, text) else "Error: cannot read remote file: $path"
                     } else {
                         val file = resolvePath(path)
+                        /* Wave-19: device paths under SAF grant → ContentResolver read. */
+                        val safBody = safReadText(file, MAX_READ_CHARS)
+                        if (safBody != null) {
+                            if (safBody.startsWith("Error:")) return safBody
+                            return formatReadResult(file.absolutePath, safBody)
+                        }
                         if (!file.exists()) return "Error: file not found: ${file.absolutePath}"
                         if (!file.canRead()) return "Error: cannot read file (permission denied): ${file.absolutePath}"
                         if (file.isDirectory) return "Error: path is a directory: ${file.absolutePath}"
@@ -367,6 +474,8 @@ class ToolExecutor(
                         if (files != null) files.joinToString("\n") else "Error: cannot list remote directory: $dirRaw"
                     } else {
                         val file = if (dirRaw == ".") workspaceRoot else resolvePath(dirRaw)
+                        val viaSaf = listViaSaf(file)
+                        if (viaSaf != null) return viaSaf
                         if (!file.exists() || !file.isDirectory) return "Error: not a directory: ${file.absolutePath}"
                         file.listFiles()?.joinToString("\n") { f ->
                             "${if (f.isDirectory) "d" else "-"} ${f.name}"
@@ -473,6 +582,9 @@ class ToolExecutor(
                     } else {
                         val file = resolvePath(path)
                         checkpointManager?.saveCheckpointBeforeWrite(file.absolutePath)
+                        /* Wave-19: real device write via SAF when under granted tree. */
+                        val safResult = safWriteText(file, content)
+                        if (safResult != null) return safResult
                         file.parentFile?.mkdirs()
                         file.writeText(content)
                         "OK: wrote ${content.length} chars to ${file.absolutePath}"
@@ -487,6 +599,8 @@ class ToolExecutor(
                         else "Error: failed to delete remote file: $path"
                     } else {
                         val file = resolvePath(path)
+                        val safDel = safDelete(file)
+                        if (safDel != null) return safDel
                         if (!file.exists()) return "Error: file not found: ${file.absolutePath}"
                         if (file.isDirectory) return "Error: refusing to delete directory via delete_file: ${file.absolutePath}"
                         /* Wave-4: checkpoint snapshot before delete so undo is possible. */

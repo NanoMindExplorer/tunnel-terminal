@@ -127,7 +127,7 @@ app/src/main/
 │   ├── ModelFetcher.kt         (183 lines) — /models endpoint fetcher
 │   ├── SmartAutocomplete.kt    (157 lines) — Command suggestions + voice input
 │   ├── SnippetManager.kt       (90 lines) — Workflow snippet persistence
-│   ├── StorageManager.kt       (280+ lines) — SAF bridge + isPathWithinGrantedTree
+│   ├── StorageManager.kt       (SAF CRUD + MediaStore Downloads + all-files) — Wave-19
 │   ├── SshConnectDialog.kt     (200 lines) — SSH connection form
 │   ├── SyntaxHighlighter.kt    (314 lines) — 8-language highlighter
 │   ├── SystemInfo.kt           (186 lines) — MOTD system info

@@ -14,6 +14,8 @@
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
     <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
     <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
+    <!-- Wave-19: optional all-files access so shell can use real /sdcard paths after user grants it -->
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
 
     <!-- Network permission for AI API calls -->
     <uses-permission android:name="android.permission.INTERNET" />
