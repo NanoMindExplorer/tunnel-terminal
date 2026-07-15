@@ -2721,12 +2721,33 @@ class MainActivity : ComponentActivity() {
                     }
                     lastInputValue.startsWith(newValue) -> {
                         val deleted = lastInputValue.length - newValue.length
+                        /*
+                         * Wave-18: Ignore spurious full wipes.
+                         * After shell echo → recompose, some IMEs fire onValueChange("") once.
+                         * Treating that as "delete all" sends N backspaces and wipes the line.
+                         * Real single-char backspaces still have deleted == 1 (or small).
+                         * Full clear: use ExtraKeys ^U instead.
+                         */
+                        if (newValue.isEmpty() && lastInputValue.isNotEmpty() && deleted >= 2) {
+                            syncField(lastInputValue)
+                            return
+                        }
+                        if (newValue.isEmpty() && lastInputValue.length == 1) {
+                            /* Allow deleting the last remaining character. */
+                            sendBackspace()
+                            syncField("")
+                            return
+                        }
                         repeat(deleted.coerceAtLeast(0)) { sendBackspace() }
                         syncField(newValue)
                     }
                     else -> {
-                        /* IME replaced the field (composition, autocorrect, suggestion).
-                         * Delete what we previously sent, then type the new content. */
+                        /* IME composition / autocorrect replace.
+                         * Wave-18: If newValue is empty, do NOT mass-backspace (same spurious wipe). */
+                        if (newValue.isEmpty() && lastInputValue.isNotEmpty()) {
+                            syncField(lastInputValue)
+                            return
+                        }
                         repeat(lastInputValue.length) { sendBackspace() }
                         var sawEnter = false
                         for (ch in newValue) {

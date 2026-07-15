@@ -31,6 +31,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.PlatformTextStyle
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -40,6 +41,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.style.LineHeightStyle
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -413,19 +415,19 @@ fun TerminalScreenView(
     /* Wave-7 + Wave-15: Auto-scroll when near bottom (LazyColumn). */
     var showJumpToBottom by remember { mutableStateOf(false) }
 
-    /* BUG-05+06 fix: Panggil onResize LANGSUNG saat fontSize berubah.
-     * Konversi sp→px dengan density yang benar. */
-    LaunchedEffect(fontSize) {
-        if (lastSize.width > 0 && lastSize.height > 0) {
-            /* BUG-05 fix: Gunakan density untuk konversi sp→px. */
-            val charWidthPx = with(density) { (fontSize.sp.toPx() * 0.6f) }
-            val charHeightPx = with(density) { (fontSize.sp.toPx() * 1.2f) }
-            if (charWidthPx > 0 && charHeightPx > 0) {
-                val newCols = (lastSize.width / charWidthPx).toInt().coerceAtLeast(20)
-                val newRows = (lastSize.height / charHeightPx).toInt().coerceAtLeast(10)
-                onResize(newRows, newCols, fontSize)
-            }
-        }
+    /* BUG-05+06 + Wave-18: Resize PTY with shared metrics (pad + line box + bottom margin). */
+    fun emitResize(fontSp: Float) {
+        if (lastSize.width <= 0 || lastSize.height <= 0) return
+        val grid = TerminalLayoutMetrics.computeGrid(
+            widthPx = lastSize.width,
+            heightPx = lastSize.height,
+            fontSp = fontSp,
+            density = density
+        )
+        onResize(grid.rows, grid.cols, fontSp)
+    }
+    LaunchedEffect(fontSize, lastSize.width, lastSize.height) {
+        emitResize(fontSize)
     }
     val clipboardManager = androidx.compose.ui.platform.LocalClipboardManager.current
     /* Phase 53: Text toolbar for COPY/PASTE floating menu. */
@@ -454,15 +456,21 @@ fun TerminalScreenView(
     val sbCount = scrollbackSnapshot.size
     val totalContentRows = (sbCount + renderRows).coerceAtLeast(1)
 
-    /* Wave-15: Auto-scroll / jump-to-bottom using LazyListState. */
+    /* Wave-15: Auto-scroll only when user is already near the bottom. */
     LaunchedEffect(screenDirty, isSelecting, totalContentRows) {
         val lastIndex = (totalContentRows - 1).coerceAtLeast(0)
         val lastVisible = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
-        val nearBottom = lastVisible >= lastIndex - 2
+        val nearBottom = lastVisible >= lastIndex - 2 || lastIndex <= 0
         showJumpToBottom = !nearBottom && totalContentRows > renderRows
         if (nearBottom && !isSelecting) {
             listState.scrollToItem(lastIndex)
         }
+    }
+    /* Wave-18: After zoom, always pin to bottom so last rows are not cut off. */
+    LaunchedEffect(fontSize) {
+        val lastIndex = (totalContentRows - 1).coerceAtLeast(0)
+        listState.scrollToItem(lastIndex)
+        showJumpToBottom = false
     }
     LaunchedEffect(listState.firstVisibleItemIndex, listState.layoutInfo.visibleItemsInfo.size, totalContentRows) {
         val lastIndex = (totalContentRows - 1).coerceAtLeast(0)
@@ -472,11 +480,11 @@ fun TerminalScreenView(
 
     /* Phase 53: Selection toolbar helpers. */
     fun selectionBoundsToRect(start: Pair<Int, Int>, end: Pair<Int, Int>): androidx.compose.ui.geometry.Rect {
-        val charW = with(density) { fontSize.sp.toPx() * 0.6f }
-        val charH = with(density) { fontSize.sp.toPx() * 1.2f }
+        val charW = TerminalLayoutMetrics.charWidthPx(fontSize, density)
+        val charH = TerminalLayoutMetrics.lineHeightPx(fontSize, density)
         val (sRow, sCol) = if (start.first < end.first || (start.first == end.first && start.second <= end.second)) start else end
         val (eRow, eCol) = if (start.first < end.first || (start.first == end.first && start.second <= end.second)) end else start
-        val paddingPx = with(density) { 4.dp.toPx() }
+        val paddingPx = TerminalLayoutMetrics.padPx(density)
         /* Wave-15: Map content rows to viewport via LazyList first-visible offset. */
         val firstIdx = listState.firstVisibleItemIndex
         val firstOff = listState.firstVisibleItemScrollOffset
@@ -538,17 +546,10 @@ fun TerminalScreenView(
             .onSizeChanged { size ->
                 lastSize = size
                 val now = System.currentTimeMillis()
-                if (now - lastResizeTime < 100) return@onSizeChanged
+                if (now - lastResizeTime < 80) return@onSizeChanged
                 lastResizeTime = now
-
-                /* BUG-05 fix: Gunakan density untuk konversi sp→px. */
-                val charWidthPx = with(density) { (fontSize.sp.toPx() * 0.6f) }
-                val charHeightPx = with(density) { (fontSize.sp.toPx() * 1.2f) }
-                if (charWidthPx > 0 && charHeightPx > 0 && size.width > 0 && size.height > 0) {
-                    val newCols = (size.width / charWidthPx).toInt().coerceAtLeast(20)
-                    val newRows = (size.height / charHeightPx).toInt().coerceAtLeast(10)
-                    onResize(newRows, newCols, fontSize)
-                }
+                /* Wave-18: Same metrics as paint path. */
+                emitResize(fontSize)
             }
             /* Phase 40 fix (A3): Unified gesture handler — tap + long-press + drag
              * dalam SATU pointerInput block. Old code pakai 3 pointerInput terpisah
@@ -589,10 +590,10 @@ fun TerminalScreenView(
                      *
                      * Added debug log untuk verifikasi di device (kalau masih meleset,
                      * enable Logcat filter "Selection" untuk lihat nilai aktual). */
-                    val paddingPx = with(density) { 4.dp.toPx() }
+                    val paddingPx = TerminalLayoutMetrics.padPx(density)
                     fun posToCell(pos: androidx.compose.ui.geometry.Offset): Pair<Int, Int> {
-                        val charW = with(density) { fontSize.sp.toPx() * 0.6f }
-                        val charH = with(density) { fontSize.sp.toPx() * 1.2f }
+                        val charW = TerminalLayoutMetrics.charWidthPx(fontSize, density)
+                        val charH = TerminalLayoutMetrics.lineHeightPx(fontSize, density)
                         /* Wave-15: LazyColumn — content row from firstVisibleItem + local Y. */
                         val firstIdx = listState.firstVisibleItemIndex
                         val firstOff = listState.firstVisibleItemScrollOffset
@@ -678,8 +679,8 @@ fun TerminalScreenView(
                         val mouseOn = emulator.mouseTracking || emulator.mouseSgr
                         if (mouseOn) {
                             val btn = if (scroll.y < 0) 64 else 65
-                            val charW = with(density) { fontSize.sp.toPx() * 0.6f }
-                            val charH = with(density) { fontSize.sp.toPx() * 1.2f }
+                            val charW = TerminalLayoutMetrics.charWidthPx(fontSize, density)
+                            val charH = TerminalLayoutMetrics.lineHeightPx(fontSize, density)
                             val col = (change.position.x / charW).toInt().coerceIn(1, renderCols.coerceAtLeast(1))
                             val row = (change.position.y / charH).toInt().coerceIn(1, renderRows.coerceAtLeast(1))
                             emulator.encodeMouseEvent(btn, col, row, press = true)?.let { seq ->
@@ -700,14 +701,26 @@ fun TerminalScreenView(
                 }
             }
     ) {
-        /* Wave-15/16: Virtualized rows; use gestureFontSp so pinch paints immediately. */
+        /* Wave-15/16/18: Virtualized rows with shared line metrics (no bottom clip). */
         val displaySp = gestureFontSp
-        val rowHeight = with(density) { (displaySp.sp.toPx() * 1.2f) }
+        val rowHeightPx = TerminalLayoutMetrics.lineHeightPx(displaySp, density)
+        val rowHeightDp = with(density) { rowHeightPx.toDp() }
+        val cellTextStyle = TextStyle(
+            fontFamily = FontFamily.Monospace,
+            fontSize = displaySp.sp,
+            lineHeight = (displaySp * TerminalLayoutMetrics.LINE_HEIGHT_EM).sp,
+            /* Wave-18: Disable Android font padding — was the main cause of clipped bottoms. */
+            platformStyle = PlatformTextStyle(includeFontPadding = false),
+            lineHeightStyle = LineHeightStyle(
+                alignment = LineHeightStyle.Alignment.Center,
+                trim = LineHeightStyle.Trim.Both
+            )
+        )
         LazyColumn(
             state = listState,
             modifier = Modifier
                 .fillMaxSize()
-                .padding(4.dp),
+                .padding(TerminalLayoutMetrics.PAD_DP.dp),
             userScrollEnabled = !isSelecting
         ) {
             items(
@@ -732,14 +745,13 @@ fun TerminalScreenView(
                 )
                 Text(
                     text = annotatedString,
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = displaySp.sp,
+                    style = cellTextStyle,
                     softWrap = false,
                     maxLines = 1,
                     overflow = androidx.compose.ui.text.style.TextOverflow.Clip,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(with(density) { rowHeight.toDp() })
+                        .height(rowHeightDp)
                 )
             }
         }
