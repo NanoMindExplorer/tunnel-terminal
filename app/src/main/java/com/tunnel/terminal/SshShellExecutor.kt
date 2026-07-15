@@ -102,14 +102,30 @@ class SshShellExecutor(
     private val _screenDirty = MutableStateFlow(0)
     override val screenDirty: StateFlow<Int> = _screenDirty.asStateFlow()
 
-    /** Phase 48 fix (F-5): Throttle screenDirty ke ~30fps (33ms min interval). */
+    /** Wave-20: ~30fps throttle + trailing edge (same as PtySessionBase). */
     @Volatile
     private var lastScreenDirtyTime: Long = 0
+    private val pendingTrailingDirty = java.util.concurrent.atomic.AtomicBoolean(false)
+    private val dirtyHandler by lazy { android.os.Handler(android.os.Looper.getMainLooper()) }
+    private val trailingDirtyRunnable = Runnable {
+        if (pendingTrailingDirty.compareAndSet(true, false)) {
+            lastScreenDirtyTime = System.currentTimeMillis()
+            _screenDirty.value++
+        }
+    }
+
     override fun triggerScreenUpdate() {
         val now = System.currentTimeMillis()
-        if (now - lastScreenDirtyTime >= 33) {
+        val elapsed = now - lastScreenDirtyTime
+        if (elapsed >= 33) {
+            pendingTrailingDirty.set(false)
+            dirtyHandler.removeCallbacks(trailingDirtyRunnable)
             lastScreenDirtyTime = now
             _screenDirty.value++
+        } else {
+            pendingTrailingDirty.set(true)
+            dirtyHandler.removeCallbacks(trailingDirtyRunnable)
+            dirtyHandler.postDelayed(trailingDirtyRunnable, (33 - elapsed).coerceAtLeast(1))
         }
     }
 
@@ -264,7 +280,8 @@ class SshShellExecutor(
 
                 /* Wave-13: PTY size from display metrics (was hard-coded 80×24). */
                 channel?.setPtyType("xterm-256color")
-                val geo = TerminalSize.fromDisplay(context, fontSizeSp = 12f)
+                val fontSp = TerminalSize.readPersistedFontSp(context)
+                val geo = TerminalSize.fromDisplay(context, fontSizeSp = fontSp)
                 channel?.setPtySize(geo.cols, geo.rows, geo.cols * 8, geo.rows * 12)
                 Log.i(tag, "SSH PTY size=${geo.rows}x${geo.cols}")
 
@@ -417,6 +434,8 @@ class SshShellExecutor(
     override fun destroy() {
         if (!isAlive && session == null && channel == null && readThread == null) return
         isAlive = false
+        pendingTrailingDirty.set(false)
+        try { dirtyHandler.removeCallbacks(trailingDirtyRunnable) } catch (_: Exception) {}
 
         /* Phase 58: Disconnect SFTP channel too. */
         try { sftpChannel?.disconnect() } catch (_: Exception) {}

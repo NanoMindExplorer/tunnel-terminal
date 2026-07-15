@@ -31,8 +31,9 @@ class ShellExecutor(
             isAlive = true
             resetSessionBuffers()
 
-            /* Wave-13: Shared geometry helper (same as proot/SSH). */
-            val geo = TerminalSize.fromDisplay(context, fontSizeSp = 12f)
+            /* Wave-13/20: Shared geometry — use persisted font size (not hard-coded 12sp). */
+            val fontSp = TerminalSize.readPersistedFontSp(context)
+            val geo = TerminalSize.fromDisplay(context, fontSizeSp = fontSp)
             val initialCols = geo.cols
             val initialRows = geo.rows
 
