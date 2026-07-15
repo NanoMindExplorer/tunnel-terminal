@@ -232,27 +232,49 @@ class MainActivity : ComponentActivity() {
     private var isLoadingModels by mutableStateOf(false)
     private var modelsFetchError by mutableStateOf<String?>(null)
 
-    /** SAF launcher - dipanggil saat user ketik `setup-storage`. */
+    /**
+     * Wave-19: SAF tree picker with Downloads as suggested start folder.
+     * Uses StartActivityForResult + StorageManager.createOpenTreeIntent() so
+     * persistable read/write flags and EXTRA_INITIAL_URI (primary:Download) apply.
+     */
     private val storageLauncher = registerForActivityResult(
-        ActivityResultContracts.OpenDocumentTree()
-    ) { uri: Uri? ->
-        if (uri != null) {
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        val uri = result.data?.data
+        if (result.resultCode == android.app.Activity.RESULT_OK && uri != null) {
             val ok = storageManager.persistTreeUri(uri)
             val msg = if (ok) {
                 storageManager.createStorageSymlink()
             } else {
                 "Gagal mengambil persistable permission untuk URI: $uri"
             }
-            /* Output ke terminal aktif. */
-            shellExecutors.find { it.id == activeExecutorId }?.let { exec ->
-                exec.emulator.process("\n\u001B[32m$msg\u001B[0m\n")
-                exec.triggerScreenUpdate()
+            termNotify("\n\u001B[32m$msg\u001B[0m\n")
+        } else {
+            termNotify("\n\u001B[33mSetup storage dibatalkan.\u001B[0m\n")
+        }
+    }
+
+    /** Wave-19: Return from Settings "All files access" → rebuild bridge if SAF already set. */
+    private val manageAllFilesLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) {
+        val msg = if (storageManager.hasAllFilesAccess()) {
+            if (storageManager.isSetupDone()) {
+                storageManager.createStorageSymlink()
+            } else {
+                "✓ Akses semua file AKTIF. Ketik setup-storage lalu pilih Download agar shell path & storage-* siap."
             }
         } else {
-            shellExecutors.find { it.id == activeExecutorId }?.let { exec ->
-                exec.emulator.process("\n\u001B[33mSetup storage dibatalkan.\u001B[0m\n")
-                exec.triggerScreenUpdate()
-            }
+            "Akses semua file BELUM aktif. Anda masih bisa pakai storage-* (SAF) dan storage-save-download."
+        }
+        termNotify("\n\u001B[36m$msg\u001B[0m\n")
+    }
+
+    /** Print a message into the active terminal (Wave-19 storage helpers). */
+    private fun termNotify(ansiOrText: String) {
+        shellExecutors.find { it.id == activeExecutorId }?.let { exec ->
+            exec.emulator.process(ansiOrText)
+            exec.triggerScreenUpdate()
         }
     }
 
@@ -2428,6 +2450,13 @@ class MainActivity : ComponentActivity() {
                  * TIDAK perlu di-backspace karena karakternya memang harus sampai ke shell. */
                 val isLocalOnly = cmd == "help" || cmd == "clear" || cmd == "setup-storage" ||
                     cmd == "storage-status" || cmd == "storage-reset" ||
+                    cmd == "storage-grant-all" ||
+                    cmd == "storage-ls" || cmd.startsWith("storage-ls ") ||
+                    cmd.startsWith("storage-put ") ||
+                    cmd.startsWith("storage-get ") ||
+                    cmd.startsWith("storage-save-download ") ||
+                    cmd.startsWith("storage-write ") ||
+                    cmd.startsWith("storage-rm ") ||
                     cmd == "ssh-reset-hostkeys" || cmd == "ssh-list-hostkeys" ||
                     cmd == "system-info" ||
                     cmd == "history" || cmd == "history-clear" ||
@@ -2480,11 +2509,12 @@ class MainActivity : ComponentActivity() {
                     }
                     cmd == "setup-storage" -> {
                         activeExecutor.emulator.process(
-                            "\n\u001B[36m[Setup Storage] Membuka picker folder...\u001B[0m\n" +
-                            "\u001B[33mPilih folder yang ingin diakses (biasanya /sdcard atau Documents).\u001B[0m\n"
+                            "\n\u001B[36m[Setup Storage] Membuka picker folder perangkat...\u001B[0m\n" +
+                            "\u001B[33mDisarankan pilih folder Download (atau Documents).\u001B[0m\n" +
+                            "\u001B[33mSetelah grant, gunakan storage-ls / storage-put / storage-save-download.\u001B[0m\n"
                         )
                         activeExecutor.triggerScreenUpdate()
-                        storageLauncher.launch(null)
+                        storageLauncher.launch(storageManager.createOpenTreeIntent())
                     }
                     cmd == "storage-status" -> {
                         val report = storageManager.statusReport()
@@ -2493,7 +2523,137 @@ class MainActivity : ComponentActivity() {
                     }
                     cmd == "storage-reset" -> {
                         storageManager.clearSetup()
-                        activeExecutor.emulator.process("\n\u001B[33m[Storage] Setup direset. Ketik 'setup-storage' untuk konfigurasi ulang.\u001B[0m\n")
+                        activeExecutor.emulator.process(
+                            "\n\u001B[33m[Storage] Setup direset. Ketik 'setup-storage' untuk pilih folder lagi.\u001B[0m\n"
+                        )
+                        activeExecutor.triggerScreenUpdate()
+                    }
+                    cmd == "storage-grant-all" -> {
+                        activeExecutor.emulator.process(
+                            "\n\u001B[36m[Storage] Membuka pengaturan \"Akses semua file\"...\u001B[0m\n" +
+                            "\u001B[33mIzinkan Tunnel Terminal, lalu kembali ke app.\u001B[0m\n" +
+                            "\u001B[33mIni opsional — storage-* (SAF) tetap bekerja tanpa ini.\u001B[0m\n"
+                        )
+                        activeExecutor.triggerScreenUpdate()
+                        manageAllFilesLauncher.launch(storageManager.createManageAllFilesIntent())
+                    }
+                    cmd == "storage-ls" || cmd.startsWith("storage-ls ") -> {
+                        val sub = cmd.removePrefix("storage-ls").trim()
+                        val result = storageManager.listRelative(sub)
+                        val out = result.fold(
+                            onSuccess = { rows ->
+                                if (rows.isEmpty()) "(kosong) ${storageManager.getDisplayName()}/${sub.trim('/')}"
+                                else rows.joinToString("\n")
+                            },
+                            onFailure = { "Error: ${it.message}" }
+                        )
+                        activeExecutor.emulator.process("\n\u001B[36m$out\u001B[0m\n")
+                        activeExecutor.triggerScreenUpdate()
+                    }
+                    cmd.startsWith("storage-put ") -> {
+                        val rest = cmd.removePrefix("storage-put ").trim()
+                        val parts = rest.split(Regex("\\s+"), limit = 2)
+                        val srcName = parts.getOrNull(0).orEmpty()
+                        val dest = parts.getOrNull(1)
+                        if (srcName.isBlank()) {
+                            activeExecutor.emulator.process(
+                                "\n\u001B[31mUsage: storage-put <file-workspace|path> [nama-di-folder-SAF]\u001B[0m\n"
+                            )
+                        } else {
+                            val local = resolveLocalStorageFile(srcName)
+                            val r = if (local != null) {
+                                storageManager.putLocalFile(local, dest)
+                            } else {
+                                Result.failure(IllegalArgumentException("File tidak ditemukan: $srcName (coba path di workspace)"))
+                            }
+                            val msg = r.fold(
+                                onSuccess = { "\u001B[32m$it\u001B[0m" },
+                                onFailure = { "\u001B[31mError: ${it.message}\u001B[0m" }
+                            )
+                            activeExecutor.emulator.process("\n$msg\n")
+                        }
+                        activeExecutor.triggerScreenUpdate()
+                    }
+                    cmd.startsWith("storage-get ") -> {
+                        val rest = cmd.removePrefix("storage-get ").trim()
+                        val parts = rest.split(Regex("\\s+"), limit = 2)
+                        val remote = parts.getOrNull(0).orEmpty()
+                        val localName = parts.getOrNull(1) ?: File(remote).name
+                        if (remote.isBlank()) {
+                            activeExecutor.emulator.process(
+                                "\n\u001B[31mUsage: storage-get <file-di-folder-SAF> [nama-lokal-di-workspace]\u001B[0m\n"
+                            )
+                        } else {
+                            val dest = File(storageManager.workspaceDir, localName)
+                            val r = storageManager.getToLocalFile(remote, dest)
+                            val msg = r.fold(
+                                onSuccess = { "\u001B[32m$it\u001B[0m" },
+                                onFailure = { "\u001B[31mError: ${it.message}\u001B[0m" }
+                            )
+                            activeExecutor.emulator.process("\n$msg\n")
+                        }
+                        activeExecutor.triggerScreenUpdate()
+                    }
+                    cmd.startsWith("storage-save-download ") -> {
+                        val rest = cmd.removePrefix("storage-save-download ").trim()
+                        val parts = rest.split(Regex("\\s+"), limit = 2)
+                        val srcName = parts.getOrNull(0).orEmpty()
+                        val displayName = parts.getOrNull(1)
+                        if (srcName.isBlank()) {
+                            activeExecutor.emulator.process(
+                                "\n\u001B[31mUsage: storage-save-download <file-workspace> [nama-di-Download]\u001B[0m\n" +
+                                    "\u001B[33mMenyimpan ke Download publik (MediaStore) — terlihat di app Files/Downloads.\u001B[0m\n"
+                            )
+                        } else {
+                            val local = resolveLocalStorageFile(srcName)
+                            val r = if (local != null) {
+                                storageManager.saveLocalFileToPublicDownloads(local, displayName)
+                            } else {
+                                Result.failure(IllegalArgumentException("File tidak ditemukan: $srcName"))
+                            }
+                            val msg = r.fold(
+                                onSuccess = { "\u001B[32m$it\u001B[0m" },
+                                onFailure = { "\u001B[31mError: ${it.message}\u001B[0m" }
+                            )
+                            activeExecutor.emulator.process("\n$msg\n")
+                        }
+                        activeExecutor.triggerScreenUpdate()
+                    }
+                    cmd.startsWith("storage-write ") -> {
+                        /* storage-write <rel-path> <text...> */
+                        val rest = cmd.removePrefix("storage-write ").trim()
+                        val sp = rest.indexOf(' ')
+                        if (sp <= 0) {
+                            activeExecutor.emulator.process(
+                                "\n\u001B[31mUsage: storage-write <path-relatif-SAF> <teks>\u001B[0m\n" +
+                                    "\u001B[33mContoh: storage-write catatan.txt Halo dari Tunnel\u001B[0m\n"
+                            )
+                        } else {
+                            val rel = rest.substring(0, sp).trim()
+                            val text = rest.substring(sp + 1)
+                            val r = storageManager.writeTextRelative(rel, text)
+                            val msg = r.fold(
+                                onSuccess = { "\u001B[32m$it\u001B[0m" },
+                                onFailure = { "\u001B[31mError: ${it.message}\u001B[0m" }
+                            )
+                            activeExecutor.emulator.process("\n$msg\n")
+                        }
+                        activeExecutor.triggerScreenUpdate()
+                    }
+                    cmd.startsWith("storage-rm ") -> {
+                        val rel = cmd.removePrefix("storage-rm ").trim()
+                        if (rel.isBlank()) {
+                            activeExecutor.emulator.process(
+                                "\n\u001B[31mUsage: storage-rm <path-relatif-SAF>\u001B[0m\n"
+                            )
+                        } else {
+                            val r = storageManager.deleteRelative(rel)
+                            val msg = r.fold(
+                                onSuccess = { "\u001B[32m$it\u001B[0m" },
+                                onFailure = { "\u001B[31mError: ${it.message}\u001B[0m" }
+                            )
+                            activeExecutor.emulator.process("\n$msg\n")
+                        }
                         activeExecutor.triggerScreenUpdate()
                     }
                     cmd == "ssh-reset-hostkeys" -> {
@@ -3341,6 +3501,25 @@ class MainActivity : ComponentActivity() {
         Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
     }
 
+    /**
+     * Wave-19: Resolve a local file for storage-put / storage-save-download.
+     * Order: absolute path → workspace → home → CWD of active session (best-effort).
+     */
+    private fun resolveLocalStorageFile(nameOrPath: String): File? {
+        val raw = nameOrPath.trim().removePrefix("~/")
+        if (raw.isEmpty()) return null
+        val candidates = mutableListOf<File>()
+        if (nameOrPath.startsWith("/")) candidates.add(File(nameOrPath))
+        candidates.add(File(storageManager.workspaceDir, raw))
+        candidates.add(File(storageManager.homeDir, raw))
+        candidates.add(File(filesDir, raw))
+        /* bare filename also under workspace */
+        if (!raw.contains('/')) {
+            candidates.add(File(storageManager.workspaceDir, nameOrPath))
+        }
+        return candidates.firstOrNull { it.exists() && it.isFile }
+    }
+
     private fun buildHelpText(): String = """
         ==========================================
         TUNNEL TERMINAL v${BuildConfig.VERSION_NAME} - AI NATIVE DEV ENVIRONMENT
@@ -3361,9 +3540,16 @@ class MainActivity : ComponentActivity() {
         - bookmark remove <n|#>    Hapus bookmark
         - ai-metrics        Latency / size request AI terakhir
         - font-reset        Reset ukuran font terminal
-        - setup-storage     Bridge ke /sdcard via Storage Access Framework
-        - storage-status    Cek status konfigurasi storage
-        - storage-reset     Reset konfigurasi storage
+        - setup-storage     Pilih folder perangkat (SAF; disarankan Download)
+        - storage-status    Status grant + path + all-files
+        - storage-ls [sub]  List isi folder SAF
+        - storage-put <f> [dest]   Workspace → folder SAF
+        - storage-get <f> [local]  Folder SAF → workspace
+        - storage-write <p> <teks> Tulis teks ke folder SAF
+        - storage-save-download <f> [name]  Simpan ke Download publik
+        - storage-grant-all Izinkan akses semua file (opsional shell path)
+        - storage-rm <p>    Hapus file di folder SAF
+        - storage-reset     Cabut grant & reset setup
         - system-info       Tampilkan info sistem (MOTD)
         - open <file>       Edit file di Tunnel Editor UI
         - ssh-list-hostkeys List TOFU fingerprints

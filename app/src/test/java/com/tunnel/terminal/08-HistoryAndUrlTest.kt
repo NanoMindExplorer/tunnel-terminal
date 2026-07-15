@@ -47,7 +47,8 @@ class HistoryAndUrlTest {
         // Sanity: commands documented in help should stay stable for users
         val helpCommands = listOf(
             "history", "history-clear", "export-output", "ai-metrics",
-            "setup-storage", "system-info", "open "
+            "setup-storage", "storage-status", "storage-ls", "storage-put",
+            "storage-save-download", "storage-grant-all", "system-info", "open "
         )
         helpCommands.forEach { cmd ->
             assertTrue("expected builtin token: $cmd", cmd.isNotBlank())
