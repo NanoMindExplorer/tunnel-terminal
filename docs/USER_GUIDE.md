@@ -1,6 +1,6 @@
 # Tunnel Terminal — Panduan Penggunaan Lengkap
 
-**Versi:** 8.1.0 (Wave 17) | **Platform:** Android 7.0+ (API 24+) | **ABI:** arm64-v8a | **Kotlin:** 2.0.21 | **AGP:** 8.5.2
+**Versi:** 8.4.0 (Wave 25 — AI Skills + side panel + Ubuntu AI + storage) | **Platform:** Android 7.0+ (API 24+) | **ABI:** arm64-v8a | **Kotlin:** 2.0.21 | **AGP:** 8.5.2 | **versionCode:** 61
 
 ---
 
@@ -12,7 +12,7 @@
 4. [Input & Keyboard](#4-input--keyboard)
 5. [Multi-Tab & Split Pane](#5-multi-tab--split-pane)
 6. [Block Mode](#6-block-mode)
-7. [AI Copilot](#7-ai-copilot)
+7. [AI Copilot (Side Panel)](#7-ai-copilot)
 8. [AI Tool Calling](#8-ai-tool-calling)
 9. [Permission System](#9-permission-system)
 10. [Command Palette (Ctrl+K)](#10-command-palette-ctrlk)
@@ -20,50 +20,60 @@
 12. [SSH Client](#12-ssh-client)
 13. [Linux Environment (Ubuntu via proot)](#13-linux-environment-ubuntu-via-proot)
 14. [Code Editor](#14-code-editor)
-15. [File Explorer](#15-file-explorer)
-16. [Themes](#16-themes)
-17. [Workspace Sessions](#17-workspace-sessions)
-18. [Voice Input](#18-voice-input)
-19. [Agent Workflows](#19-agent-workflows)
-20. [Agent Mode](#20-agent-mode)
-21. [MCP Protocol](#21-mcp-protocol)
-22. [Storage Access (SAF + Download)](#20-storage-access-saf--download)
-23. [Pinch-to-Zoom & Font Size](#23-pinch-to-zoom--font-size)
-24. [Bookmarks](#24-bookmarks)
-25. [Scrollback Search & URL Open](#25-scrollback-search--url-open)
-26. [Mouse & ExtraKeys](#26-mouse--extrakeys)
-27. [Safe Paste & DECCKM](#27-safe-paste--decckm)
-28. [Chat & Transcript Export](#28-chat--transcript-export)
-29. [Settings AI Provider](#29-settings-ai-provider)
-30. [Troubleshooting](#30-troubleshooting)
+15. [File Explorer](#14-file-explorer)
+16. [Themes](#15-themes)
+17. [Workspace Sessions](#16-workspace-sessions)
+18. [Voice Input](#17-voice-input)
+19. [Agent Workflows](#18-agent-workflows)
+20. [MCP Protocol](#19-mcp-protocol)
+21. [Storage Access (SAF + Download)](#20-storage-access-saf--download)
+22. [AI Skills](#23-ai-skills)
+23. [Paste di Chat AI](#24-paste-di-chat-ai)
+24. [Pinch-to-Zoom & Font Size](#25-pinch-to-zoom--font-size)
+25. [Bookmarks](#26-bookmarks)
+26. [Scrollback Search & URL Open](#27-scrollback-search--url-open)
+27. [Mouse & ExtraKeys](#28-mouse--extrakeys)
+28. [Safe Paste & DECCKM](#29-safe-paste--decckm)
+29. [Chat & Transcript Export](#30-chat--transcript-export)
+30. [Settings AI Provider](#31-settings-ai-provider)
+31. [Troubleshooting](#32-troubleshooting)
 
 ---
 
 ## 1. Instalasi
+
+### Dari GitHub Releases (disarankan)
+
+1. Buka [Releases](https://github.com/NanoMindExplorer/tunnel-terminal/releases)
+2. Unduh APK **full** (debug atau release) untuk **v8.4.0**
+3. Install di perangkat (izinkan “Unknown sources” / Install unknown apps)
 
 ### Build dari Source
 
 ```bash
 git clone https://github.com/NanoMindExplorer/tunnel-terminal.git
 cd tunnel-terminal
-./gradlew assembleDebug
+# Flavor full = proot/Ubuntu aktif (GitHub/F-Droid)
+./gradlew assembleFullDebug
 ```
 
-Output: `app/build/outputs/apk/debug/app-debug.apk`
+Output: `app/build/outputs/apk/full/debug/*.apk`
+
+Release signed: `./gradlew assembleFullRelease` (butuh keystore).
 
 ### Install ke Perangkat
 
 ```bash
-adb install app/build/outputs/apk/debug/app-debug.apk
+adb install -r app/build/outputs/apk/full/debug/app-full-debug.apk
 ```
 
 Atau transfer APK ke HP dan install manually (enable "Install from unknown sources").
 
 ### Requirements
 
-- Android 7.0 (API 24) atau newer
-- ~20MB storage
-- Internet connection untuk AI features
+- Android 7.0 (API 24) atau newer, **arm64-v8a**
+- ~30MB APK + ~1.5GB free jika install Ubuntu rootfs
+- Internet untuk AI + unduh Ubuntu Base
 
 ---
 
@@ -73,8 +83,8 @@ Saat app pertama dibuka, Anda akan melihat:
 
 ```
 ╔══════════════════════════════════════════════════════════════╗
-║       TUNNEL TERMINAL v5.1.0 - AI Native Dev Environment       ║
-║          NDK PTY + Multi-Provider AI Copilot                  ║
+║     TUNNEL TERMINAL v8.4.0 — AI Native Dev Environment         ║
+║     NDK PTY + Copilot/Skills + Ubuntu proot + Storage         ║
 ╚══════════════════════════════════════════════════════════════╝
 ─ System Info ────────────────────────────────────────────────
   OS        : Android 14 (API 34)
@@ -237,16 +247,27 @@ Setiap command + output menjadi card dengan:
 
 ## 7. AI Copilot
 
-### Membuka AI Drawer
+### Membuka AI Side Panel (Wave 21)
 
-Tap tombol **AI** di TabBar (kanan atas) → drawer terbuka dari kiri
+Tap tombol **AI** di TabBar (kanan atas). Panel **kanan** terbuka:
+
+| Tab | Isi |
+|-----|-----|
+| **Chat** | Percakapan Copilot + streaming |
+| **Flow** | Agent Workflows / Auto-Pilot related |
+| **Skill** | AI Skills CRUD (Wave 25) |
+| **Set** | Settings provider / API key |
+
+**Terminal tetap di kiri** — Anda bisa melihat AI menulis ke terminal sambil chat terbuka (bukan drawer yang menutupi seluruh layar).
 
 ### Chat Tab
 
 1. Ketik prompt di input bar bawah
-2. Tap **Kirim** (atau tekan Enter di physical keyboard)
-3. AI response muncul **token-by-token** (streaming SSE)
-4. Response dirender sebagai **markdown** (headers, code blocks, lists, dll)
+2. **Paste:** tap **📋** untuk tempel clipboard; multi-line didukung (Wave 24)
+3. **Snippet terminal:** tap **`>_`** untuk sisipkan cuplikan output terminal ke chat
+4. Tap **Kirim** (atau Enter di physical keyboard)
+5. AI response **token-by-token** (SSE) + markdown
+6. **Stop** untuk hentikan stream; **Copy** / **Retry** di bubble pesan
 
 ### Contoh Prompt
 
@@ -475,18 +496,20 @@ Tunnel Terminal menambahkan jalur ketiga di samping Local shell dan SSH: jalanka
 proot + Ubuntu rootfs. PTY layer yang sama (`native-lib.cpp` → `forkpty()`) digunakan,
 hanya target exec yang berbeda (`execve("<proot>", ...)` alih-alih `/system/bin/sh`).
 
-### Instalasi
+### Instalasi (Wave 22 — unduh di background thread)
 
 1. Tap tombol 🐧 di TabBar (sebelah tombol 🔌 SSH)
 2. Dialog instalasi muncul → tap **Install**
-3. App akan:
-   - Salin binary `proot` dari assets APK ke storage app
-   - Cek storage cukup (minimal 1.5GB free)
-   - Download Ubuntu Base rootfs (~30-60MB) dari cdimage.ubuntu.com (dengan fallback URL)
-   - Ekstrak rootfs via `/system/bin/tar`
-   - Setup DNS (8.8.8.8 / 1.1.1.1)
-   - Validasi binary proot (`proot --version`)
+3. App akan (di **IO thread**, UI tetap responsif):
+   - Salin binary `proot` + libs dari assets APK
+   - Cek storage cukup
+   - Download Ubuntu Base rootfs (~29MB) dari cdimage.ubuntu.com — **multi-URL**, **resume**, **SHA256**
+   - Ekstrak rootfs (dengan fallback extract)
+   - Setup DNS + non-interactive apt
+   - Validasi `proot --version` → marker `.installed`
 4. Setelah selesai, tab Ubuntu terbuka otomatis
+
+Jika unduhan gagal: cek internet, coba ulang Install; progress tidak memblokir UI.
 
 ### Penggunaan
 
@@ -494,12 +517,18 @@ hanya target exec yang berbeda (`execve("<proot>", ...)` alih-alih `/system/bin/
 # Setelah tab Ubuntu terbuka:
 whoami          # root (proot fake-root dengan -0)
 uname -a        # Linux ... Ubuntu 24.04 ...
-apt update
+DEBIAN_FRONTEND=noninteractive apt-get update
 DEBIAN_FRONTEND=noninteractive apt-get install -y git python3 nodejs
 git clone https://github.com/your/repo
 cd repo && python3 main.py
 ```
 
+### AI / Agent di tab Ubuntu (Wave 23)
+
+- `write_file` / path AI default ke guest **`/root/...`** (bukan path Android `/data/data/...`)
+- Workspace app di-bind ke **`/mnt/workspace`** di dalam proot
+- Agent Mode `cd` ke `/root` saat sesi Ubuntu
+- Gunakan skill **Ubuntu Expert** (built-in) atau scope skill `ubuntu` agar prompt AI konsisten
 ### Troubleshooting Proot
 
 | Masalah | Solusi |
@@ -779,35 +808,120 @@ AI (`write_file`) ke path absolut di tree yang di-grant (mis.
 
 ---
 
-## 21. Pinch-to-Zoom
+## 23. AI Skills
+
+> **Wave 25** — instruksi custom yang di-inject ke system prompt AI (chat, agent, semua sesi sesuai scope).
+
+### Membuka
+
+1. Tap **AI** → panel kanan
+2. Tab **Skill**
+
+### Fitur
+
+| Aksi | Keterangan |
+|------|------------|
+| **+ Skill** | Buat skill baru (nama, body instruction) |
+| Edit / Hapus | Ubah atau hapus skill custom |
+| **Scope** | `always` · `chat` · `agent` · `local` · `ubuntu` · `ssh` |
+| **Keywords** | Opsional: skill aktif jika prompt cocok keyword |
+| Built-in | Contoh: Ubuntu Expert, Safety — bisa dinonaktifkan |
+
+### Alur
+
+1. Buat skill mis. “Selalu jawab ringkas dalam Bahasa Indonesia”
+2. Scope `always` → inject ke setiap request chat/agent
+3. Atau scope `ubuntu` + keywords `apt,package` → hanya saat relevan di tab Ubuntu
+4. Chat Copilot dan **Agent Mode** memakai skill yang cocok (budget inject agar tidak overflow context)
+
+---
+
+## 24. Paste di Chat AI
+
+> **Wave 24**
+
+| Kontrol | Fungsi |
+|---------|--------|
+| **📋** | Tempel teks dari clipboard ke kolom chat / Agent |
+| Multi-line | Enter di field chat = baris baru (kirim lewat tombol Kirim) |
+| **`>_`** | Sisipkan cuplikan output terminal aktif ke chat |
+
+Paste di **terminal** (bukan chat) tetap memakai safe paste / bracketed paste (Wave 12).
+
+---
+
+## 25. Pinch-to-Zoom & Font Size
 
 ### Cara
 
 Cubit layar terminal:
 - **Cubit keluar** (zoom in) → font membesar
 - **Cubit masuk** (zoom out) → font mengecil
-
-### Range
-
-- Minimum: 8sp
-- Maximum: 24sp
-- Default: 12sp
+- ExtraKeys **A+** / **A−** (Wave 16)
+- Snap **0.5sp**, range **8–28sp**
 
 ### Persist
 
-Font size **tersimpan** dan tidak reset saat:
-- Switch tab
-- Switch mode (raw ↔ block ↔ split)
-- Close + reopen app
+Font size **tersimpan** dan tidak reset saat switch tab / mode / restart app.
 
 ---
 
-## 22. Settings AI Provider
+## 26. Bookmarks
+
+```
+bookmark list
+bookmark add [nama]     # simpan cwd
+bookmark go <nama>
+bookmark remove <nama>
+```
+
+Long-press tab → rename label tab (Wave 10).
+
+---
+
+## 27. Scrollback Search & URL Open
+
+```
+tt-find <query>     # cari di scrollback (bukan shell find)
+```
+
+URL `http(s)://…` di output → chip / command palette **Open URL**.
+
+Seleksi text: long-press + drag — offset akurat (Wave 20b layoutInfo hit-test).
+
+---
+
+## 28. Mouse & ExtraKeys
+
+- Mouse: click focus, wheel scroll, mode 1000/1006 (SGR)
+- ExtraKeys: `^C ^D ^Z ^L ^U ^W`, panah, F1–F12, `^A`/`^E`, key-repeat
+- Volume Up/Down = history saat terminal focused (tidak curi media di panel AI)
+
+---
+
+## 29. Safe Paste & DECCKM
+
+- Paste ke terminal: bracketed paste / flatten newlines, cap ukuran
+- DECCKM: application cursor keys untuk vim/less
+
+---
+
+## 30. Chat & Transcript Export
+
+```
+export-chat      # export percakapan AI
+export-output    # export transcript terminal
+copy-output      # salin output ke clipboard
+```
+
+---
+
+## 31. Settings AI Provider
 
 ### Membuka Settings
 
-1. Tap **AI** di TabBar → drawer terbuka
-2. Tap **Settings** → **AI** sub-tab
+1. Tap **AI** di TabBar → panel kanan
+2. Tab **Set** (Settings)
 
 ### Provider
 
@@ -849,11 +963,11 @@ Jika model support vision → **👁 Vision** badge muncul
 
 ---
 
-## 23. Troubleshooting
+## 32. Troubleshooting
 
 ### App Crash saat Dibuka
 
-**Penyebab:** (sudah di-fix di Phase 31, pastikan pakai v5.1.0+)
+**Penyebab:** (sudah di-fix di Phase 31, pastikan pakai v8.4.0+)
 
 **Jika masih crash:**
 1. Cek logcat: `adb logcat | grep -i "tunnel\|fatal\|androidruntime"`
@@ -906,46 +1020,52 @@ Jika model support vision → **👁 Vision** badge muncul
 3. Disable block mode saat tidak diperlukan
 4. Gunakan font size lebih besar (mengurangi cols/rows → less rendering)
 
+### Ubuntu Install Gagal Unduh
+
+1. Pastikan internet stabil; coba ulang Install
+2. Pakai APK **full** (bukan playstore) yang menyertakan assets proot
+3. Bebaskan ≥1.5GB storage
+4. Log: `adb logcat | grep -i ProotBootstrap`
+
+### AI Menulis Path Salah di Ubuntu
+
+1. Pastikan tab aktif adalah **Ubuntu** (bukan Local)
+2. Path guest: `/root/...`; workspace: `/mnt/workspace`
+3. Aktifkan skill Ubuntu / scope `ubuntu`
+
+### Paste Tidak Muncul di Chat
+
+1. Izin clipboard sistem
+2. Tap **📋** di bar input AI (bukan long-press terminal)
+3. Untuk output terminal → tombol **`>_`**
+
 ---
 
 ## Quick Reference Card
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                    TUNNEL TERMINAL v5.1.0                    │
+│                 TUNNEL TERMINAL v8.4.0                       │
 ├─────────────────────────────────────────────────────────────┤
-│ TAB BAR:  [Tab 1 X] [Tab 2 X]  +  📁  💾  🔌  ⬡  ⊞  ⌘K  AI│
+│ TAB BAR:  [Tab X]  +  📁  💾  🔌  🐧  ⬡  ⊞  ⌘K  AI       │
 ├─────────────────────────────────────────────────────────────┤
-│ TERMINAL AREA                                                │
-│  > ls -la                                                   │
-│  > pwd                                                      │
-│  > help                                                     │
-│                                                              │
-│  (tap to focus, pinch to zoom, type to input)               │
+│ KIRI: Terminal (tetap visible)  │  KANAN AI panel:         │
+│  Local / SSH / Ubuntu           │  Chat | Flow | Skill | Set│
 ├─────────────────────────────────────────────────────────────┤
-│ EXTRA KEYS:  ~ * $ " ' ; & | - / ( ) < > = { } [ ] # ! ?  │
-│              ESC TAB CTRL ALT ↑ ↓ ← → HOME END PGUP PGDN   │
-│              BKSP DEL                                        │
+│ EXTRA KEYS: ESC TAB CTRL ALT arrows HOME END F-keys ^C…   │
 ├─────────────────────────────────────────────────────────────┤
-│ TabBar buttons:                                              │
-│  +      New tab              📁   File Explorer             │
-│  💾     Workspace Sessions   🔌   SSH Connect                │
-│  ⬡      Split Pane toggle    ⊞    Block Mode toggle         │
-│  ⌘K     Command Palette      AI   AI Copilot drawer         │
+│ Built-in: help clear history export-* bookmark              │
+│   setup-storage storage-ls/put/get/write                    │
+│   storage-save-download storage-status storage-reset        │
+│   tt-find copy-output open system-info                      │
 ├─────────────────────────────────────────────────────────────┤
-│ Built-in commands:                                           │
-│  help  clear  setup-storage  storage-status  storage-ls     │
-│  storage-put/get/write  storage-save-download  storage-reset│
-│  system-info  open <file>                                   │
-├─────────────────────────────────────────────────────────────┤
-│ @mentions: @file: @block: @command: @terminal @snippet:     │
-├─────────────────────────────────────────────────────────────┤
-│ AI tools: read_file write_file delete_file run_command      │
-│           list_files search_files get_terminal_output       │
+│ AI: tools + Skills inject · paste 📋 · snippet >_           │
+│ Storage: SAF Download · MediaStore · optional all-files     │
 └─────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-Untuk dokumentasi teknis lengkap, lihat [WIKI.md](WIKI.md).
-Untuk source code, lihat [GitHub](https://github.com/NanoMindExplorer/tunnel-terminal).
+Untuk dokumentasi teknis lengkap, lihat [WIKI.md](WIKI.md).  
+Untuk CI & daftar test, lihat [CI_AND_TESTS.md](CI_AND_TESTS.md).  
+Source & APK: [GitHub](https://github.com/NanoMindExplorer/tunnel-terminal) · [Release v8.4.0](https://github.com/NanoMindExplorer/tunnel-terminal/releases/tag/v8.4.0).

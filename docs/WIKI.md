@@ -1,9 +1,9 @@
 # Tunnel Terminal — Wiki
 
-**Versi:** 8.1.0 (Wave 17 — AI chat / Auto-Pilot / Agent UX polish)
+**Versi:** 8.4.0 (Wave 25 — AI Skills + side panel + Ubuntu AI + storage + paste)
 **Repo:** https://github.com/NanoMindExplorer/tunnel-terminal
-**Release:** [v8.1.0](https://github.com/NanoMindExplorer/tunnel-terminal/releases/tag/v8.1.0)
-**Stats:** 161 commits · ~18,800 baris code · 55 Kotlin files + 1 C++ file + 14 test files
+**Release:** [v8.4.0](https://github.com/NanoMindExplorer/tunnel-terminal/releases/tag/v8.4.0)
+**Stats:** 60+ Kotlin sources · NDK C++ · 25 unit test files · versionCode 61
 
 ---
 
@@ -36,13 +36,13 @@
 
 Tunnel Terminal adalah terminal Android AI-native yang menggabungkan:
 - **True PTY** via C++ NDK `forkpty()` (bukan `Runtime.exec()`)
-- **AI Agent** dengan tool calling, streaming SSE, multi-turn memory
-- **Warp-style UI** — block-based terminal, command palette, markdown rendering
-- **SSH Client** via JSch dengan TOFU host key verification
-- **MCP Protocol** untuk external tool interoperability
-- **6 themes** dengan theme-aware syntax highlighting
+- **AI Agent / Copilot / Skills** — tool calling, SSE, multi-turn, skill CRUD inject
+- **AI side panel** (Wave 21) — Chat | Flow | Skill | Set di kanan, terminal tetap terlihat
+- **Ubuntu 24.04 proot** — download robust (Wave 22), path AI → `/root` (Wave 23)
+- **Device storage** (Wave 19) — SAF + MediaStore Download + perintah `storage-*`
+- **SSH + SFTP**, MCP, block mode, command palette, 6 themes
 
-Total codebase: ~18.800 baris (55 file Kotlin + 1 file C++ + 14 file test + resource XML + build config).
+Codebase: 60+ file Kotlin + NDK + 25 test files + assets proot + Gradle flavors (full/playstore).
 
 ---
 
@@ -54,27 +54,24 @@ Total codebase: ~18.800 baris (55 file Kotlin + 1 file C++ + 14 file test + reso
 │  ├── TabBar (tabs, +, 📁, 💾, 🔌, ⬡, ⊞, ⌘K, AI)    │
 │  ├── TerminalScreenView (snapshot rendering, density)  │
 │  ├── BlockTerminalView (Warp-style blocks)            │
-│  ├── AIChatPanel (markdown, streaming, tool calls)    │
-│  ├── CommandPalette (Ctrl+K fuzzy search)             │
-│  ├── DiffViewDialog (inline diff before apply)        │
-│  ├── TunnelEditorDialog (syntax highlighting)         │
-│  └── SshConnectDialog / FileExplorer / Workspace      │
+│  ├── AI side panel (Chat / Flow / Skills / Settings)  │
+│  ├── AgentScreen · SkillsPanel · DiffView · Editor    │
+│  └── CommandPalette · FileExplorer · Workspace · SSH  │
 ├──────────────────────────────────────────────────────┤
 │  TerminalSession interface                             │
-│  ├── ShellExecutor (local PTY via forkpty)            │
-│  └── SshShellExecutor (remote SSH via JSch)           │
+│  ├── ShellExecutor (local) · ProotShellExecutor       │
+│  └── SshShellExecutor (JSch + SFTP)                   │
 ├──────────────────────────────────────────────────────┤
 │  TerminalEmulator                                      │
 │  ANSI parser, screen buffer, alt screen, SGR,         │
 │  DA/DSR response, synchronized(lock)                  │
 ├──────────────────────────────────────────────────────┤
 │  AI Layer                                              │
-│  ├── AIAgent (SSE streaming, multi-turn, tool calls)  │
-│  ├── ToolExecutor + PermissionManager                  │
-│  ├── ContextManager (@mentions resolve)               │
-│  ├── McpManager (MCP server connections)              │
-│  ├── MarkdownText (markdown renderer)                  │
-│  └── SyntaxHighlighter (8 languages, regex-based)     │
+│  ├── AIAgent + SkillManager (Wave 25 inject skills)   │
+│  ├── ToolExecutor + SessionTargetResolver (Ubuntu)    │
+│  ├── AgentTaskRunner · MarkerExecutor · TaskPlan      │
+│  ├── PermissionManager · ContextManager · McpManager  │
+│  └── ProjectContext · CheckpointManager               │
 ├──────────────────────────────────────────────────────┤
 │  TerminalJni (Kotlin ↔ C++ bridge)                    │
 │  isLoaded flag, createSession, write, resize, close,  │
@@ -127,16 +124,17 @@ app/src/main/
 │   ├── ModelFetcher.kt         (183 lines) — /models endpoint fetcher
 │   ├── SmartAutocomplete.kt    (157 lines) — Command suggestions + voice input
 │   ├── SnippetManager.kt       (90 lines) — Workflow snippet persistence
-│   ├── StorageManager.kt       (SAF CRUD + MediaStore Downloads + all-files) — Wave-19
-│   ├── SshConnectDialog.kt     (200 lines) — SSH connection form
-│   ├── SyntaxHighlighter.kt    (314 lines) — 8-language highlighter
-│   ├── SystemInfo.kt           (186 lines) — MOTD system info
-│   ├── ThemeManager.kt         (197 lines) — 6 theme presets
-│   ├── TerminalForegroundService.kt (104 lines) — Keep-alive service
-│   ├── TunnelEditor.kt         (284 lines) — Code editor with highlighting
-│   ├── ImageHelper.kt          (91 lines) — Image compress + base64
-│   ├── AgentWorkflow.kt        (139 lines) — Multi-step workflow data
-│   └── WorkspaceManager.kt     (137 lines) — Tab session persistence
+│   ├── StorageManager.kt       — SAF CRUD + MediaStore Downloads (Wave 19)
+│   ├── SkillManager.kt         — AI Skills persist + inject (Wave 25)
+│   ├── SkillsPanel.kt          — Skills CRUD UI (Wave 25)
+│   ├── SessionTargetResolver.kt — Local/Ubuntu/SSH path map (Wave 23)
+│   ├── TerminalLayoutMetrics.kt · TerminalSelectionHitTest.kt · TerminalFontZoom.kt
+│   ├── PasteUtils.kt · ScrollbackSearch.kt · UrlOpenUtils.kt · UrlValidator.kt
+│   ├── TaskPlanManager.kt · PtySessionBase.kt · TerminalSize.kt
+│   ├── SshConnectDialog.kt · SyntaxHighlighter · ThemeManager · SystemInfo
+│   ├── TerminalForegroundService · TunnelEditor · ImageHelper
+│   ├── AgentWorkflow · WorkspaceManager · BookmarkStore · ChatExporter
+│   └── SecureStorage · CommandHistoryStore · TranscriptExporter
 ├── assets/proot/
 │   ├── proot                   — Binary proot (arm64, dari Termux)
 │   ├── lib/                    — Shared libs (libtalloc.so.2, libandroid-shmem.so)
@@ -149,12 +147,12 @@ app/src/main/
 └── AndroidManifest.xml         — Permissions, service, activity, TunnelApp
 ```
 
-### Test Files (Phase 51)
+### Test Files (Phase 51 + Waves)
 ```
 app/src/test/java/com/tunnel/terminal/
-├── TerminalEmulatorTest.kt     (16 tests) — ANSI parser, cursor, resize, scrollback, alt-screen
-├── AiToolCallParserTest.kt     (14 tests) — Tool-call parsing, BUG-38 regression, marker format
-└── PermissionManagerTest.kt    (9 tests)  — BUG-01 regression, per-session scope
+├── 03–07  TerminalEmulator, AiToolCall, Permission, Wave utils
+├── 08–16  History/URL, export, bookmarks, IME, polish, select, find, Unicode, zoom
+├── 18–25  Layout/IME, Wave20, selection hit-test, Ubuntu URL, Ubuntu paths, skills
 ```
 
 ### CI/CD (Phase 42)
@@ -320,13 +318,20 @@ PTY layer yang sama (`native-lib.cpp` → `forkpty()`) dipakai untuk semua tipe 
 
 ### ProotBootstrap.kt
 
-Mengelola instalasi Ubuntu rootfs:
+Mengelola instalasi Ubuntu rootfs (diperkuat **Wave 22**):
 - Salin binary `proot` + shared libs dari assets ke `filesDir/linux/`
-- Download rootfs Ubuntu Base 24.04 (arm64/amd64) dari cdimage.ubuntu.com dengan fallback URL
-- Ekstrak via `/system/bin/tar` (toybox)
+- Download rootfs Ubuntu Base 24.04 (arm64) di **`Dispatchers.IO`** (bukan Main — hindari NetworkOnMainThread)
+- Multi-URL / multi-mirror + **HTTP Range resume** + **SHA256** verify
+- Ekstrak via `/system/bin/tar` (toybox) dengan fallback extract path
 - Setup DNS (`resolv.conf`), non-interactive apt (`DEBIAN_FRONTEND=noninteractive`)
 - Validate `proot --version` sebelum tulis marker `.installed`
-- Cek free storage ≥1.5GB sebelum mulai
+- Cek free storage sebelum mulai; progress dialog di UI thread
+
+### SessionTargetResolver + Ubuntu AI (Wave 23)
+
+- Tab Ubuntu: path guest default **`/root`** (bukan `/data/data/...` Android)
+- Workspace app di-bind ke **`/mnt/workspace`** di dalam proot
+- `write_file` / Agent `cd` / tool path memakai resolver agar AI tidak menulis ke path host yang salah di proot
 
 ### ProotShellExecutor.kt
 
@@ -734,8 +739,16 @@ Keep rules untuk:
 | **Wave 14** | **Find + mouse + reconnect** (v7.9.0) — find scrollback, open-url, mouse/wheel mode 1000/1006, reconnect keep history, F1-F4 + ^A/^E | +1200/-300 |
 | **Wave 15-16** | **LazyColumn + Unicode + font zoom** (v8.0.0-v8.0.1) — LazyColumn virtualized scrollback, Unicode code-points, compact ExtraKeys, font zoom pinch fix | +1800/-600 |
 | **Wave 17** | **AI chat UX polish** (v8.1.0) — Stop stream, bubble + Copy/Retry, empty chips, Auto-Pilot progress, Agent scroll/pause, API key mask, max tokens, FAB AI | +1500/-400 |
+| **Wave 18** | **Terminal display clip + IME** (v8.1.1) — line metrics, no clip on zoom, IME wipe guard | +400/-100 |
+| **Wave 19** | **Device storage** (v8.2.0) — SAF DocumentFile + MediaStore Downloads + `setup-storage` / `storage-*` | +800/-50 |
+| **Wave 20–20b** | **Terminal polish + selection** (v8.2.x) — dirty trail, HOME/END, volume focus; LazyList layoutInfo hit-test select/copy | +900/-200 |
+| **Wave 21** | **AI side panel** (v8.3.0) — Row layout Chat/Flow/Skill/Set di kanan; terminal kiri tetap terlihat | +600/-300 |
+| **Wave 22** | **Ubuntu download** (v8.3.1) — download di Dispatchers.IO, multi-mirror, Range resume, SHA256, extract fallback | +500/-150 |
+| **Wave 23** | **Ubuntu AI paths** (v8.3.2) — SessionTargetResolver `/root` guest, Agent cd `/root`, bind `/mnt/workspace` | +400/-100 |
+| **Wave 24** | **AI chat paste** (v8.3.3) — paste clipboard di chat/agent, multi-line, snippet `>_` terminal | +200/-30 |
+| **Wave 25** | **AI Skills** (v8.4.0) — SkillManager CRUD, scope always/chat/agent/local/ubuntu/ssh, keyword trigger, inject AIAgent + AgentTaskRunner | +700/-50 |
 
-**Total: 161 commits, ~18.800 baris code, 55 Kotlin files + 1 C++ file + 14 test files**
+**Total: 60+ Kotlin sources + NDK C++ + 25 unit test files · version 8.4.0 (versionCode 61)**
 
 ---
 
@@ -755,26 +768,41 @@ Keep rules untuk:
 12. **Screen buffer persistence** — ✅ FIXED (Phase 49) — TunnelApp Application scope, survive Activity recreate
 13. **Block Mode parse divergen** — ✅ FIXED (Phase 51) — incremental parse
 14. **Output throttle** — ✅ FIXED (Phase 48) — screenDirty di-throttle ke ~30fps (33ms)
-15. **Automated tests** — ✅ FIXED (Phase 51 + Wave 6-16) — 14 test files (03-16): TerminalEmulator, AiToolCall, Permission, Wave utils, history/url, chat export, bookmarks, IME, terminal polish, scrollback select, find/url/mouse, Unicode, font zoom
+15. **Automated tests** — ✅ FIXED (Phase 51 + Waves 6–25) — **25 test files** (03–25): emulator, tools, permission, IME, selection, Ubuntu URL/paths, AI Skills, storage-related utils
 16. **Agent Mode approval/success/Stop bugs** — ✅ FIXED (Phase 52) — risk-tagged command approval dialog, success detection regex strengthen, Stop button via job.cancel()
 17. **SFTP for SSH file I/O** — ✅ FIXED (Phase 58) — ChannelSftp untuk read/write/list file di server SSH, mkdir recursive (Wave 6)
 18. **TaskPlanManager context limit** — ✅ FIXED (Phase 58) — plan/act/observe/verify loop, plan disimpan terpisah dari conversation history
-19. **Ubuntu download reliability** — ✅ FIXED (Phase 60, C-1 to C-5) — readTimeout 300s, retry 2x per URL, NonCancellable context, indeterminate progress fallback
+19. **Ubuntu download reliability** — ✅ FIXED (Phase 60 + **Wave 22**) — IO thread (bukan Main), multi-URL, Range resume, SHA256, NonCancellable + extract fallback
 20. **HTTPS enforcement** — ✅ FIXED (Phase 60, Bug #2) — reject HTTP untuk provider eksternal (kecuali localhost Ollama/LM Studio)
 21. **MCP schema validation** — ✅ FIXED (Phase 60, Bug #4) — try-catch + basic schema check (ensure type + properties)
 22. **Anthropic Native API** — ✅ FIXED (Wave 5) — apiStyle: anthropic, Claude via Messages API
 23. **Wide char / Unicode** — ✅ FIXED (Wave 15) — code-points + combining marks, CJK width 2, emoji width 2
 24. **Font zoom** — ✅ FIXED (Wave 16) — pinch-zoom gesture-local, 0.5sp snap, range 8-28sp
+25. **Device storage ke Download** — ✅ FIXED (Wave 19) — SAF + MediaStore + `storage-*` (bukan hanya app-private)
+26. **Text selection offset** — ✅ FIXED (Wave 20b) — hit-test via LazyList layoutInfo
+27. **AI menutupi terminal** — ✅ FIXED (Wave 21) — side panel kanan, terminal tetap visible
+28. **AI path di Ubuntu proot** — ✅ FIXED (Wave 23) — guest `/root`, workspace bind `/mnt/workspace`
+29. **Paste di chat AI** — ✅ FIXED (Wave 24) — clipboard paste + multi-line + terminal snippet
+30. **AI Skills system** — ✅ FIXED (Wave 25) — CRUD + scope + inject chat/agent/all sessions
+
+### Masih berlaku (bukan bug)
+
+| Limitasi | Catatan |
+|---|---|
+| `systemctl` di proot | Tidak ada systemd — jalankan daemon manual |
+| Compile C++ berat di proot | Overhead ptrace — cocok tool/dev, kurang untuk build besar |
+| Play Store + proot | Flavor `full` untuk GitHub; `playstore` tanpa proot |
+| Agent workflow UI builder | Masih code-only; pakai Agent Mode + Skills sebagai alternatif |
 
 ---
 
 ## Catatan Penutup
 
-Tunnel Terminal v8.1.0 (Wave 17) adalah hasil **161 commits** dengan **~18.800 baris code** (55 Kotlin files + 1 C++ file + 14 test files), mulai dari terminal sederhana hingga AI-native terminal dengan **40+ fitur** termasuk Linux Environment (Ubuntu via proot), Agent Mode (autonomous task runner), Native API Tool-Calling, TaskPlanManager, SFTP for SSH, Anthropic Native API, Checkpointing/Undo, dan 14 test files.
+Tunnel Terminal **v8.4.0 (Wave 25)** melanjutkan Phase 1–60 + Wave 1–25: terminal AI-native dengan **AI Skills**, **side panel Copilot**, storage perangkat (SAF/Download), Ubuntu proot yang andal, path AI sinkron dengan guest Linux, paste chat, seleksi text akurat, dan **25 unit test files** (versionCode **61**).
 
-Codebase telah melalui **multiple comprehensive audit** (V3: 42 bug, V4: 18 bug, V5: 30 bug, Phase 52: 3 bug, Phase 60: 5 bug — total **98+ bug ditemukan dan di-fixed**) plus 17 waves UX polish.
+Codebase telah melalui multiple comprehensive audit plus 25 waves polish (stabilitas, security, UX terminal, AI, Ubuntu, storage).
 
-**Status backlog B/C:** Semua backlog utama SELESAI — B-1 (Native API tool-calling) ✅, B-4 (Checkpointing) ✅, B-5 (Project Context) ✅, C-2 (AGP+Kotlin upgrade) ✅, C-5 (Automated tests) ✅.
+**Status backlog:** B-1 / B-4 / B-5 / C-2 / C-5 ✅ · Wave 19–25 (storage, selection, side panel, Ubuntu, paste, skills) ✅.
 
-Untuk panduan cara penggunaan, lihat [USER_GUIDE.md](USER_GUIDE.md).
-Untuk release notes lengkap, lihat [GitHub Release v8.1.0](https://github.com/NanoMindExplorer/tunnel-terminal/releases/tag/v8.1.0).
+Untuk panduan cara penggunaan, lihat [USER_GUIDE.md](USER_GUIDE.md).  
+Untuk release notes + APK, lihat [GitHub Release v8.4.0](https://github.com/NanoMindExplorer/tunnel-terminal/releases/tag/v8.4.0).

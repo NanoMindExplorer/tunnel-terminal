@@ -1,19 +1,32 @@
 # CI & Unit Tests
 
+**App version:** 8.4.0 (versionCode 61) · **Tests:** 25 files under `app/src/test/`
+
 ## Local
 
 ```bash
 ./scripts/run-unit-tests.sh
 # or
 ./gradlew testFullDebugUnitTest
+
+# Full debug APK (proot flavor — GitHub/F-Droid)
+./gradlew assembleFullDebug
+
+# Full release (signed; needs keystore / CI secrets)
+./gradlew assembleFullRelease
 ```
 
 ## GitHub Actions
 
-Existing workflows under `.github/workflows/` build debug/release APKs.
+Workflows under `.github/workflows/`:
 
-To enable automatic unit tests on PR, add a workflow (requires `workflow` OAuth scope
-or a PAT with `workflow` permission) with:
+| Workflow | Trigger | Output |
+|----------|---------|--------|
+| `build-debug.yml` | push/PR main, `workflow_dispatch` | `assembleFullDebug` + artifact |
+| `build-apk.yml` | push/PR main | APK build |
+| `build-release.yml` | tags / manual | signed release + GitHub Release (needs secrets) |
+
+Unit tests on PR (opsional; butuh permission `workflow`):
 
 ```yaml
 name: Unit Tests
@@ -38,7 +51,7 @@ jobs:
       - run: ./gradlew testFullDebugUnitTest --no-daemon --continue
 ```
 
-## Test modules
+## Test modules (25 files)
 
 | File | Coverage |
 |------|----------|
@@ -49,16 +62,29 @@ jobs:
 | `07-AiToolCallAndPromptTest` | parse, read-only set, cwd prompt |
 | `08-HistoryAndUrlTest` | AI base URL validation |
 | `09-ChatExportTest` | Chat export role formatting |
+| `10-BookmarkAndTabLabelTest` | bookmarks, tab labels |
+| `11-ImeDeltaTest` | IME delta / typed chars |
+| `12-TerminalPolishTest` | paste, DECCKM, ExtraKeys utils |
+| `13-ScrollbackSelectTest` | scrollback select/copy |
+| `14-FindUrlMouseTest` | tt-find, open-url, mouse |
+| `15-UnicodeLazyTest` | Unicode width, LazyColumn helpers |
+| `16-FontZoomTest` | pinch zoom snap/range |
+| `18-TerminalLayoutImeTest` | layout metrics, IME wipe |
+| `20-TerminalWave20Test` | Wave 20 terminal polish |
+| `21-SelectionHitTest` | accurate selection hit-test |
+| `22-UbuntuRootfsUrlTest` | Ubuntu download URL / SHA sums |
+| `23-UbuntuSessionPathTest` | SessionTargetResolver paths |
+| `25-AiSkillTest` | AI Skills scope / inject |
 
-## Built-in commands (Wave 8–9)
+## Built-in commands (selected)
 
 | Command | Description |
 |---------|-------------|
-| `history` | Show current tab command history |
-| `history-clear` | Clear session + persisted history |
-| `export-output` | Write terminal transcript to `filesDir/exports/` |
-| `export-chat` | Export AI chat transcript |
-| `ai-metrics` | Show last AI request latency/size |
-| `font-reset` | Reset terminal font to density default |
-| `ssh-list-hostkeys` | List TOFU SSH fingerprints |
-| `ssh-reset-hostkeys` | Clear all TOFU fingerprints |
+| `history` / `history-clear` | Tab + persisted history |
+| `export-output` / `export-chat` | Transcript exports |
+| `setup-storage` / `storage-*` | SAF + MediaStore Download (Wave 19) |
+| `bookmark list\|add\|go\|remove` | Directory bookmarks |
+| `tt-find <query>` | Search scrollback |
+| `copy-output` | Clipboard terminal output |
+| `ssh-list-hostkeys` / `ssh-reset-hostkeys` | TOFU SSH fingerprints |
+| `ai-metrics` / `font-reset` | AI latency / font default |
