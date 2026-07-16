@@ -46,74 +46,67 @@ object TarGzipRootfsExtractor {
                 var emptyBlocks = 0
                 val header = ByteArray(BLOCK)
 
-                while (true) {
+                /* No `continue` inside inline use{} (Kotlin experimental). */
+                var done = false
+                while (!done) {
                     val n = readFully(gis, header)
-                    if (n == 0) break
-                    if (n < BLOCK) throw IOException("Tar header truncated ($n bytes)")
-
-                    if (header.contentEquals(ZERO)) {
+                    if (n == 0) {
+                        done = true
+                    } else if (n < BLOCK) {
+                        throw IOException("Tar header truncated ($n bytes)")
+                    } else if (header.contentEquals(ZERO)) {
                         emptyBlocks++
-                        if (emptyBlocks >= 2) break
-                        continue
-                    }
-                    emptyBlocks = 0
+                        if (emptyBlocks >= 2) done = true
+                    } else {
+                        emptyBlocks = 0
+                        val type = header[156].toInt().toChar()
+                        val size = parseOctal(header, 124, 12)
+                        val name = resolveName(header)
+                        val linkname = headerString(header, 157, 100)
 
-                    val type = header[156].toInt().toChar()
-                    val size = parseOctal(header, 124, 12)
-                    val name = resolveName(header)
-                    val linkname = headerString(header, 157, 100)
-
-                    /* pax / GNU long-name metadata blocks: skip payload. */
-                    if (type == 'x' || type == 'g' || type == 'X' || type == 'L' || type == 'K') {
-                        skipPayload(gis, size)
-                        report(counted.count, total, onProgress, lastPct).also { lastPct = it }
-                        continue
-                    }
-
-                    /* Security: no path escape. */
-                    val rel = normalizeMemberPath(name)
-                        ?: run {
-                            skipPayload(gis, size)
-                            report(counted.count, total, onProgress, lastPct).also { lastPct = it }
-                            continue
-                        }
-
-                    when (type) {
-                        '5', '/' -> {
-                            /* Directory (GNU sometimes uses trailing / on type 0). */
-                            ensureDir(File(destDir, rel), ownerWritable = true)
-                            skipPayload(gis, size)
-                        }
-                        '2' -> {
-                            writeSymlink(File(destDir, rel), linkname)
-                            skipPayload(gis, size)
-                        }
-                        '1' -> {
-                            /* Hard link — defer until targets exist. */
-                            val target = normalizeMemberPath(linkname)
-                            if (target != null) deferredHardLinks.add(rel to target)
-                            skipPayload(gis, size)
-                        }
-                        '3', '4', '6' -> {
-                            /* Char/block/fifo — skip (Android cannot mknod). */
-                            skipPayload(gis, size)
-                        }
-                        '0', '\u0000', '7' -> {
-                            /* Regular file (7 = contiguous). */
-                            if (rel.endsWith("/")) {
-                                ensureDir(File(destDir, rel.trimEnd('/')), ownerWritable = true)
+                        when {
+                            type == 'x' || type == 'g' || type == 'X' || type == 'L' || type == 'K' -> {
+                                /* pax / GNU long-name metadata — skip payload. */
                                 skipPayload(gis, size)
-                            } else {
-                                writeRegular(File(destDir, rel), gis, size, modeFromHeader(header))
+                            }
+                            else -> {
+                                val rel = normalizeMemberPath(name)
+                                if (rel == null) {
+                                    skipPayload(gis, size)
+                                } else {
+                                    when (type) {
+                                        '5', '/' -> {
+                                            ensureDir(File(destDir, rel), ownerWritable = true)
+                                            skipPayload(gis, size)
+                                        }
+                                        '2' -> {
+                                            writeSymlink(File(destDir, rel), linkname)
+                                            skipPayload(gis, size)
+                                        }
+                                        '1' -> {
+                                            val target = normalizeMemberPath(linkname)
+                                            if (target != null) deferredHardLinks.add(rel to target)
+                                            skipPayload(gis, size)
+                                        }
+                                        '3', '4', '6' -> {
+                                            /* Char/block/fifo — skip (Android cannot mknod). */
+                                            skipPayload(gis, size)
+                                        }
+                                        '0', '\u0000', '7' -> {
+                                            if (rel.endsWith("/")) {
+                                                ensureDir(File(destDir, rel.trimEnd('/')), ownerWritable = true)
+                                                skipPayload(gis, size)
+                                            } else {
+                                                writeRegular(File(destDir, rel), gis, size, modeFromHeader(header))
+                                            }
+                                        }
+                                        else -> skipPayload(gis, size)
+                                    }
+                                }
                             }
                         }
-                        else -> {
-                            /* Unknown — skip payload if size present. */
-                            skipPayload(gis, size)
-                        }
+                        lastPct = report(counted.count, total, onProgress, lastPct)
                     }
-
-                    lastPct = report(counted.count, total, onProgress, lastPct)
                 }
 
                 for ((rel, targetRel) in deferredHardLinks) {
@@ -139,7 +132,7 @@ object TarGzipRootfsExtractor {
 
     private fun modeFromHeader(header: ByteArray): Int {
         val mode = parseOctal(header, 100, 8).toInt()
-        return if (mode == 0) 0o644 else mode and 0o7777
+        return if (mode == 0) 0x1A4 else mode and 0xFFF
     }
 
     private fun writeRegular(dest: File, input: InputStream, size: Long, mode: Int) {
@@ -203,14 +196,14 @@ object TarGzipRootfsExtractor {
     }
 
     private fun applyFileMode(file: File, mode: Int) {
-        val ownerExec = (mode and 0o100) != 0 || (mode and 0o111) != 0
-        val ownerWrite = (mode and 0o200) != 0
-        val ownerRead = (mode and 0o400) != 0 || true
+        val ownerExec = (mode and 0x40) != 0 || (mode and 0x49) != 0
+        val ownerWrite = (mode and 0x80) != 0
+        val ownerRead = (mode and 0x100) != 0 || true
         file.setReadable(ownerRead, false)
         file.setWritable(ownerWrite || true, true) /* always keep owner write for app updates */
         file.setExecutable(ownerExec, false)
         try {
-            android.system.Os.chmod(file.absolutePath, mode or 0o200) /* ensure owner write bit */
+            android.system.Os.chmod(file.absolutePath, mode or 0x80) /* ensure owner write bit */
         } catch (_: Throwable) {
         }
     }
@@ -328,7 +321,7 @@ object TarGzipRootfsExtractor {
         for (rel in essential) {
             val d = File(rootfsDir, rel)
             d.mkdirs()
-            val mode = if (rel == "tmp" || rel == "var/tmp") 0o1777 else 0o755
+            val mode = if (rel == "tmp" || rel == "var/tmp") 0x3FF else 0x1ED
             chmodBestEffort(d, mode)
         }
 
@@ -340,8 +333,8 @@ object TarGzipRootfsExtractor {
                 .forEach { dir ->
                     val path = dir.absolutePath
                     val mode = when {
-                        path.endsWith("/tmp") || path.endsWith("/var/tmp") -> 0o1777
-                        else -> 0o755
+                        path.endsWith("/tmp") || path.endsWith("/var/tmp") -> 0x3FF
+                        else -> 0x1ED
                     }
                     chmodBestEffort(dir, mode)
                 }
@@ -354,18 +347,18 @@ object TarGzipRootfsExtractor {
         )
         for (rel in execCandidates) {
             val f = File(rootfsDir, rel)
-            if (f.isFile) chmodBestEffort(f, 0o755)
+            if (f.isFile) chmodBestEffort(f, 0x1ED)
         }
 
         /* Host-side proot + libs must be executable by the app. */
         if (prootBin != null && prootBin.isFile) {
-            chmodBestEffort(prootBin, 0o755)
+            chmodBestEffort(prootBin, 0x1ED)
             prootBin.setExecutable(true, false)
         }
         if (libDir != null && libDir.isDirectory) {
             libDir.listFiles()?.forEach { lib ->
                 if (lib.isFile) {
-                    chmodBestEffort(lib, 0o755)
+                    chmodBestEffort(lib, 0x1ED)
                     lib.setReadable(true, false)
                 }
             }
@@ -374,7 +367,7 @@ object TarGzipRootfsExtractor {
         /* Ensure /root is usable as HOME. */
         val rootHome = File(rootfsDir, "root")
         rootHome.mkdirs()
-        chmodBestEffort(rootHome, 0o700)
+        chmodBestEffort(rootHome, 0x1C0)
         val bashrc = File(rootHome, ".bashrc")
         if (!bashrc.exists()) {
             try {
@@ -391,10 +384,10 @@ object TarGzipRootfsExtractor {
         try {
             android.system.Os.chmod(file.absolutePath, mode)
         } catch (_: Throwable) {
-            val ownerExec = (mode and 0o100) != 0
-            val ownerWrite = (mode and 0o200) != 0
+            val ownerExec = (mode and 0x40) != 0
+            val ownerWrite = (mode and 0x80) != 0
             file.setReadable(true, false)
-            file.setWritable(ownerWrite || (mode and 0o200) != 0 || true, true)
+            file.setWritable(ownerWrite || (mode and 0x80) != 0 || true, true)
             file.setExecutable(ownerExec || file.isDirectory, false)
         }
     }

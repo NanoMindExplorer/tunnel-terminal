@@ -199,7 +199,7 @@ class ProotBootstrap(private val context: Context) {
             }
         }
         rootfsDir.mkdirs()
-        chmodPrivateDir(rootfsDir, 0o755)
+        chmodPrivateDir(rootfsDir, 0x1ED)
         listener.onProgress("Mengekstrak rootfs", 0)
         extractRootfs(rootfsTarball, rootfsDir, listener)
 
@@ -214,9 +214,9 @@ class ProotBootstrap(private val context: Context) {
         // 6. permissions + DNS + noninteractive apt
         listener.onProgress("Mengatur izin & layout rootfs", 0)
         TarGzipRootfsExtractor.finalizeRootfsPermissions(rootfsDir, prootBin, libDir)
-        chmodPrivateDir(baseDir, 0o700)
-        chmodPrivateDir(rootfsDir, 0o755)
-        chmodPrivateDir(libDir, 0o755)
+        chmodPrivateDir(baseDir, 0x1C0)
+        chmodPrivateDir(rootfsDir, 0x1ED)
+        chmodPrivateDir(libDir, 0x1ED)
         setupResolvConf()
         setupNonInteractiveApt()
         listener.onProgress("Mengatur izin & layout rootfs", 100)
@@ -248,8 +248,8 @@ class ProotBootstrap(private val context: Context) {
     private fun ensureInstallDirs() {
         baseDir.mkdirs()
         libDir.mkdirs()
-        chmodPrivateDir(baseDir, 0o700)
-        chmodPrivateDir(libDir, 0o755)
+        chmodPrivateDir(baseDir, 0x1C0)
+        chmodPrivateDir(libDir, 0x1ED)
     }
 
     private fun chmodPrivateDir(dir: File, mode: Int) {
@@ -273,7 +273,7 @@ class ProotBootstrap(private val context: Context) {
             )
         }
         FileOutputStream(prootBin).use { it.write(assetProotBytes) }
-        TarGzipRootfsExtractor.chmodBestEffort(prootBin, 0o755)
+        TarGzipRootfsExtractor.chmodBestEffort(prootBin, 0x1ED)
         if (!prootBin.setExecutable(true, false)) {
             /* Some OEMs return false even when mode is OK — verify canExecute. */
             if (!prootBin.canExecute()) {
@@ -293,7 +293,7 @@ class ProotBootstrap(private val context: Context) {
                 context.assets.open("$ASSET_PROOT_LIB_DIR/$libName").use { input ->
                     val outFile = File(libDir, libName)
                     FileOutputStream(outFile).use { output -> input.copyTo(output) }
-                    TarGzipRootfsExtractor.chmodBestEffort(outFile, 0o755)
+                    TarGzipRootfsExtractor.chmodBestEffort(outFile, 0x1ED)
                     outFile.setReadable(true, false)
                 }
                 Log.i(TAG, "Library $libName OK")
@@ -517,7 +517,7 @@ class ProotBootstrap(private val context: Context) {
             }
         }
         resolvConf.writeText("nameserver 8.8.8.8\nnameserver 1.1.1.1\nnameserver 9.9.9.9\n")
-        TarGzipRootfsExtractor.chmodBestEffort(resolvConf, 0o644)
+        TarGzipRootfsExtractor.chmodBestEffort(resolvConf, 0x1A4)
     }
 
     private fun setupNonInteractiveApt() {
@@ -532,7 +532,7 @@ class ProotBootstrap(private val context: Context) {
                 export TZ=$tz
                 """.trimIndent() + "\n"
             )
-            TarGzipRootfsExtractor.chmodBestEffort(profileScript, 0o644)
+            TarGzipRootfsExtractor.chmodBestEffort(profileScript, 0x1A4)
             File(rootfsDir, "etc/timezone").writeText(tz + "\n")
         } catch (e: Exception) {
             Log.w(TAG, "noninteractive apt setup: ${e.message}")
