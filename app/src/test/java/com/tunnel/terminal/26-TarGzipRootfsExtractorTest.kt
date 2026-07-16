@@ -142,7 +142,7 @@ class TarGzipRootfsExtractorTest {
         private fun writeHeader(name: String, size: Long, type: Char, link: String) {
             val h = ByteArray(512)
             putString(h, 0, 100, name)
-            putOctal(h, 100, 8, 0o755)
+            putOctal(h, 100, 8, 0x1ED) /* 0755 */
             putOctal(h, 108, 8, 0) // uid
             putOctal(h, 116, 8, 0) // gid
             putOctal(h, 124, 12, size)
