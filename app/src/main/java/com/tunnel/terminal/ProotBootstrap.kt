@@ -295,6 +295,10 @@ class ProotBootstrap(private val context: Context) {
                     FileOutputStream(outFile).use { output -> input.copyTo(output) }
                     TarGzipRootfsExtractor.chmodBestEffort(outFile, 0x1ED)
                     outFile.setReadable(true, false)
+                    /* Copy next to proot binary (helps some loaders / $ORIGIN). */
+                    val sibling = File(baseDir, libName)
+                    outFile.copyTo(sibling, overwrite = true)
+                    TarGzipRootfsExtractor.chmodBestEffort(sibling, 0x1ED)
                 }
                 Log.i(TAG, "Library $libName OK")
             } catch (e: Exception) {
@@ -309,24 +313,83 @@ class ProotBootstrap(private val context: Context) {
         }
     }
 
-    private fun validateProotBinary() {
+    /**
+     * Wave-30: Re-copy proot + libs from APK assets before every session start.
+     * Fixes installs that finished rootfs extract but lost host libs, and upgrades
+     * host tools after app update without re-downloading rootfs.
+     */
+    fun ensureRuntimeFiles() {
+        ensureInstallDirs()
+        installProotBinary()
+        installProotLibraries()
+        File(rootfsDir, "tmp").mkdirs()
+        File(rootfsDir, "root").mkdirs()
+        TarGzipRootfsExtractor.chmodBestEffort(File(rootfsDir, "tmp"), 0x3FF)
+    }
+
+    /** LD_LIBRARY_PATH: lib/ + baseDir (+ nativeLibraryDir). */
+    fun hostLibraryPath(): String {
+        val parts = mutableListOf(libDir.absolutePath, baseDir.absolutePath)
         try {
-            val validateProcess = ProcessBuilder(prootBin.absolutePath, "--version")
-                .redirectErrorStream(true)
-                .apply {
-                    environment()["LD_LIBRARY_PATH"] = libDir.absolutePath
-                }
-                .start()
-            val validateOutput = validateProcess.inputStream.bufferedReader().readText()
-            val validateExit = validateProcess.waitFor()
-            if (validateExit != 0 && validateOutput.isBlank()) {
-                Log.w(TAG, "proot --version exit=$validateExit (non-fatal)")
-            } else {
-                Log.i(TAG, "proot --version: ${validateOutput.take(120)}")
-            }
-        } catch (e: Exception) {
-            Log.w(TAG, "Validasi proot non-fatal: ${e.message}")
+            val native = context.applicationInfo.nativeLibraryDir
+            if (!native.isNullOrBlank()) parts.add(native)
+        } catch (_: Exception) {
         }
+        return parts.distinct().joinToString(":")
+    }
+
+    /** Probe `proot --version` with correct LD_LIBRARY_PATH; throw with detail on failure. */
+    fun probeProotOrThrow(): String {
+        ensureRuntimeFiles()
+        if (!prootBin.exists() || !prootBin.canExecute()) {
+            throw IllegalStateException("proot tidak executable: ${prootBin.absolutePath}")
+        }
+        for (libName in PROOT_LIBS) {
+            val f = File(libDir, libName)
+            if (!f.isFile || f.length() < 1000L) {
+                throw IllegalStateException(
+                    "Library $libName hilang di ${libDir.absolutePath}. " +
+                        "Install ulang APK Full (GitHub Releases), lalu Install Ubuntu lagi."
+                )
+            }
+        }
+        val pb = ProcessBuilder(prootBin.absolutePath, "--version")
+            .redirectErrorStream(true)
+            .directory(baseDir)
+        pb.environment()["LD_LIBRARY_PATH"] = hostLibraryPath()
+        pb.environment()["PROOT_TMP_DIR"] = File(baseDir, "tmp").apply { mkdirs() }.absolutePath
+        val proc = pb.start()
+        val out = proc.inputStream.bufferedReader().readText()
+        val code = proc.waitFor()
+        if (code != 0) {
+            throw IllegalStateException(
+                "proot --version gagal (exit=$code). " +
+                    "LD_LIBRARY_PATH=${hostLibraryPath()}. Output: ${out.take(400)}"
+            )
+        }
+        Log.i(TAG, "proot probe OK: ${out.take(120)}")
+        return out.trim()
+    }
+
+    private fun validateProotBinary() {
+        /* Fail install if host proot cannot even print --version (libs / exec). */
+        probeProotOrThrow()
+    }
+
+    fun listRuntimeDiagnostics(): String = buildString {
+        appendLine("baseDir=${baseDir.absolutePath}")
+        appendLine("proot exists=${prootBin.exists()} exec=${prootBin.canExecute()} size=${prootBin.length()}")
+        appendLine("libDir=${libDir.absolutePath}")
+        for (libName in PROOT_LIBS) {
+            val f = File(libDir, libName)
+            appendLine("  $libName exists=${f.exists()} size=${f.length()}")
+        }
+        appendLine(
+            "rootfs bash=${File(rootfsDir, "usr/bin/bash").exists()} " +
+                "binbash=${File(rootfsDir, "bin/bash").exists()}"
+        )
+        appendLine("LD_LIBRARY_PATH=${hostLibraryPath()}")
+        appendLine("isInstalled=$isInstalled")
     }
 
     /** Free bytes on the filesystem that holds [baseDir] (app-private). */
