@@ -2097,17 +2097,33 @@ fun UbuntuInstallDialog(
             Column(modifier = Modifier.fillMaxWidth()) {
                 Text(
                     "Jalankan Ubuntu asli di dalam Tunnel Terminal lewat proot — tanpa root. " +
-                    "Memungkinkan apt, git, python, nodejs, dan tool Linux lainnya.",
+                    "Memungkinkan apt, git, python, nodejs, dan tool Linux lainnya. " +
+                    "Rootfs disimpan di storage privat app (tidak butuh izin Download/SAF).",
                     color = theme.uiTextMuted,
                     fontSize = 12.sp,
                     fontFamily = FontFamily.Monospace
                 )
                 Spacer(modifier = Modifier.height(12.dp))
 
-                /* Info storage. */
+                /* Info storage (app-private filesDir). */
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text("Free storage:", color = theme.uiTextMuted, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
-                    Text("$freeMb MB", color = if (freeMb < 1500) Color(0xFFFF5252) else theme.uiText, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
+                    Text("Free (app storage):", color = theme.uiTextMuted, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
+                    Text(
+                        "$freeMb MB",
+                        color = if (freeMb < 800) Color(0xFFFF5252) else theme.uiText,
+                        fontSize = 11.sp,
+                        fontFamily = FontFamily.Monospace
+                    )
+                }
+                if (!installed) {
+                    Text(
+                        bootstrap.getInstallLocationDescription(),
+                        color = theme.uiTextMuted,
+                        fontSize = 9.sp,
+                        fontFamily = FontFamily.Monospace,
+                        maxLines = 2
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
                 }
                 if (installed) {
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
@@ -2130,8 +2146,8 @@ fun UbuntuInstallDialog(
                     }
                 } else {
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Text("Required:", color = theme.uiTextMuted, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
-                        Text("≥ 1500 MB", color = theme.uiText, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
+                        Text("Required free:", color = theme.uiTextMuted, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
+                        Text("≥ 800 MB", color = theme.uiText, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
                     }
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                         Text("Status:", color = theme.uiTextMuted, fontSize = 11.sp, fontFamily = FontFamily.Monospace)

@@ -28,7 +28,7 @@ class UbuntuRootfsUrlTest {
     @Test
     fun `min tarball size rejects html error pages`() {
         assertTrue(ProotBootstrap.MIN_TARBALL_BYTES >= 15L * 1024 * 1024)
-        assertTrue(ProotBootstrap.MIN_FREE_BYTES >= 500L * 1024 * 1024)
+        assertTrue(ProotBootstrap.MIN_FREE_BYTES >= 800L * 1024 * 1024)
     }
 
     @Test
