@@ -26,16 +26,12 @@ class TerminalLayoutImeTest {
 
     @Test
     fun `ime full wipe is ignored for multi-char buffer`() {
-        // Mirrors applyImeValueChange guard
-        fun shouldIgnoreWipe(last: String, newValue: String): Boolean {
-            if (!last.startsWith(newValue)) return newValue.isEmpty() && last.isNotEmpty()
-            val deleted = last.length - newValue.length
-            return newValue.isEmpty() && last.isNotEmpty() && deleted >= 2
-        }
-        assertTrue(shouldIgnoreWipe("hello", ""))
-        assertFalse(shouldIgnoreWipe("h", "")) // last char may delete
-        assertFalse(shouldIgnoreWipe("hello", "hell")) // normal backspace
-        assertTrue(shouldIgnoreWipe("ab", ""))
+        assertTrue(TerminalImeDelta.plan("hello", "").ignored)
+        assertFalse(TerminalImeDelta.plan("h", "").ignored) // last char may delete
+        assertFalse(TerminalImeDelta.plan("hello", "hell").ignored) // normal single backspace
+        assertTrue(TerminalImeDelta.plan("ab", "").ignored)
+        /* Wave-27: partial multi-char shrink also ignored */
+        assertTrue(TerminalImeDelta.plan("hello", "hel").ignored)
     }
 
     @Test
