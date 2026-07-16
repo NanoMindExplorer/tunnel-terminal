@@ -82,15 +82,17 @@ class TerminalImeDeltaTest {
     }
 
     @Test
-    fun `buffer desync forces full rewrite`() {
+    fun `buffer desync alone does not force rewrite at EOL`() {
+        /* Wave-31: desync no longer fullRewrite — that made ls/cd vanish. */
         val p = TerminalImeDelta.plan(
             last = "abc",
             newValue = "abcd",
-            commandBuffer = "ab", /* desynced */
+            commandBuffer = "ab",
             cursorLikelyAtEnd = true
         )
-        assertTrue(p.fullRewrite)
-        assertEquals("abcd", p.syncTo)
+        assertFalse(p.fullRewrite)
+        assertEquals(0, p.backspaces)
+        assertEquals("d", p.typeChars)
     }
 
     @Test

@@ -110,15 +110,10 @@ class ProotShellExecutor(
             }
 
             val rootfsPath = bootstrap.rootfsDir.absolutePath
-            val prootPath = bootstrap.prootBin.absolutePath
             val libPath = bootstrap.hostLibraryPath()
             val tmpHost = File(bootstrap.baseDir, "tmp").apply { mkdirs() }.absolutePath
             val tmpGuest = File(bootstrap.rootfsDir, "tmp").apply { mkdirs() }.absolutePath
-
-            if (!File(prootPath).exists() || !File(prootPath).canExecute()) {
-                failStart("proot binary tidak executable: $prootPath")
-                return@withContext
-            }
+            val prootPath = bootstrap.prootExecFile().absolutePath
 
             /* Prefer real bash path inside rootfs (symlink-safe). */
             val bashGuest = when {
@@ -134,10 +129,6 @@ class ProotShellExecutor(
                 bootstrap.appContext.filesDir, "workspace"
             ).apply { mkdirs() }.absolutePath
 
-            /*
-             * Host-side env for the proot process (linker + proot itself).
-             * createSessionExec merges these over the full Android parent environ.
-             */
             val envp = mutableListOf(
                 "LD_LIBRARY_PATH=$libPath",
                 "PROOT_TMP_DIR=$tmpHost",
@@ -151,13 +142,8 @@ class ProotShellExecutor(
                 Log.i(tag, "Spawn dengan PROOT_NO_SECCOMP=1")
             }
 
-            /*
-             * proot argv. Keep binds minimal + reliable on Android.
-             * --kill-on-exit: reap children when session ends.
-             * -b /system: needed by some devices for linker/helpers.
-             */
-            val argv = mutableListOf(
-                prootPath,
+            /* Flags after proot binary (prootSpawn may prefix linker64). */
+            val prootArgs = listOf(
                 "--link2symlink",
                 "--kill-on-exit",
                 "-0",
@@ -177,14 +163,16 @@ class ProotShellExecutor(
                 "TMPDIR=/tmp",
                 bashGuest, "--login"
             )
+            val (execPath, argv) = bootstrap.prootSpawn(prootArgs)
+            Log.i(tag, "Spawn exec=$execPath argv0=${argv.firstOrNull()} proot=$prootPath")
 
             val fontSp = TerminalSize.readPersistedFontSp(bootstrap.appContext)
             val geo = TerminalSize.fromDisplay(bootstrap.appContext, fontSizeSp = fontSp)
             val outFd = IntArray(1)
             firstByteLatch = CountDownLatch(1)
             val pid = TerminalJni.createSessionExec(
-                geo.rows, geo.cols, outFd, prootPath,
-                argv.toTypedArray(),
+                geo.rows, geo.cols, outFd, execPath,
+                argv,
                 envp.toTypedArray()
             )
             val fd = outFd.getOrElse(0) { -1 }
