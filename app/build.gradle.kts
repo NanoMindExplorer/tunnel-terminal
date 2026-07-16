@@ -23,9 +23,9 @@ android {
         // Phase 52: Agent Mode audit fixes (Bug #1 approval dialog, Bug #2 success detection, Bug #3 Stop cancel)
         // Phase 58: TaskPlanManager (plan/act/observe/verify) + SFTP for SSH file I/O
         // Phase 59: Native API tool-calling (B-1) + AGP/Kotlin upgrade (C-2)
-        /* Wave 25: AI Skills system — CRUD + inject into chat/agent/all sessions. */
-        versionCode = 61
-        versionName = "8.4.0"
+        /* Wave 26: Ubuntu install extract + rootfs permissions fix after 100% download. */
+        versionCode = 62
+        versionName = "8.4.1"
 
         /* Phase 40 fix (M10): Restrict ke arm64-v8a saja — proot binary di assets
          * hanya arm64. Tanpa abiFilters, APK universal akan crash di device x86_64

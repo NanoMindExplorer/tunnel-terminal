@@ -1411,7 +1411,9 @@ class MainActivity : ComponentActivity() {
             } catch (e: Exception) {
                 Log.e("MainActivity", "Ubuntu install gagal: ${e.message}", e)
                 ubuntuInstalling = false
-                ubuntuInstallError = e.message ?: "Unknown error"
+                /* Keep last stage in message so user knows if failure was after 100% download. */
+                val stageHint = ubuntuInstallStage.takeIf { it.isNotBlank() }?.let { " (saat: $it)" } ?: ""
+                ubuntuInstallError = (e.message ?: "Unknown error") + stageHint
             }
         }
     }
