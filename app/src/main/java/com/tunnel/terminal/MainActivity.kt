@@ -2958,17 +2958,14 @@ class MainActivity : ComponentActivity() {
             }
 
             /**
-             * Wave-3 + Wave-11 + Wave-18 + Wave-27 + Wave-29: Unified soft-IME handler.
-             *
-             * Wave-29: Soft IME always edits the line as end-of-line text. Before any
-             * mutation we snap PTY to EOL (Ctrl+E) and, if trackers desync or the user
-             * moved the cursor with Home/←, rewrite the whole line so new keys never
-             * insert *before* previously typed characters.
+             * Wave-31 IME: Never send Ctrl+E on local Android sh (it is NOT readline —
+             * every keystroke was injecting 0x05 and/or mass-backspace rewrites that
+             * made "ls"/"cd" disappear). LCP append/backspace only; rewrite only after
+             * Home/← when cursor is mid-line.
              */
             fun applyImeValueChange(newValue: String) {
                 val lastInputValue = imeFieldLast
                 if (newValue == lastInputValue) {
-                    /* Still pin caret — recompose may have moved selection to 0. */
                     pinImeCaretToEnd()
                     return
                 }
@@ -2987,10 +2984,14 @@ class MainActivity : ComponentActivity() {
                     activeExecutor.writeRaw(translated)
                 }
 
+                val isReadlineSession =
+                    activeExecutor.sessionType == "ubuntu" || activeExecutor.sessionType == "ssh"
+
                 fun clearShellLineFromTracker() {
-                    /* Ctrl+E (end) then backspace tracker length — works with readline
-                     * and is safer than Ctrl+U alone on plain sh. */
-                    activeExecutor.writeRaw(5.toChar().toString())
+                    /* Only Ctrl+E on bash/readline sessions — NOT local toybox sh. */
+                    if (isReadlineSession) {
+                        activeExecutor.writeRaw(5.toChar().toString())
+                    }
                     val n = activeExecutor.currentCommandBuffer.length
                     repeat(n) { activeExecutor.writeRaw("\u007F") }
                     activeExecutor.currentCommandBuffer = ""
@@ -3003,6 +3004,16 @@ class MainActivity : ComponentActivity() {
                     }
                     activeExecutor.currentCommandBuffer = desired
                     imeLineCursorAtEnd = true
+                }
+
+                /* Soft-repair tracker-only drift (do not touch PTY). */
+                if (activeExecutor.currentCommandBuffer != lastInputValue && imeLineCursorAtEnd) {
+                    val buf = activeExecutor.currentCommandBuffer
+                    if (lastInputValue.startsWith(buf) || buf.startsWith(lastInputValue) ||
+                        buf.isEmpty() || lastInputValue.isEmpty()
+                    ) {
+                        activeExecutor.currentCommandBuffer = lastInputValue
+                    }
                 }
 
                 val plan = TerminalImeDelta.plan(
@@ -3018,12 +3029,11 @@ class MainActivity : ComponentActivity() {
 
                 if (plan.containsEnter) {
                     val line = newValue.replace("\r", "").replace("\n", "")
-                    if (plan.fullRewrite || activeExecutor.currentCommandBuffer != line) {
+                    if (plan.fullRewrite) {
                         rewriteShellLine(line)
-                    } else {
-                        /* Ensure EOL then rely on buffer already matching. */
-                        activeExecutor.writeRaw(5.toChar().toString())
-                        imeLineCursorAtEnd = true
+                    } else if (activeExecutor.currentCommandBuffer != line) {
+                        /* Align buffer then Enter — chars already on shell via type path. */
+                        activeExecutor.currentCommandBuffer = line
                     }
                     if (!enterHandledByKeyEvent) {
                         processInput(activeExecutor.currentCommandBuffer + "\n")
@@ -3040,8 +3050,7 @@ class MainActivity : ComponentActivity() {
                     return
                 }
 
-                /* Normal LCP delta — only valid when cursor at EOL and trackers match. */
-                activeExecutor.writeRaw(5.toChar().toString()) /* snap EOL */
+                /* LCP delta only — no Ctrl+E (breaks local sh). */
                 imeLineCursorAtEnd = true
                 repeat(plan.backspaces) { sendBackspace() }
                 for (ch in plan.typeChars) {

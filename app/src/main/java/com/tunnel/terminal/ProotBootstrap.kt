@@ -70,16 +70,29 @@ class ProotBootstrap(private val context: Context) {
 
     val baseDir = File(context.filesDir, "linux")
     val rootfsDir = File(baseDir, "ubuntu")
+    /** Canonical install path (may be non-exec on some OEM / W^X policies). */
     val prootBin = File(baseDir, "proot")
     val libDir = File(baseDir, "lib")
+    /**
+     * Wave-31: Prefer codeCacheDir for the runnable proot copy — Android often
+     * allows execute there when filesDir returns EACCES (error=13).
+     */
+    private val prootExecDir: File
+        get() = File(context.codeCacheDir, "linux").also { it.mkdirs() }
     private val markerFile = File(baseDir, ".installed")
     private val rootfsTarball = File(baseDir, "rootfs.tar.gz")
     private val downloadMeta = File(baseDir, ".rootfs_download_url")
 
+    /** Resolved path used to actually exec proot (code cache preferred). */
+    fun prootExecFile(): File {
+        val cached = File(prootExecDir, "proot")
+        if (cached.isFile && cached.length() > 10_000) return cached
+        return prootBin
+    }
+
     val isInstalled: Boolean
         get() = markerFile.exists() &&
-            prootBin.exists() &&
-            prootBin.canExecute() &&
+            (prootBin.exists() || prootExecFile().exists()) &&
             TarGzipRootfsExtractor.rootfsLooksValid(rootfsDir)
 
     private fun pickRootfsUrls(): List<String> {
@@ -257,6 +270,24 @@ class ProotBootstrap(private val context: Context) {
         TarGzipRootfsExtractor.chmodBestEffort(dir, mode)
     }
 
+    /**
+     * Wave-31: Write ELF then chmod **0555** (not 0755).
+     * Android W^X may deny exec (error=13) if the file remains owner-writable.
+     */
+    private fun writeExecBinary(dest: File, bytes: ByteArray) {
+        dest.parentFile?.mkdirs()
+        FileOutputStream(dest).use { it.write(bytes) }
+        dest.setReadable(true, false)
+        dest.setWritable(false, false)
+        dest.setExecutable(true, false)
+        /* 0555 = r-xr-xr-x (no write). */
+        TarGzipRootfsExtractor.chmodBestEffort(dest, 0x16D)
+        try {
+            android.system.Os.chmod(dest.absolutePath, 0x16D)
+        } catch (_: Throwable) {
+        }
+    }
+
     private fun installProotBinary() {
         val assetProotBytes = try {
             context.assets.open(ASSET_PROOT_PATH).use { it.readBytes() }
@@ -272,33 +303,28 @@ class ProotBootstrap(private val context: Context) {
                 "Binary proot di assets terlalu kecil (${assetProotBytes.size} bytes) — APK corrupt?"
             )
         }
-        FileOutputStream(prootBin).use { it.write(assetProotBytes) }
-        TarGzipRootfsExtractor.chmodBestEffort(prootBin, 0x1ED)
-        if (!prootBin.setExecutable(true, false)) {
-            /* Some OEMs return false even when mode is OK — verify canExecute. */
-            if (!prootBin.canExecute()) {
-                throw IllegalStateException(
-                    "Gagal set executable pada proot di ${prootBin.absolutePath}. " +
-                        "Device mungkin memblokir exec dari app storage (W^X)."
-                )
-            }
-        }
+        writeExecBinary(prootBin, assetProotBytes)
+        writeExecBinary(File(prootExecDir, "proot"), assetProotBytes)
     }
 
     private fun installProotLibraries() {
         libDir.mkdirs()
+        val execLib = File(prootExecDir, "lib").also { it.mkdirs() }
         val missingLibs = mutableListOf<String>()
         for (libName in PROOT_LIBS) {
             try {
                 context.assets.open("$ASSET_PROOT_LIB_DIR/$libName").use { input ->
-                    val outFile = File(libDir, libName)
-                    FileOutputStream(outFile).use { output -> input.copyTo(output) }
-                    TarGzipRootfsExtractor.chmodBestEffort(outFile, 0x1ED)
-                    outFile.setReadable(true, false)
-                    /* Copy next to proot binary (helps some loaders / $ORIGIN). */
-                    val sibling = File(baseDir, libName)
-                    outFile.copyTo(sibling, overwrite = true)
-                    TarGzipRootfsExtractor.chmodBestEffort(sibling, 0x1ED)
+                    val bytes = input.readBytes()
+                    fun place(dir: File) {
+                        val outFile = File(dir, libName)
+                        FileOutputStream(outFile).use { it.write(bytes) }
+                        TarGzipRootfsExtractor.chmodBestEffort(outFile, 0x1ED)
+                        outFile.setReadable(true, false)
+                    }
+                    place(libDir)
+                    place(baseDir)
+                    place(execLib)
+                    place(prootExecDir)
                 }
                 Log.i(TAG, "Library $libName OK")
             } catch (e: Exception) {
@@ -313,23 +339,25 @@ class ProotBootstrap(private val context: Context) {
         }
     }
 
-    /**
-     * Wave-30: Re-copy proot + libs from APK assets before every session start.
-     * Fixes installs that finished rootfs extract but lost host libs, and upgrades
-     * host tools after app update without re-downloading rootfs.
-     */
+    /** Wave-30/31: Re-copy proot + libs from APK assets before every session start. */
     fun ensureRuntimeFiles() {
         ensureInstallDirs()
+        prootExecDir.mkdirs()
         installProotBinary()
         installProotLibraries()
         File(rootfsDir, "tmp").mkdirs()
         File(rootfsDir, "root").mkdirs()
+        File(baseDir, "tmp").mkdirs()
         TarGzipRootfsExtractor.chmodBestEffort(File(rootfsDir, "tmp"), 0x3FF)
     }
 
-    /** LD_LIBRARY_PATH: lib/ + baseDir (+ nativeLibraryDir). */
     fun hostLibraryPath(): String {
-        val parts = mutableListOf(libDir.absolutePath, baseDir.absolutePath)
+        val parts = mutableListOf(
+            libDir.absolutePath,
+            baseDir.absolutePath,
+            File(prootExecDir, "lib").absolutePath,
+            prootExecDir.absolutePath
+        )
         try {
             val native = context.applicationInfo.nativeLibraryDir
             if (!native.isNullOrBlank()) parts.add(native)
@@ -338,12 +366,37 @@ class ProotBootstrap(private val context: Context) {
         return parts.distinct().joinToString(":")
     }
 
-    /** Probe `proot --version` with correct LD_LIBRARY_PATH; throw with detail on failure. */
+    fun resolveLinker(): String? {
+        val candidates = listOf(
+            "/system/bin/linker64",
+            "/apex/com.android.runtime/bin/linker64",
+            "/system/bin/linker"
+        )
+        return candidates.firstOrNull { File(it).exists() }
+    }
+
+    /**
+     * Build spawn pair: (execPath, argv).
+     * Prefer linker64 + proot path to bypass EACCES (error=13) on filesDir.
+     */
+    fun prootSpawn(argsAfterProot: List<String>): Pair<String, Array<String>> {
+        val bin = prootExecFile().absolutePath
+        val linker = resolveLinker()
+        if (linker != null) {
+            val argv = ArrayList<String>(2 + argsAfterProot.size)
+            argv.add(linker)
+            argv.add(bin)
+            argv.addAll(argsAfterProot)
+            return linker to argv.toTypedArray()
+        }
+        val argv = ArrayList<String>(1 + argsAfterProot.size)
+        argv.add(bin)
+        argv.addAll(argsAfterProot)
+        return bin to argv.toTypedArray()
+    }
+
     fun probeProotOrThrow(): String {
         ensureRuntimeFiles()
-        if (!prootBin.exists() || !prootBin.canExecute()) {
-            throw IllegalStateException("proot tidak executable: ${prootBin.absolutePath}")
-        }
         for (libName in PROOT_LIBS) {
             val f = File(libDir, libName)
             if (!f.isFile || f.length() < 1000L) {
@@ -353,32 +406,66 @@ class ProotBootstrap(private val context: Context) {
                 )
             }
         }
-        val pb = ProcessBuilder(prootBin.absolutePath, "--version")
-            .redirectErrorStream(true)
-            .directory(baseDir)
-        pb.environment()["LD_LIBRARY_PATH"] = hostLibraryPath()
-        pb.environment()["PROOT_TMP_DIR"] = File(baseDir, "tmp").apply { mkdirs() }.absolutePath
-        val proc = pb.start()
-        val out = proc.inputStream.bufferedReader().readText()
-        val code = proc.waitFor()
-        if (code != 0) {
-            throw IllegalStateException(
-                "proot --version gagal (exit=$code). " +
-                    "LD_LIBRARY_PATH=${hostLibraryPath()}. Output: ${out.take(400)}"
-            )
+        val bin = prootExecFile()
+        if (!bin.isFile || bin.length() < 10_000L) {
+            throw IllegalStateException("proot binary hilang: ${bin.absolutePath}")
         }
-        Log.i(TAG, "proot probe OK: ${out.take(120)}")
-        return out.trim()
+
+        val libPath = hostLibraryPath()
+        val tmp = File(baseDir, "tmp").apply { mkdirs() }.absolutePath
+        val attempts = mutableListOf<List<String>>()
+        attempts.add(listOf(bin.absolutePath, "--version"))
+        resolveLinker()?.let { lk ->
+            attempts.add(listOf(lk, bin.absolutePath, "--version"))
+        }
+        if (prootBin.absolutePath != bin.absolutePath) {
+            resolveLinker()?.let { lk ->
+                attempts.add(listOf(lk, prootBin.absolutePath, "--version"))
+            }
+            attempts.add(listOf(prootBin.absolutePath, "--version"))
+        }
+
+        var lastErr: Exception? = null
+        val errors = mutableListOf<String>()
+        for (cmd in attempts) {
+            try {
+                val pb = ProcessBuilder(cmd)
+                    .redirectErrorStream(true)
+                    .directory(bin.parentFile ?: baseDir)
+                pb.environment()["LD_LIBRARY_PATH"] = libPath
+                pb.environment()["PROOT_TMP_DIR"] = tmp
+                val proc = pb.start()
+                val out = proc.inputStream.bufferedReader().readText()
+                val code = proc.waitFor()
+                if (code == 0) {
+                    Log.i(TAG, "proot probe OK via ${cmd.take(2)}: ${out.take(100)}")
+                    return out.trim()
+                }
+                errors.add("${cmd.take(2)} exit=$code out=${out.take(120)}")
+            } catch (e: Exception) {
+                lastErr = e
+                errors.add("${cmd.take(2)}: ${e.message}")
+                Log.w(TAG, "proot probe failed ${cmd.take(2)}: ${e.message}")
+            }
+        }
+        throw IllegalStateException(
+            "Tidak bisa menjalankan proot (Permission denied / linker).\n" +
+                errors.joinToString("\n") +
+                "\nLD_LIBRARY_PATH=$libPath\n" +
+                "Terakhir: ${lastErr?.message ?: "unknown"}"
+        )
     }
 
     private fun validateProotBinary() {
-        /* Fail install if host proot cannot even print --version (libs / exec). */
         probeProotOrThrow()
     }
 
     fun listRuntimeDiagnostics(): String = buildString {
         appendLine("baseDir=${baseDir.absolutePath}")
-        appendLine("proot exists=${prootBin.exists()} exec=${prootBin.canExecute()} size=${prootBin.length()}")
+        appendLine("proot filesDir exists=${prootBin.exists()} size=${prootBin.length()} canExec=${prootBin.canExecute()}")
+        val pe = prootExecFile()
+        appendLine("proot exec=${pe.absolutePath} exists=${pe.exists()} size=${pe.length()} canExec=${pe.canExecute()}")
+        appendLine("linker=${resolveLinker()}")
         appendLine("libDir=${libDir.absolutePath}")
         for (libName in PROOT_LIBS) {
             val f = File(libDir, libName)
