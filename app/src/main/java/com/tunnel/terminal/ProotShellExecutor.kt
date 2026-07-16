@@ -3,14 +3,16 @@ package com.tunnel.terminal
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import java.io.File
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
 /**
  * ProotShellExecutor — Ubuntu Linux environment via proot.
  *
- * Wave-5: Extends [PtySessionBase] for shared PTY I/O. Only spawn/proot argv
- * and readiness latch remain specialized.
+ * Wave-5: Extends [PtySessionBase] for shared PTY I/O.
+ * Wave-30: Fix premature exit (~20ms) — ensure host libs, full linker env
+ * (createSessionExec merges parent environ), preflight probe, clearer diagnostics.
  */
 class ProotShellExecutor(
     themeHolder: ThemeHolder = ThemeHolder(),
@@ -24,6 +26,10 @@ class ProotShellExecutor(
 
     @Volatile
     private var startTime: Long = 0L
+
+    /** Last host-side error detail for processExitMessage / UI. */
+    @Volatile
+    private var lastStartError: String? = null
 
     override var currentPrompt: String = "root@ubuntu:~# "
 
@@ -46,13 +52,21 @@ class ProotShellExecutor(
         val uptime = System.currentTimeMillis() - startTime
         return if (uptime in 1 until 2000) {
             buildString {
-                append("\n\u001B[31m[Ubuntu session mati prematur dalam ${uptime}ms.\u001B[0m\n")
+                append("\n\u001B[31m[Ubuntu session mati prematur dalam ${uptime}ms.]\u001B[0m\n")
+                lastStartError?.let {
+                    append("\u001B[33mDetail: $it\u001B[0m\n")
+                }
                 if (!disableSeccomp) {
-                    append("\u001B[33mKemungkinan SECCOMP filter Android tidak kompatibel. ")
-                    append("Coba restart — sistem akan retry dengan PROOT_NO_SECCOMP=1.\u001B[0m\n")
+                    append("\u001B[33mMencoba ulang dengan PROOT_NO_SECCOMP=1…\u001B[0m\n")
                 } else {
-                    append("\u001B[33mPROOT_NO_SECCOMP=1 sudah dicoba tapi tetap gagal. ")
-                    append("Cek log: kemungkinan libtalloc.so.2 atau libandroid-shmem.so tidak ditemukan.\u001B[0m\n")
+                    append("\u001B[33mPROOT_NO_SECCOMP=1 sudah aktif. Cek:\u001B[0m\n")
+                    append("\u001B[33m• Library host: libtalloc.so.2 + libandroid-shmem.so di filesDir/linux/lib\u001B[0m\n")
+                    append("\u001B[33m• Rootfs: bin/bash ada; Install ulang Ubuntu jika corrupt\u001B[0m\n")
+                    append("\u001B[33m• APK harus flavor Full (GitHub Releases), bukan Play Store\u001B[0m\n")
+                    try {
+                        append("\u001B[36m${bootstrap.listRuntimeDiagnostics()}\u001B[0m")
+                    } catch (_: Exception) {
+                    }
                 }
             }
         } else {
@@ -65,6 +79,7 @@ class ProotShellExecutor(
             isAlive = true
             resetSessionBuffers()
             startTime = System.currentTimeMillis()
+            lastStartError = null
 
             if (!TerminalJni.isLoaded) {
                 failStart("Native library (libtunnel_terminal.so) tidak dapat dimuat.")
@@ -78,47 +93,79 @@ class ProotShellExecutor(
                 return@withContext
             }
 
-            try { bootstrap.setupResolvConf() } catch (_: Exception) {}
+            /* Wave-30: Always refresh proot + libs from APK assets; probe before spawn. */
+            try {
+                val ver = bootstrap.probeProotOrThrow()
+                Log.i(tag, "Preflight proot OK: ${ver.take(80)}")
+            } catch (e: Exception) {
+                lastStartError = e.message
+                failStart("Preflight proot gagal: ${e.message}")
+                emulator.process("\u001B[33m${bootstrap.listRuntimeDiagnostics()}\u001B[0m\n")
+                return@withContext
+            }
+
+            try {
+                bootstrap.setupResolvConf()
+            } catch (_: Exception) {
+            }
 
             val rootfsPath = bootstrap.rootfsDir.absolutePath
             val prootPath = bootstrap.prootBin.absolutePath
-            val libPath = bootstrap.libDir.absolutePath
+            val libPath = bootstrap.hostLibraryPath()
+            val tmpHost = File(bootstrap.baseDir, "tmp").apply { mkdirs() }.absolutePath
+            val tmpGuest = File(bootstrap.rootfsDir, "tmp").apply { mkdirs() }.absolutePath
 
-            if (!java.io.File(prootPath).exists()) {
-                failStart("proot binary tidak ditemukan: $prootPath")
-                return@withContext
-            }
-            if (!java.io.File(prootPath).canExecute()) {
+            if (!File(prootPath).exists() || !File(prootPath).canExecute()) {
                 failStart("proot binary tidak executable: $prootPath")
-                emulator.process("\u001B[33mDevice ini mungkin memblokir eksekusi binary dari app storage (W^X policy).\u001B[0m\n")
                 return@withContext
             }
 
-            val missingLibsFile = java.io.File(bootstrap.baseDir, ".missing_libs")
-            if (missingLibsFile.exists()) {
-                val missingLibs = missingLibsFile.readText().trim()
-                if (missingLibs.isNotEmpty()) {
-                    failStart("Shared library proot tidak ditemukan di assets APK:")
-                    emulator.process("\u001B[33mMissing: $missingLibs\u001B[0m\n")
-                    emulator.process("\u001B[33mLihat app/src/main/assets/proot/README.md.\u001B[0m\n")
+            /* Prefer real bash path inside rootfs (symlink-safe). */
+            val bashGuest = when {
+                File(bootstrap.rootfsDir, "usr/bin/bash").isFile -> "/usr/bin/bash"
+                File(bootstrap.rootfsDir, "bin/bash").exists() -> "/bin/bash"
+                else -> {
+                    failStart("bash tidak ada di rootfs — extract corrupt. Uninstall lalu Install ulang Ubuntu.")
                     return@withContext
                 }
             }
 
-            /* Wave-23: Bind-mount Android app workspace into guest at /mnt/workspace
-             * so AI tools + shell can share files when needed. HOME stays /root. */
-            val androidWorkspace = java.io.File(
+            val androidWorkspace = File(
                 bootstrap.appContext.filesDir, "workspace"
             ).apply { mkdirs() }.absolutePath
 
+            /*
+             * Host-side env for the proot process (linker + proot itself).
+             * createSessionExec merges these over the full Android parent environ.
+             */
+            val envp = mutableListOf(
+                "LD_LIBRARY_PATH=$libPath",
+                "PROOT_TMP_DIR=$tmpHost",
+                "TMPDIR=$tmpGuest",
+                "HOME=/root",
+                "TERM=xterm-256color",
+                "PATH=/system/bin:/system/xbin:/vendor/bin"
+            )
+            if (disableSeccomp) {
+                envp.add("PROOT_NO_SECCOMP=1")
+                Log.i(tag, "Spawn dengan PROOT_NO_SECCOMP=1")
+            }
+
+            /*
+             * proot argv. Keep binds minimal + reliable on Android.
+             * --kill-on-exit: reap children when session ends.
+             * -b /system: needed by some devices for linker/helpers.
+             */
             val argv = mutableListOf(
                 prootPath,
                 "--link2symlink",
+                "--kill-on-exit",
                 "-0",
                 "-r", rootfsPath,
                 "-b", "/dev",
                 "-b", "/proc",
                 "-b", "/sys",
+                "-b", "/system",
                 "-b", "$androidWorkspace:/mnt/workspace",
                 "-w", "/root",
                 "/usr/bin/env", "-i",
@@ -127,20 +174,10 @@ class ProotShellExecutor(
                 "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
                 "LANG=C.UTF-8",
                 "DEBIAN_FRONTEND=noninteractive",
-                "/bin/bash", "--login"
+                "TMPDIR=/tmp",
+                bashGuest, "--login"
             )
 
-            val envp = mutableListOf(
-                "PROOT_TMP_DIR=${rootfsPath}/tmp",
-                "LD_LIBRARY_PATH=$libPath",
-                "PATH=${System.getenv("PATH") ?: "/system/bin"}"
-            )
-            if (disableSeccomp) {
-                envp.add("PROOT_NO_SECCOMP=1")
-                Log.i(tag, "Retry dengan PROOT_NO_SECCOMP=1")
-            }
-
-            /* Wave-13: Spawn with display-derived size (was hard-coded 24×80). */
             val fontSp = TerminalSize.readPersistedFontSp(bootstrap.appContext)
             val geo = TerminalSize.fromDisplay(bootstrap.appContext, fontSizeSp = fontSp)
             val outFd = IntArray(1)
@@ -154,16 +191,17 @@ class ProotShellExecutor(
 
             if (pid <= 0 || fd < 0) {
                 firstByteLatch = null
+                lastStartError = "createSessionExec pid=$pid fd=$fd"
                 failStart("Gagal membuat sesi proot (pid=$pid).")
-                emulator.process("\u001B[33mKemungkinan binary proot tidak kompatibel, atau Android memblokir eksekusi.\u001B[0m\n")
+                emulator.process("\u001B[33m${bootstrap.listRuntimeDiagnostics()}\u001B[0m\n")
                 if (!disableSeccomp) {
-                    emulator.process("\u001B[33mCoba restart sesi — sistem akan retry dengan PROOT_NO_SECCOMP=1.\u001B[0m\n")
+                    emulator.process("\u001B[33mCoba restart — sistem akan retry dengan PROOT_NO_SECCOMP=1.\u001B[0m\n")
                 }
                 return@withContext
             }
 
             adoptMasterAndStartReader(pid, fd, "proot-read-$id")
-            Log.i(tag, "Ubuntu proot: rootfs=$rootfsPath lib=$libPath size=${geo.rows}x${geo.cols}")
+            Log.i(tag, "Ubuntu proot: rootfs=$rootfsPath lib=$libPath size=${geo.rows}x${geo.cols} pid=$pid")
 
             try {
                 val ready = firstByteLatch!!.await(5, TimeUnit.SECONDS)
@@ -171,6 +209,13 @@ class ProotShellExecutor(
                 else Log.w(tag, "Timeout 5s menunggu proot readiness — kirim PS1 anyway")
             } catch (_: InterruptedException) {
                 Log.w(tag, "Interrupted menunggu proot readiness")
+            }
+            /* If already dead, surface diagnostics immediately. */
+            if (!isAlive) {
+                lastStartError = "process exited before first prompt"
+                emulator.process(processExitMessage())
+                triggerScreenUpdate()
+                return@withContext
             }
             Thread.sleep(100)
             writeRaw("export PS1='\\u@\\h:\\w\\$ '\n")
@@ -180,7 +225,6 @@ class ProotShellExecutor(
 
     override suspend fun restart() {
         destroy()
-        /* Wave-14: Preserve scrollback across Ubuntu session restart. */
         rebindEmulatorCallback()
         emulator.process(reconnectBanner())
         triggerScreenUpdate()

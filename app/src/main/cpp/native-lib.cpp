@@ -202,31 +202,72 @@ Java_com_tunnel_terminal_TerminalJni_createSessionExec(JNIEnv *env, jobject thiz
     }
     argvBuf[n] = NULL;
 
-    /* 3. Salin envp[] dengan cara yang sama. */
-    char envStorage[MAX_ARGS][512];
-    char *envpBuf[MAX_ARGS + 1];
+    /*
+     * 3. Build envp = parent environ + Java overrides.
+     *
+     * Wave-30 CRITICAL: Old code passed ONLY the Java env array (3 entries:
+     * LD_LIBRARY_PATH, PROOT_TMP_DIR, PATH). That *replaced* the entire
+     * process environment. Android's dynamic linker + proot then failed to
+     * resolve libtalloc.so.2 / libandroid-shmem.so (binary DT_RUNPATH points
+     * at Termux /data/data/com.termux/...) → child exited in ~20ms with no
+     * usable shell. Screenshot: "Ubuntu session mati prematur" + PROOT_NO_SECCOMP.
+     *
+     * Fix: start from parent environ, then overlay Java KEY=value entries.
+     */
+    const int MAX_ENV = 128;
+    const int ENV_STR = 768;
+    char envStorage[MAX_ENV][ENV_STR];
+    char *envpBuf[MAX_ENV + 1];
     memset(envStorage, 0, sizeof(envStorage));
     memset(envpBuf, 0, sizeof(envpBuf));
-    jsize envc = env->GetArrayLength(envArray);
-    int m = (envc < MAX_ARGS) ? envc : MAX_ARGS;
-    for (int i = 0; i < m; i++) {
-        jstring s = (jstring)env->GetObjectArrayElement(envArray, i);
-        if (s == NULL) {
-            envpBuf[i] = envStorage[i];
+    int env_idx = 0;
+
+    extern char **environ;
+    if (environ != NULL) {
+        for (int i = 0; environ[i] != NULL && env_idx < MAX_ENV - 32; i++) {
+            strncpy(envStorage[env_idx], environ[i], ENV_STR - 1);
+            envStorage[env_idx][ENV_STR - 1] = '\0';
+            envpBuf[env_idx] = envStorage[env_idx];
+            env_idx++;
+        }
+    }
+
+    jsize envc = (envArray != NULL) ? env->GetArrayLength(envArray) : 0;
+    for (int j = 0; j < envc && env_idx < MAX_ENV; j++) {
+        jstring s = (jstring)env->GetObjectArrayElement(envArray, j);
+        if (s == NULL) continue;
+        const char *cs = env->GetStringUTFChars(s, NULL);
+        if (cs == NULL) {
+            env->DeleteLocalRef(s);
             continue;
         }
-        const char *cs = env->GetStringUTFChars(s, NULL);
-        if (cs != NULL) {
-            strncpy(envStorage[i], cs, sizeof(envStorage[i]) - 1);
-            envStorage[i][sizeof(envStorage[i]) - 1] = '\0';
-            env->ReleaseStringUTFChars(s, cs);
-        }
-        env->DeleteLocalRef(s);
-        envpBuf[i] = envStorage[i];
-    }
-    envpBuf[m] = NULL;
+        /* Extract KEY from KEY=value */
+        const char *eq = strchr(cs, '=');
+        size_t keyLen = (eq != NULL) ? (size_t)(eq - cs) : strlen(cs);
 
-    /* 4. Dari titik ini sama persis dengan createSession() yang sudah ada. */
+        /* Replace existing KEY=… or append. */
+        int replaced = 0;
+        for (int k = 0; k < env_idx; k++) {
+            if (strncmp(envpBuf[k], cs, keyLen) == 0 && envpBuf[k][keyLen] == '=') {
+                strncpy(envStorage[k], cs, ENV_STR - 1);
+                envStorage[k][ENV_STR - 1] = '\0';
+                envpBuf[k] = envStorage[k];
+                replaced = 1;
+                break;
+            }
+        }
+        if (!replaced && env_idx < MAX_ENV) {
+            strncpy(envStorage[env_idx], cs, ENV_STR - 1);
+            envStorage[env_idx][ENV_STR - 1] = '\0';
+            envpBuf[env_idx] = envStorage[env_idx];
+            env_idx++;
+        }
+        env->ReleaseStringUTFChars(s, cs);
+        env->DeleteLocalRef(s);
+    }
+    envpBuf[env_idx] = NULL;
+
+    /* 4. forkpty + execve */
     int masterFd = -1;
     pid_t pid = forkpty(&masterFd, NULL, NULL, NULL);
     if (pid < 0) {
@@ -235,16 +276,9 @@ Java_com_tunnel_terminal_TerminalJni_createSessionExec(JNIEnv *env, jobject thiz
     }
 
     if (pid == 0) {
-        /* Child — hanya async-signal-safe calls. execPathBuf/argvBuf/envpBuf
-         * adalah data biasa di stack yang sudah ikut ter-copy oleh fork().
-         *
-         * Phase 45 note: TIDAK perlu mkdir()+chdir() ke home_dir di sini
-         * (beda dengan createSession) karena proot mengatur cwd sendiri
-         * lewat flag "-w /root" di argv (lihat ProotShellExecutor.kt).
-         * Proot akan chdir ke rootfs Ubuntu setelah exec. */
+        /* Child — only async-signal-safe calls. */
         execve(execPathBuf, argvBuf, envpBuf);
-        /* Jika execve gagal — _exit adalah async-signal-safe (exit() tidak). */
-        _exit(1);
+        _exit(127); /* 127 = exec failed (linker / not found) */
     }
 
     /* Parent — set initial terminal size. */
