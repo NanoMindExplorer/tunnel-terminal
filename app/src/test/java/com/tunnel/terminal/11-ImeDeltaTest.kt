@@ -17,25 +17,16 @@ class ImeDeltaTest {
     )
 
     private fun plan(last: String, newValue: String): Delta {
-        if (newValue == last) return Delta("", 0, last)
-        return when {
-            newValue.startsWith(last) -> {
-                val added = newValue.substring(last.length)
-                if (added.contains('\n') || added.contains('\r')) {
-                    Delta(added, 0, null)
-                } else {
-                    Delta(added, 0, newValue)
-                }
-            }
-            last.startsWith(newValue) -> {
-                Delta("", last.length - newValue.length, newValue)
-            }
-            else -> {
-                // replace: backspace all previous, type new
-                val sawEnter = newValue.any { it == '\n' || it == '\r' }
-                Delta(newValue, last.length, if (sawEnter) null else newValue)
-            }
+        val p = TerminalImeDelta.plan(last, newValue)
+        if (p.ignored) {
+            /* Wave-18/27: spurious wipe/shrink — no PTY ops, restore field. */
+            return Delta("", 0, p.syncTo)
         }
+        return Delta(
+            send = p.typeChars,
+            backspaces = p.backspaces,
+            syncTo = if (p.containsEnter) null else p.syncTo
+        )
     }
 
     @Test
@@ -55,11 +46,11 @@ class ImeDeltaTest {
     }
 
     @Test
-    fun `empty after typed is delete-all not no-op`() {
-        // This is the Wave-11 bug path: recompose forced value="" while last="hello"
+    fun `empty after typed is ignored wipe not mass backspace`() {
+        // Wave-11 path recompose forced value="" while last="hello" — must NOT backspace 5
         val d = plan("hello", "")
-        assertEquals(5, d.backspaces)
-        assertEquals("", d.syncTo)
+        assertEquals(0, d.backspaces)
+        assertEquals("hello", d.syncTo)
     }
 
     @Test
@@ -70,10 +61,10 @@ class ImeDeltaTest {
     }
 
     @Test
-    fun `ime replace composition clears old then types new`() {
+    fun `ime replace composition uses LCP`() {
         val d = plan("teh", "the")
-        assertEquals(3, d.backspaces)
-        assertEquals("the", d.send)
+        assertEquals(2, d.backspaces)
+        assertEquals("he", d.send)
         assertEquals("the", d.syncTo)
     }
 

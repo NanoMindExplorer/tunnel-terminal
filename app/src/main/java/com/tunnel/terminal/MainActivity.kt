@@ -22,6 +22,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -34,6 +36,9 @@ import androidx.compose.ui.input.key.*
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
@@ -2905,17 +2910,14 @@ class MainActivity : ComponentActivity() {
             }
 
             /**
-             * Wave-3 + Wave-11: Unified soft-IME / BasicTextField handler.
+             * Wave-3 + Wave-11 + Wave-18 + Wave-27: Unified soft-IME handler.
              *
-             * Wave-11 fix (text disappears while typing):
-             * BasicTextField is controlled by [imeFieldText]. Previously we only updated
-             * [lastInputValue] on each keystroke and left imeFieldText as "" until Enter.
-             * When the shell echoed a char → screenDirty → recompose, Compose forced the
-             * field back to "" and IME fired onValueChange(""), which was interpreted as
-             * "delete all" → backspaces wiped the just-typed (and echoed) characters.
-             *
-             * Fix: always keep imeFieldText in sync with the tracked IME string via setHidden.
-             * Text stays transparent (color Transparent) so the user still sees only PTY echo.
+             * Wave-11: Keep controlled [imeFieldText] in sync (not stuck at "") so
+             * recompose after shell echo does not force value="" → mass backspace.
+             * Wave-18: Ignore full wipe to empty for multi-char buffers.
+             * Wave-27: LCP deltas + ignore multi-char pure shrink in one event
+             * ("hello"→"hel") which made typed text disappear partially; disable
+             * autocorrect on the field (see [terminalImeKeyboardOptions]).
              */
             fun applyImeValueChange(
                 newValue: String,
@@ -2953,60 +2955,46 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
-                /** Commit IME tracking state (never leave imeFieldText stale). */
                 fun syncField(value: String) {
                     setLast(value)
                     setHidden(value)
                 }
 
-                when {
-                    newValue.startsWith(lastInputValue) -> {
-                        val added = newValue.substring(lastInputValue.length)
-                        for (ch in added) processChar(ch)
-                        /* processChar already cleared both on Enter; only sync if still typing. */
-                        if (!added.contains('\n') && !added.contains('\r')) {
-                            syncField(newValue)
-                        }
-                    }
-                    lastInputValue.startsWith(newValue) -> {
-                        val deleted = lastInputValue.length - newValue.length
-                        /*
-                         * Wave-18: Ignore spurious full wipes.
-                         * After shell echo → recompose, some IMEs fire onValueChange("") once.
-                         * Treating that as "delete all" sends N backspaces and wipes the line.
-                         * Real single-char backspaces still have deleted == 1 (or small).
-                         * Full clear: use ExtraKeys ^U instead.
-                         */
-                        if (newValue.isEmpty() && lastInputValue.isNotEmpty() && deleted >= 2) {
-                            syncField(lastInputValue)
-                            return
-                        }
-                        if (newValue.isEmpty() && lastInputValue.length == 1) {
-                            /* Allow deleting the last remaining character. */
-                            sendBackspace()
-                            syncField("")
-                            return
-                        }
-                        repeat(deleted.coerceAtLeast(0)) { sendBackspace() }
-                        syncField(newValue)
-                    }
-                    else -> {
-                        /* IME composition / autocorrect replace.
-                         * Wave-18: If newValue is empty, do NOT mass-backspace (same spurious wipe). */
-                        if (newValue.isEmpty() && lastInputValue.isNotEmpty()) {
-                            syncField(lastInputValue)
-                            return
-                        }
-                        repeat(lastInputValue.length) { sendBackspace() }
-                        var sawEnter = false
-                        for (ch in newValue) {
-                            if (ch == '\n' || ch == '\r') sawEnter = true
-                            processChar(ch)
-                        }
-                        if (!sawEnter) syncField(newValue)
-                    }
+                val plan = TerminalImeDelta.plan(lastInputValue, newValue)
+                if (plan.ignored) {
+                    /* Restore controlled field — IME tried to wipe/shrink spuriously. */
+                    syncField(plan.syncTo)
+                    return
+                }
+
+                repeat(plan.backspaces) { sendBackspace() }
+                for (ch in plan.typeChars) {
+                    processChar(ch)
+                }
+                if (!plan.containsEnter) {
+                    syncField(plan.syncTo)
                 }
             }
+
+            /* Wave-27: ASCII, no autocorrect/suggestions — fewer IME replace/shrink glitches.
+             * ImeAction.Go + onGo so soft-keyboard Enter still runs the line with maxLines=1. */
+            @Suppress("DEPRECATION")
+            val terminalImeKeyboardOptions = KeyboardOptions(
+                capitalization = KeyboardCapitalization.None,
+                autoCorrect = false,
+                keyboardType = KeyboardType.Ascii,
+                imeAction = ImeAction.Go
+            )
+            val terminalImeKeyboardActions = KeyboardActions(
+                onGo = {
+                    /* Soft-keyboard Enter (maxLines=1) — same as Key.Enter path. */
+                    enterHandledByKeyEvent = true
+                    processInput(activeExecutor.currentCommandBuffer + "\n")
+                    activeExecutor.currentCommandBuffer = ""
+                    clearImeLine()
+                    enterHandledByKeyEvent = false
+                }
+            )
 
             /** Map Compose Key to char untuk Alt+key handling.
              * Phase 21 hotfix: Dipindahkan SEBELUM handleKeyEvent (forward reference
@@ -3292,6 +3280,9 @@ class MainActivity : ComponentActivity() {
                                     },
                                     textStyle = TextStyle(color = Color.Transparent),
                                     cursorBrush = SolidColor(Color.Transparent),
+                                    keyboardOptions = terminalImeKeyboardOptions,
+                                    keyboardActions = terminalImeKeyboardActions,
+                                    maxLines = 1,
                                     modifier = Modifier.fillMaxSize().focusRequester(focusRequester).onPreviewKeyEvent { event -> handleKeyEvent(event) }
                                 )
                                 TerminalScreenView(
@@ -3359,6 +3350,9 @@ class MainActivity : ComponentActivity() {
                                 },
                                 textStyle = TextStyle(color = Color.Transparent),
                                 cursorBrush = SolidColor(Color.Transparent),
+                                keyboardOptions = terminalImeKeyboardOptions,
+                                keyboardActions = terminalImeKeyboardActions,
+                                maxLines = 1,
                                 modifier = Modifier.fillMaxSize().focusRequester(focusRequester).onPreviewKeyEvent { event -> handleKeyEvent(event) }
                             )
                             BlockTerminalView(
@@ -3417,6 +3411,9 @@ class MainActivity : ComponentActivity() {
                             },
                             textStyle = TextStyle(color = Color.Transparent),
                             cursorBrush = SolidColor(Color.Transparent),
+                            keyboardOptions = terminalImeKeyboardOptions,
+                            keyboardActions = terminalImeKeyboardActions,
+                            maxLines = 1,
                             modifier = Modifier
                                 .fillMaxSize()
                                 .focusRequester(focusRequester)
