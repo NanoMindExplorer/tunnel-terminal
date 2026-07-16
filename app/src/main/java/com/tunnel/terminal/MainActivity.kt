@@ -34,11 +34,13 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.input.key.*
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
@@ -142,11 +144,19 @@ class MainActivity : ComponentActivity() {
     private var renameTabId by mutableStateOf<Int?>(null)
     private var renameTabDraft by mutableStateOf("")
     /**
-     * Wave-11/12: Transparent IME field state (Activity-scoped so paste/history/ExtraKeys can sync).
-     * [imeFieldText] = BasicTextField value; [imeFieldLast] = last applied IME string for deltas.
+     * Wave-11/12/29: Transparent IME field (Activity-scoped for paste/history/ExtraKeys).
+     *
+     * Wave-29: Use [TextFieldValue] with selection always pinned to **end**.
+     * String-only BasicTextField resets caret to 0 after shell-echo recompose,
+     * so the next keystroke inserts *before* previously typed characters.
+     * [imeFieldLast] = last accepted text for deltas; [imeLineCursorAtEnd] tracks
+     * whether PTY/readline cursor is at EOL (false after Home/←/Ctrl+A).
      */
-    private var imeFieldText by mutableStateOf("")
+    private var imeFieldValue by mutableStateOf(TextFieldValue(""))
     private var imeFieldLast by mutableStateOf("")
+    /** Convenience text view of the IME field (always == imeFieldValue.text). */
+    private val imeFieldText: String get() = imeFieldValue.text
+    private var imeLineCursorAtEnd: Boolean = true
     /** Wave-15: ExtraKeys expanded (symbols + F-row). Default compact for more terminal height. */
     private var extraKeysExpanded by mutableStateOf(false)
     /**
@@ -1648,15 +1658,32 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    /** Wave-12: Set both IME field trackers (and keep them equal). */
+    /** Wave-12/29: Pin IME text + caret at end (never leave selection at 0). */
     private fun syncImeLine(text: String) {
-        imeFieldText = text
         imeFieldLast = text
+        imeFieldValue = TextFieldValue(
+            text = text,
+            selection = TextRange(text.length)
+        )
+        imeLineCursorAtEnd = true
     }
 
     private fun clearImeLine() {
-        imeFieldText = ""
         imeFieldLast = ""
+        imeFieldValue = TextFieldValue(
+            text = "",
+            selection = TextRange(0)
+        )
+        imeLineCursorAtEnd = true
+    }
+
+    /** Snap caret display to end without changing accepted last (after noise ignore). */
+    private fun pinImeCaretToEnd() {
+        val t = imeFieldValue.text
+        val end = TextRange(t.length)
+        if (imeFieldValue.selection != end) {
+            imeFieldValue = imeFieldValue.copy(selection = end)
+        }
     }
 
     /** Wave-14: Open http(s) URL in external browser. */
@@ -2426,8 +2453,16 @@ class MainActivity : ComponentActivity() {
                         syncImeLine(next)
                         return
                     }
-                    "^A" -> { activeExecutor.writeRaw(1.toChar().toString()); return }
-                    "^E" -> { activeExecutor.writeRaw(5.toChar().toString()); return }
+                    "^A" -> {
+                        activeExecutor.writeRaw(1.toChar().toString())
+                        imeLineCursorAtEnd = false
+                        return
+                    }
+                    "^E" -> {
+                        activeExecutor.writeRaw(5.toChar().toString())
+                        imeLineCursorAtEnd = true
+                        return
+                    }
                 }
                 val emu = activeExecutor.emulator
                 val ansiCode: String = when (key) {
@@ -2435,11 +2470,24 @@ class MainActivity : ComponentActivity() {
                     "TAB" -> "\t"
                     "↑" -> emu.cursorKey('A')
                     "↓" -> emu.cursorKey('B')
-                    "→" -> emu.cursorKey('C')
-                    "←" -> emu.cursorKey('D')
+                    "→" -> {
+                        /* Moving right may still not be at EOL — only End/^E sets true. */
+                        imeLineCursorAtEnd = false
+                        emu.cursorKey('C')
+                    }
+                    "←" -> {
+                        imeLineCursorAtEnd = false
+                        emu.cursorKey('D')
+                    }
                     /* Wave-14/20: xterm application keypad HOME/END (readline / bash). */
-                    "HOME" -> "\u001B[1~"
-                    "END" -> "\u001B[4~"
+                    "HOME" -> {
+                        imeLineCursorAtEnd = false
+                        "\u001B[1~"
+                    }
+                    "END" -> {
+                        imeLineCursorAtEnd = true
+                        "\u001B[4~"
+                    }
                     "PGUP" -> "\u001B[5~"
                     "PGDN" -> "\u001B[6~"
                     "BKSP" -> {
@@ -2910,22 +2958,20 @@ class MainActivity : ComponentActivity() {
             }
 
             /**
-             * Wave-3 + Wave-11 + Wave-18 + Wave-27: Unified soft-IME handler.
+             * Wave-3 + Wave-11 + Wave-18 + Wave-27 + Wave-29: Unified soft-IME handler.
              *
-             * Wave-11: Keep controlled [imeFieldText] in sync (not stuck at "") so
-             * recompose after shell echo does not force value="" → mass backspace.
-             * Wave-18: Ignore full wipe to empty for multi-char buffers.
-             * Wave-27: LCP deltas + ignore multi-char pure shrink in one event
-             * ("hello"→"hel") which made typed text disappear partially; disable
-             * autocorrect on the field (see [terminalImeKeyboardOptions]).
+             * Wave-29: Soft IME always edits the line as end-of-line text. Before any
+             * mutation we snap PTY to EOL (Ctrl+E) and, if trackers desync or the user
+             * moved the cursor with Home/←, rewrite the whole line so new keys never
+             * insert *before* previously typed characters.
              */
-            fun applyImeValueChange(
-                newValue: String,
-                lastInputValue: String,
-                setLast: (String) -> Unit,
-                setHidden: (String) -> Unit
-            ) {
-                if (newValue == lastInputValue) return
+            fun applyImeValueChange(newValue: String) {
+                val lastInputValue = imeFieldLast
+                if (newValue == lastInputValue) {
+                    /* Still pin caret — recompose may have moved selection to 0. */
+                    pinImeCaretToEnd()
+                    return
+                }
 
                 fun sendBackspace() {
                     if (activeExecutor.currentCommandBuffer.isNotEmpty()) {
@@ -2935,45 +2981,75 @@ class MainActivity : ComponentActivity() {
                     activeExecutor.writeRaw("\u007F")
                 }
 
-                fun processChar(ch: Char) {
-                    when (ch) {
-                        '\n', '\r' -> {
-                            if (!enterHandledByKeyEvent) {
-                                processInput(activeExecutor.currentCommandBuffer + "\n")
-                                activeExecutor.currentCommandBuffer = ""
-                            }
-                            enterHandledByKeyEvent = false
-                            setHidden("")
-                            setLast("")
-                        }
-                        '\u007F', '\b' -> sendBackspace()
-                        else -> {
-                            val translated = handleChar(ch)
-                            activeExecutor.currentCommandBuffer += translated
-                            activeExecutor.writeRaw(translated)
-                        }
+                fun typePrintable(ch: Char) {
+                    val translated = handleChar(ch)
+                    activeExecutor.currentCommandBuffer += translated
+                    activeExecutor.writeRaw(translated)
+                }
+
+                fun clearShellLineFromTracker() {
+                    /* Ctrl+E (end) then backspace tracker length — works with readline
+                     * and is safer than Ctrl+U alone on plain sh. */
+                    activeExecutor.writeRaw(5.toChar().toString())
+                    val n = activeExecutor.currentCommandBuffer.length
+                    repeat(n) { activeExecutor.writeRaw("\u007F") }
+                    activeExecutor.currentCommandBuffer = ""
+                }
+
+                fun rewriteShellLine(desired: String) {
+                    clearShellLineFromTracker()
+                    if (desired.isNotEmpty()) {
+                        activeExecutor.writeRaw(desired)
                     }
+                    activeExecutor.currentCommandBuffer = desired
+                    imeLineCursorAtEnd = true
                 }
 
-                fun syncField(value: String) {
-                    setLast(value)
-                    setHidden(value)
-                }
-
-                val plan = TerminalImeDelta.plan(lastInputValue, newValue)
+                val plan = TerminalImeDelta.plan(
+                    last = lastInputValue,
+                    newValue = newValue,
+                    commandBuffer = activeExecutor.currentCommandBuffer,
+                    cursorLikelyAtEnd = imeLineCursorAtEnd
+                )
                 if (plan.ignored) {
-                    /* Restore controlled field — IME tried to wipe/shrink spuriously. */
-                    syncField(plan.syncTo)
+                    syncImeLine(plan.syncTo)
                     return
                 }
 
+                if (plan.containsEnter) {
+                    val line = newValue.replace("\r", "").replace("\n", "")
+                    if (plan.fullRewrite || activeExecutor.currentCommandBuffer != line) {
+                        rewriteShellLine(line)
+                    } else {
+                        /* Ensure EOL then rely on buffer already matching. */
+                        activeExecutor.writeRaw(5.toChar().toString())
+                        imeLineCursorAtEnd = true
+                    }
+                    if (!enterHandledByKeyEvent) {
+                        processInput(activeExecutor.currentCommandBuffer + "\n")
+                        activeExecutor.currentCommandBuffer = ""
+                    }
+                    enterHandledByKeyEvent = false
+                    clearImeLine()
+                    return
+                }
+
+                if (plan.fullRewrite) {
+                    rewriteShellLine(plan.syncTo)
+                    syncImeLine(plan.syncTo)
+                    return
+                }
+
+                /* Normal LCP delta — only valid when cursor at EOL and trackers match. */
+                activeExecutor.writeRaw(5.toChar().toString()) /* snap EOL */
+                imeLineCursorAtEnd = true
                 repeat(plan.backspaces) { sendBackspace() }
                 for (ch in plan.typeChars) {
-                    processChar(ch)
+                    if (ch == '\n' || ch == '\r') continue
+                    if (ch == '\u007F' || ch == '\b') sendBackspace()
+                    else typePrintable(ch)
                 }
-                if (!plan.containsEnter) {
-                    syncField(plan.syncTo)
-                }
+                syncImeLine(plan.syncTo)
             }
 
             /* Wave-27: ASCII, no autocorrect/suggestions — fewer IME replace/shrink glitches.
@@ -3118,9 +3194,7 @@ class MainActivity : ComponentActivity() {
                         enterHandledByKeyEvent = true
                         processInput(activeExecutor.currentCommandBuffer + "\n")
                         activeExecutor.currentCommandBuffer = ""
-                        /* Wave-11: Clear both controlled field and IME tracker. */
-                        imeFieldText = ""
-                        imeFieldLast = ""
+                        clearImeLine()
                         return true
                     }
                     Key.Backspace -> {
@@ -3128,11 +3202,8 @@ class MainActivity : ComponentActivity() {
                             activeExecutor.currentCommandBuffer = activeExecutor.currentCommandBuffer.dropLast(1)
                         }
                         activeExecutor.writeRaw("\u007F")
-                        /* Wave-11: Keep IME field tracker aligned with shell line buffer. */
-                        if (imeFieldText.isNotEmpty()) {
-                            imeFieldText = imeFieldText.dropLast(1)
-                            imeFieldLast = imeFieldText
-                        }
+                        /* Wave-11/29: Keep IME field + caret at end aligned with buffer. */
+                        syncImeLine(activeExecutor.currentCommandBuffer)
                         return true
                     }
                     Key.Tab -> { activeExecutor.writeRaw("\t"); return true }
@@ -3143,15 +3214,23 @@ class MainActivity : ComponentActivity() {
                         activeExecutor.writeRaw(activeExecutor.emulator.cursorKey('B')); return true
                     }
                     Key.DirectionRight -> {
+                        imeLineCursorAtEnd = false
                         activeExecutor.writeRaw(activeExecutor.emulator.cursorKey('C')); return true
                     }
                     Key.DirectionLeft -> {
+                        imeLineCursorAtEnd = false
                         activeExecutor.writeRaw(activeExecutor.emulator.cursorKey('D')); return true
                     }
                     Key.Escape -> { activeExecutor.writeRaw("\u001B"); return true }
                     /* Wave-20: Match ExtraKeys HOME/END (xterm CSI) for bash/readline. */
-                    Key.MoveHome -> { activeExecutor.writeRaw("\u001B[1~"); return true }
-                    Key.MoveEnd -> { activeExecutor.writeRaw("\u001B[4~"); return true }
+                    Key.MoveHome -> {
+                        imeLineCursorAtEnd = false
+                        activeExecutor.writeRaw("\u001B[1~"); return true
+                    }
+                    Key.MoveEnd -> {
+                        imeLineCursorAtEnd = true
+                        activeExecutor.writeRaw("\u001B[4~"); return true
+                    }
                     Key.PageUp -> { activeExecutor.writeRaw("\u001B[5~"); return true }
                     Key.PageDown -> { activeExecutor.writeRaw("\u001B[6~"); return true }
                     Key.Delete -> { activeExecutor.writeRaw("\u001B[3~"); return true }
@@ -3270,13 +3349,11 @@ class MainActivity : ComponentActivity() {
                                     try { focusRequester.requestFocus(); if (!hasPhysicalKeyboard) keyboardController?.show() } catch (_: Exception) {}
                                 }
                                 BasicTextField(
-                                    value = imeFieldText,
-                                    onValueChange = { newValue ->
-                                        applyImeValueChange(
-                                            newValue, imeFieldLast,
-                                            setLast = { imeFieldLast = it },
-                                            setHidden = { imeFieldText = it }
-                                        )
+                                    value = imeFieldValue,
+                                    onValueChange = { tv ->
+                                        applyImeValueChange(tv.text)
+                                        /* Re-pin caret to end even if IME tried selection at 0. */
+                                        pinImeCaretToEnd()
                                     },
                                     textStyle = TextStyle(color = Color.Transparent),
                                     cursorBrush = SolidColor(Color.Transparent),
@@ -3340,13 +3417,10 @@ class MainActivity : ComponentActivity() {
                                 try { focusRequester.requestFocus(); if (!hasPhysicalKeyboard) keyboardController?.show() } catch (_: Exception) {}
                             }
                             BasicTextField(
-                                value = imeFieldText,
-                                onValueChange = { newValue ->
-                                    applyImeValueChange(
-                                        newValue, imeFieldLast,
-                                        setLast = { imeFieldLast = it },
-                                        setHidden = { imeFieldText = it }
-                                    )
+                                value = imeFieldValue,
+                                onValueChange = { tv ->
+                                    applyImeValueChange(tv.text)
+                                    pinImeCaretToEnd()
                                 },
                                 textStyle = TextStyle(color = Color.Transparent),
                                 cursorBrush = SolidColor(Color.Transparent),
@@ -3401,13 +3475,10 @@ class MainActivity : ComponentActivity() {
                         }
 
                         BasicTextField(
-                            value = imeFieldText,
-                            onValueChange = { newValue ->
-                                applyImeValueChange(
-                                    newValue, imeFieldLast,
-                                    setLast = { imeFieldLast = it },
-                                    setHidden = { imeFieldText = it }
-                                )
+                            value = imeFieldValue,
+                            onValueChange = { tv ->
+                                applyImeValueChange(tv.text)
+                                pinImeCaretToEnd()
                             },
                             textStyle = TextStyle(color = Color.Transparent),
                             cursorBrush = SolidColor(Color.Transparent),
@@ -3468,8 +3539,7 @@ class MainActivity : ComponentActivity() {
                                 activeExecutor.currentCommandBuffer = suggestion
                                 activeExecutor.writeRaw(suggestion)
                                 /* Wave-11: Keep transparent IME field aligned after autocomplete. */
-                                imeFieldText = suggestion
-                                imeFieldLast = suggestion
+                                syncImeLine(suggestion)
                             }
                         )
                     }

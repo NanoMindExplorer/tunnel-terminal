@@ -17,10 +17,12 @@ class ImeDeltaTest {
     )
 
     private fun plan(last: String, newValue: String): Delta {
-        val p = TerminalImeDelta.plan(last, newValue)
+        val p = TerminalImeDelta.plan(last, newValue, commandBuffer = last, cursorLikelyAtEnd = true)
         if (p.ignored) {
-            /* Wave-18/27: spurious wipe/shrink — no PTY ops, restore field. */
             return Delta("", 0, p.syncTo)
+        }
+        if (p.fullRewrite) {
+            return Delta(send = p.syncTo, backspaces = 0, syncTo = if (p.containsEnter) null else p.syncTo)
         }
         return Delta(
             send = p.typeChars,
