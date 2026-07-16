@@ -23,9 +23,9 @@ android {
         // Phase 52: Agent Mode audit fixes (Bug #1 approval dialog, Bug #2 success detection, Bug #3 Stop cancel)
         // Phase 58: TaskPlanManager (plan/act/observe/verify) + SFTP for SSH file I/O
         // Phase 59: Native API tool-calling (B-1) + AGP/Kotlin upgrade (C-2)
-        /* Wave 28: CI compile fix — Kotlin has no 0o octal literals (Ubuntu extract). */
-        versionCode = 64
-        versionName = "8.4.3"
+        /* Wave 29: IME caret pin + EOL rewrite — chars no longer insert before prior text. */
+        versionCode = 65
+        versionName = "8.4.4"
 
         /* Phase 40 fix (M10): Restrict ke arm64-v8a saja — proot binary di assets
          * hanya arm64. Tanpa abiFilters, APK universal akan crash di device x86_64

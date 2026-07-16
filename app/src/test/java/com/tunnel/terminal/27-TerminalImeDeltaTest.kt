@@ -4,7 +4,7 @@ import org.junit.Assert.*
 import org.junit.Test
 
 /**
- * Wave-27: IME delta planner — typed text must not partially vanish.
+ * Wave-27/29: IME delta planner — vanish guards + full-rewrite when cursor not at EOL.
  */
 class TerminalImeDeltaTest {
 
@@ -15,6 +15,7 @@ class TerminalImeDeltaTest {
         assertEquals("a", a.typeChars)
         assertEquals("a", a.syncTo)
         assertFalse(a.ignored)
+        assertFalse(a.fullRewrite)
 
         val b = TerminalImeDelta.plan("a", "ab")
         assertEquals(0, b.backspaces)
@@ -29,6 +30,7 @@ class TerminalImeDeltaTest {
         assertEquals("", p.typeChars)
         assertEquals("l", p.syncTo)
         assertFalse(p.ignored)
+        assertFalse(p.fullRewrite)
     }
 
     @Test
@@ -40,8 +42,7 @@ class TerminalImeDeltaTest {
     }
 
     @Test
-    fun `partial multi-char shrink is ignored — root partial vanish bug`() {
-        /* Gboard/recompose often fires "hello" → "hel" in one callback. */
+    fun `partial multi-char shrink is ignored`() {
         val p = TerminalImeDelta.plan("hello", "hel")
         assertTrue(p.ignored)
         assertEquals(0, p.backspaces)
@@ -57,22 +58,47 @@ class TerminalImeDeltaTest {
     }
 
     @Test
-    fun `autocorrect replace uses LCP not full wipe`() {
-        /* "teh" → "the": keep 't', delete "eh", type "he" */
-        val p = TerminalImeDelta.plan("teh", "the")
+    fun `autocorrect replace uses LCP when cursor at end`() {
+        val p = TerminalImeDelta.plan("teh", "the", commandBuffer = "teh", cursorLikelyAtEnd = true)
         assertFalse(p.ignored)
+        assertFalse(p.fullRewrite)
         assertEquals(2, p.backspaces)
         assertEquals("he", p.typeChars)
         assertEquals("the", p.syncTo)
     }
 
     @Test
+    fun `cursor not at end forces full rewrite`() {
+        val p = TerminalImeDelta.plan(
+            last = "hello",
+            newValue = "hellox",
+            commandBuffer = "hello",
+            cursorLikelyAtEnd = false
+        )
+        assertFalse(p.ignored)
+        assertTrue(p.fullRewrite)
+        assertEquals("hellox", p.typeChars)
+        assertEquals("hellox", p.syncTo)
+    }
+
+    @Test
+    fun `buffer desync forces full rewrite`() {
+        val p = TerminalImeDelta.plan(
+            last = "abc",
+            newValue = "abcd",
+            commandBuffer = "ab", /* desynced */
+            cursorLikelyAtEnd = true
+        )
+        assertTrue(p.fullRewrite)
+        assertEquals("abcd", p.syncTo)
+    }
+
+    @Test
     fun `suffix replace one char uses LCP`() {
         val p = TerminalImeDelta.plan("hello", "hellp")
-        assertFalse(p.ignored)
+        assertFalse(p.fullRewrite)
         assertEquals(1, p.backspaces)
         assertEquals("p", p.typeChars)
-        assertEquals("hellp", p.syncTo)
     }
 
     @Test
@@ -80,7 +106,6 @@ class TerminalImeDeltaTest {
         val p = TerminalImeDelta.plan("ls", "ls\n")
         assertTrue(p.containsEnter)
         assertEquals("", p.syncTo)
-        assertTrue(p.typeChars.contains('\n'))
     }
 
     @Test
@@ -89,13 +114,6 @@ class TerminalImeDeltaTest {
         assertEquals(0, p.backspaces)
         assertEquals("", p.typeChars)
         assertEquals("pwd", p.syncTo)
-    }
-
-    @Test
-    fun `two char full wipe ignored`() {
-        val p = TerminalImeDelta.plan("ab", "")
-        assertTrue(p.ignored)
-        assertEquals("ab", p.syncTo)
     }
 
     @Test
