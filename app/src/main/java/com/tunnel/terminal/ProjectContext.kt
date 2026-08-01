@@ -274,14 +274,18 @@ class ProjectContext(private val context: Context) {
                 // Level 2 untuk direktori
                 if (f.isDirectory && entryCount < MAX_FILE_TREE_ENTRIES) {
                     try {
-                        val subFiles = f.listFiles()?.sortedBy { it.name }?.take(20) ?: emptyList()
+                        /* v9.3.0 fix (H-12): Cache listFiles() — sebelumnya dipanggil
+                         * 2x per direktori (line 277 + 284). Untuk node_modules dengan
+                         * 1000+ files, ini adalah 1000+ syscall tambahan. */
+                        val allSubFiles = f.listFiles()?.sortedBy { it.name } ?: emptyList()
+                        val subFiles = allSubFiles.take(20)
                         for (sf in subFiles) {
                             if (entryCount >= MAX_FILE_TREE_ENTRIES) break
                             val sPrefix = if (sf.isDirectory) "📁" else "📄"
                             sb.append("    $sPrefix ${sf.name}\n")
                             entryCount++
                         }
-                        val total = f.listFiles()?.size ?: 0
+                        val total = allSubFiles.size
                         if (total > 20) {
                             sb.append("    ... (+${total - 20} more)\n")
                         }

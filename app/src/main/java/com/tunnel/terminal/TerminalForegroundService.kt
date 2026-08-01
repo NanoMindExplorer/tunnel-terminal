@@ -70,13 +70,17 @@ class TerminalForegroundService : Service() {
         )
 
         /* v8.6.0 fix (M9): Per-session notification text.
-         * 1 session: "1 session: local"
-         * 3 sessions: "3 sessions: local, SSH user@host, Ubuntu" */
-        val contentText = if (sessionLabels.isNotEmpty()) {
-            if (sessionLabels.size == 1) {
-                "1 session: ${sessionLabels[0]}"
+         * v9.3.0 fix (H-8): Use sessionCount (actual) not sessionLabels.size (capped).
+         * Show "+N more" when labels truncated. */
+        val contentText = if (sessionCount > 0) {
+            val shown = sessionLabels.joinToString(", ")
+            if (sessionCount == 1) {
+                "1 session: $shown"
+            } else if (sessionLabels.size < sessionCount) {
+                val extra = sessionCount - sessionLabels.size
+                "$sessionCount sessions: $shown, +$extra more"
             } else {
-                "${sessionLabels.size} sessions: ${sessionLabels.joinToString(", ")}"
+                "$sessionCount sessions: $shown"
             }
         } else {
             "Sesi terminal berjalan di latar belakang"

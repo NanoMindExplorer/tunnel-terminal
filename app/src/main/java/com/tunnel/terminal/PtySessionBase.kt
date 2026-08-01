@@ -150,10 +150,13 @@ abstract class PtySessionBase(
                 emulator.process(text)
                 val outputStr = synchronized(outputLock) {
                     outputBuffer.append(text)
+                    /* v9.3.0 fix (H-11): Use delete() in-place instead of new StringBuilder.
+                     * Sebelumnya: outputBuffer = StringBuilder(outputBuffer.substring(...))
+                     * allocates new object + copies 16KB each overflow. O(n²) for heavy output.
+                     * Sekarang: delete(0, excess) mutates in-place — no allocation. */
                     if (outputBuffer.length > AnsiUtils.OUTPUT_RING_CHARS) {
-                        outputBuffer = StringBuilder(
-                            outputBuffer.substring(outputBuffer.length - AnsiUtils.OUTPUT_RING_CHARS)
-                        )
+                        val excess = outputBuffer.length - AnsiUtils.OUTPUT_RING_CHARS
+                        outputBuffer.delete(0, excess)
                     }
                     outputBuffer.toString()
                 }

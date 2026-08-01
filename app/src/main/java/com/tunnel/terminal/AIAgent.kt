@@ -640,7 +640,12 @@ class AIAgent(
              * Phase 50 fix (B-5): Sertakan projectContext (git state, manifests, file tree)
              * supaya AI tahu struktur project tanpa user perlu @mention manual.
              * Append terminal context as additional system message if present. */
-            val cleanContext = stripAnsi(terminalContext).take(1500)
+            /* v9.3.0 fix (H-17): takeLast(4000) instead of take(1500).
+             * Sebelumnya: take(1500) keeps HEAD (oldest), drops TAIL (newest).
+             * Tapi terminal context paling penting adalah output terbaru (error
+             * message di akhir, bukan awal). Sekarang: takeLast(4000) untuk
+             * keep newest output + increase dari 1500→4000 chars. */
+            val cleanContext = stripAnsi(terminalContext).takeLast(4000)
             if (cleanContext.isNotBlank() || environmentDescription.isNotBlank() ||
                 projectContext.isNotBlank() || taskPlan.isNotBlank() || skillsContext.isNotBlank()
             ) {

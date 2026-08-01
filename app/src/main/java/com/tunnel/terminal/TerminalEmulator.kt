@@ -532,11 +532,15 @@ class TerminalEmulator(private val themeHolder: ThemeHolder = ThemeHolder()) {
         }
 
         if (pending.isNotEmpty()) {
-            /* Batasi pending buffer agar tidak bengkak (max 64 bytes). */
-            if (pending.length <= 64) {
+            /* v9.3.0 fix (H-16): Batasi pending buffer (max 256 bytes).
+             * Sebelumnya: 64 bytes — terlalu kecil untuk OSC sequences yang valid
+             * (OSC 8 hyperlinks, OSC 52 clipboard, OSC 4 color queries).
+             * 256 cukup untuk semua standar OSC + beberapa params. */
+            if (pending.length <= 256) {
                 pendingBuffer.append(pending)
+            } else {
+                /* Jika > 256 bytes, kemungkinan bukan escape valid, buang saja. */
             }
-            /* Jika > 64 bytes, kemungkinan bukan escape valid, buang saja. */
         }
 
         /* Process yang pasti complete. */

@@ -474,7 +474,19 @@ class SshShellExecutor(
             } else {
                 "$current/$part"
             }
-            try { sftp.mkdir(current) } catch (_: Exception) { /* already exists */ }
+            /* v9.3.0 fix (H-7): Don't swallow all exceptions silently.
+             * SSH_FX_FAILURE usually means "already exists" — OK to continue.
+             * Other exceptions (permission denied, auth failure) should be logged. */
+            try {
+                sftp.mkdir(current)
+            } catch (e: com.jcraft.jsch.SftpException) {
+                /* SSH_FX_FAILURE = 4 = "already exists" or similar — expected, skip. */
+                if (e.id != com.jcraft.jsch.SftpException.SSH_FX_FAILURE) {
+                    android.util.Log.w("SshShellExecutor", "mkdir '$current' failed: ${e.message}")
+                }
+            } catch (e: Exception) {
+                android.util.Log.w("SshShellExecutor", "mkdir '$current' error: ${e.message}")
+            }
         }
     }
 

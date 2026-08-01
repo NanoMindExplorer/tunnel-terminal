@@ -1063,7 +1063,9 @@ class MainActivity : ComponentActivity() {
          * Destroy semua executors dulu, baru clear list. */
         shellExecutors.toList().forEach { it.destroy() }
         shellExecutors.clear()
-        activeExecutorId = 0
+        /* v9.3.0 fix (H-14): Don't set activeExecutorId=0 (invalid state).
+         * createNewTab() below will set it to the first valid session id. */
+        activeExecutorId = -1
         /* Buat tab sesuai session. */
         for (i in 0 until session.tabCount) {
             createNewTab()
@@ -3143,6 +3145,24 @@ class MainActivity : ComponentActivity() {
                 /* Ctrl+key combos (priority). */
                 if (ctrl) {
                     when (key) {
+                        /* v9.3.0 fix (E.2.2): Ctrl+Tab = next tab, Ctrl+Shift+Tab = prev tab. */
+                        Key.Tab -> {
+                            if (shellExecutors.isNotEmpty()) {
+                                val currentIdx = shellExecutors.indexOfFirst { it.id == activeExecutorId }
+                                val nextIdx = if (shift) {
+                                    (currentIdx - 1 + shellExecutors.size) % shellExecutors.size
+                                } else {
+                                    (currentIdx + 1) % shellExecutors.size
+                                }
+                                activeExecutorId = shellExecutors[nextIdx].id
+                            }
+                            return true
+                        }
+                        /* v9.3.0 fix (E.2.2): Ctrl+N = new tab. */
+                        Key.N -> {
+                            createNewTab()
+                            return true
+                        }
                         Key.C -> {
                             activeExecutor.writeRaw(3.toChar().toString())
                             activeExecutor.currentCommandBuffer = ""

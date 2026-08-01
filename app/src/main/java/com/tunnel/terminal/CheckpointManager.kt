@@ -47,7 +47,10 @@ class CheckpointManager(private val context: Context) {
                             sessionDir.deleteRecursively()
                             Log.i(TAG, "GC: old checkpoint session dir deleted: ${sessionDir.name}")
                         }
-                    } catch (_: Exception) {}
+                    } catch (e: Exception) {
+                        /* v9.3.0 fix (H-15): Log GC failures instead of silent swallow. */
+                        Log.w(TAG, "GC: failed to delete session dir ${sessionDir.name}: ${e.message}")
+                    }
                 }
             }
         } catch (_: Exception) {}

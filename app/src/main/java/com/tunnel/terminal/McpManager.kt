@@ -5,6 +5,8 @@ import android.util.Log
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
@@ -164,25 +166,31 @@ class McpManager(private val context: Context) {
      * Returns combined list of all tools.
      */
     suspend fun discoverAllTools(): List<McpTool> = withContext(Dispatchers.IO) {
-        val allTools = mutableListOf<McpTool>()
-        for (server in _servers.filter { it.enabled }) {
-            try {
-                val pingErr = pingServer(server)
-                if (pingErr != null) {
-                    Log.w(tag, "MCP ${server.name} ping failed: $pingErr")
+        /* v9.3.0 fix (H-4): Parallel discovery — semua server di-discover
+         * concurrently via async/awaitAll. Sebelumnya: sequential loop,
+         * 5 servers × 20s worst case = 100s. Sekarang: max 20s. */
+        val enabledServers = _servers.filter { it.enabled }
+        val results = enabledServers.map { server ->
+            async {
+                try {
+                    val pingErr = pingServer(server)
+                    if (pingErr != null) {
+                        Log.w(tag, "MCP ${server.name} ping failed: $pingErr")
+                        _discoveredTools[server.name] = emptyList()
+                        return@async emptyList<McpTool>()
+                    }
+                    val tools = discoverTools(server)
+                    _discoveredTools[server.name] = tools
+                    Log.i(tag, "MCP ${server.name}: discovered ${tools.size} tools")
+                    tools
+                } catch (e: Exception) {
+                    Log.w(tag, "Failed to discover tools from ${server.name}: ${e.message}")
                     _discoveredTools[server.name] = emptyList()
-                    continue
+                    emptyList()
                 }
-                val tools = discoverTools(server)
-                _discoveredTools[server.name] = tools
-                allTools.addAll(tools)
-                Log.i(tag, "MCP ${server.name}: discovered ${tools.size} tools")
-            } catch (e: Exception) {
-                Log.w(tag, "Failed to discover tools from ${server.name}: ${e.message}")
-                _discoveredTools[server.name] = emptyList()
             }
-        }
-        allTools
+        }.awaitAll()
+        results.flatten()
     }
 
     /** Discover tools dari satu MCP server via GET /tools. */
