@@ -1,6 +1,6 @@
 # Tunnel Terminal — Panduan Penggunaan Lengkap
 
-**Versi:** 8.5.0 (Wave 31 — AI Skills + side panel + Ubuntu AI + storage) | **Platform:** Android 7.0+ (API 24+) | **ABI:** arm64-v8a | **Kotlin:** 2.0.21 | **AGP:** 8.5.2 | **versionCode:** 61
+**Versi:** 9.3.0 (Phase 6 — Performance & UX) | **Platform:** Android 7.0+ (API 24+) | **ABI:** arm64-v8a | **Kotlin:** 2.0.21 | **AGP:** 8.5.2 | **compileSdk:** 35 | **versionCode:** 73
 
 ---
 

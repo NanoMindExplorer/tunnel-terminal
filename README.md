@@ -5,10 +5,11 @@
 ![Architecture](https://img.shields.io/badge/Architecture-NDK%20%2B%20Jetpack%20Compose-purple)
 ![AI](https://img.shields.io/badge/AI-Skills%20%2B%20Copilot%20%2B%20Agent%20%2B%20MCP-cyan)
 ![Linux](https://img.shields.io/badge/Linux-Ubuntu%2024.04%20via%20proot-orange)
-![Version](https://img.shields.io/badge/version-8.5.0-blue)
+![Version](https://img.shields.io/badge/version-9.3.0-blue)
 ![Kotlin](https://img.shields.io/badge/Kotlin-2.0.21-7F52FF)
 ![AGP](https://img.shields.io/badge/AGP-8.5.2-orange)
-![Tests](https://img.shields.io/badge/tests-22%20files-green)
+![Tests](https://img.shields.io/badge/tests-27%20files-green)
+![SDK](https://img.shields.io/badge/compileSdk-35-green)
 ![Stability](https://img.shields.io/badge/stability-production-green)
 
 ## Quick Links
@@ -42,7 +43,7 @@ Terminal Android konvensional hanya menampilkan teks dan mengeksekusi command. T
 - **EncryptedSharedPreferences** (Phase 41) — API key AES256-GCM encrypted at rest
 - **Wave 10-25 UX + AI polish** — bookmarks, safe paste, ExtraKeys, font zoom, AI side panel, storage SAF, Ubuntu download, AI Skills CRUD
 - **AI Skills** — custom instruction packs (scope always/chat/agent/local/ubuntu/ssh), inject ke semua jalur AI
-- **22 test files** — emulator, tools, IME, layout, selection, Ubuntu paths, skills, storage commands
+- **27 test files** — emulator, tools, IME, layout, selection, Ubuntu paths, skills, storage, NetworkPolicy, AiMetrics, MarkerExecutor, SyntaxHighlighter, ContextManager
 
 ## Fitur Utama (Ringkas)
 
@@ -83,7 +84,7 @@ Terminal Android konvensional hanya menampilkan teks dan mengeksekusi command. T
 | 33 | **Project Context** (Phase 50) | **git branch + 10 manifest types + file tree auto-injected ke AI prompt** |
 | 34 | **Scrollback buffer** (Phase 49) | **2000-line ring buffer, LazyColumn virtualized (Wave 15), Unicode code-points** |
 | 35 | **EncryptedSharedPreferences** (Phase 41) | **API key + SSH creds + MCP keys AES256-GCM encrypted at rest** |
-| 36 | **Automated tests** (Phase 51+) | **22 test files (03-27): emulator, tools, IME, selection, Ubuntu, skills** |
+| 36 | **Automated tests** (Phase 51+) | **27 test files (03-32): emulator, tools, IME, selection, Ubuntu, skills, NetworkPolicy, MarkerExecutor, SyntaxHighlighter, ContextManager** |
 | 37 | **Wave 10-25 UX + AI** | **Bookmarks, ExtraKeys, side panel AI, SAF storage, Ubuntu download, Skills** |
 | 38 | **Anthropic Native API** (Wave 5) | **Claude via Messages API (`apiStyle: anthropic`)** |
 | 39 | **AI Skills** (Wave 25) | **CRUD skill, scope, keyword trigger, inject chat/agent/all sessions** |
@@ -314,10 +315,33 @@ Tanpa binary ini, app tetap jalan normal untuk semua fitur lain (local shell, SS
 | **Wave 23** | **AI/Agent path integration with Ubuntu proot (v8.3.2)** |
 | **Wave 24** | **Paste di chat AI & Agent + terminal snippet (v8.3.3)** |
 | **Wave 25** | **AI Skills system — CRUD + inject all AI paths (v8.5.0)** |
+| **v8.5.0** | **Stabilization — NetworkPolicy, SSH CompletableDeferred, Ubuntu timeout, CI test workflow** |
+| **v8.6.0** | **Performance & UX — MarkerExecutor adaptive delay, git status provider, ScreenDirtyThrottle, AnsiUtils DRY, compileSdk 35, AI thinking indicator, split pane resize** |
+| **v9.0.0** | **Architecture Refactor — TerminalCell + CharDisplayWidth extracted, AiMetrics persistence, NetworkPolicy + AiMetrics tests** |
+| **v9.1.0** | **Critical Fixes — SSH timeout 60s, checkpoint hash, delay() in suspend, ANSI regex consolidation, broadened risk patterns, dead code cleanup** |
+| **v9.2.0** | **Architecture + Tests — PermissionManager + PermissionDialog extracted, MarkerExecutor + SyntaxHighlighter + ContextManager tests** |
+| **v9.3.0** | **Performance & UX — MCP parallel discovery, StringBuilder in-place, listFiles cache, Ctrl+Tab/Ctrl+N, pendingBuffer 256, terminalContext takeLast 4000** |
 
-**Total: 60+ Kotlin sources + NDK + 22 unit test files · version 8.5.0 (versionCode 68)**
+**Total: 68 Kotlin sources + NDK + 27 unit test files · version 9.3.0 (versionCode 73) · 210 commits**
 
-## Release v8.5.0
+## Release v9.3.0 (Latest)
+
+Release **v9.3.0** adalah hasil 6 phase improvement (v8.5.0→v9.3.0) dengan **49 fixes total**:
+
+### v9.3.0 Highlights (Phase 6 — Performance & UX)
+- **MCP parallel discovery** — 5 servers × 20s → max 20s total (async/awaitAll)
+- **StringBuilder in-place** — O(n²)→O(n) untuk heavy terminal output
+- **listFiles cache** — 2×→1× syscall per directory in ProjectContext
+- **Ctrl+Tab / Ctrl+Shift+Tab / Ctrl+N** — keyboard shortcuts untuk tab switching
+- **pendingBuffer 256** — support OSC hyperlinks/clipboard/color queries (was 64)
+- **terminalContext takeLast(4000)** — AI sees newest output (was take(1500) = oldest)
+
+### Previous Releases
+- **v9.2.0** — PermissionManager + PermissionDialog extracted, +3 test files (36 new tests)
+- **v9.1.0** — 5 CRITICAL + 3 HIGH + 2 MEDIUM fixes (SSH timeout, checkpoint hash, risk patterns)
+- **v9.0.0** — TerminalCell + CharDisplayWidth extracted, AiMetrics persistence, +2 test files
+- **v8.6.0** — MarkerExecutor adaptive delay, git status provider, AI thinking indicator, split pane resize
+- **v8.5.0** — NetworkPolicy centralization, SSH CompletableDeferred, CI test workflow, Gradle cache
 
 Release **v8.5.0** menggabungkan Wave 18–25 di atas v8.1.x: storage perangkat, terminal polish, AI side panel, Ubuntu download/AI path, paste chat, dan **AI Skills**.
 
