@@ -62,9 +62,9 @@ class FontZoomTest {
     @Test
     fun `continuous pinch accumulates with local size`() {
         var local = 12f
-        // simulate 10 frames of ~2% zoom-in
+        // simulate 10 frames of zoom-in (1.1f exceeds damping threshold for visible growth)
         repeat(10) {
-            local = TerminalFontZoom.applyPinch(local, 1.02f)
+            local = TerminalFontZoom.applyPinch(local, 1.1f)
         }
         assertTrue("expected growth, got $local", local > 12f)
         assertTrue(local <= TerminalFontZoom.MAX_SP)

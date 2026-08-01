@@ -121,7 +121,7 @@ class TerminalImeDeltaTest {
     @Test
     fun `lcp helper`() {
         assertEquals(0, TerminalImeDelta.longestCommonPrefixLen("", "a"))
-        assertEquals(2, TerminalImeDelta.longestCommonPrefixLen("hello", "help"))
+        assertEquals(3, TerminalImeDelta.longestCommonPrefixLen("hello", "help"))
         assertEquals(5, TerminalImeDelta.longestCommonPrefixLen("hello", "hello"))
     }
 }

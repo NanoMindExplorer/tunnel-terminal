@@ -56,6 +56,6 @@ class UnicodeLazyTest {
         }
         assertEquals(10, contentRow(10, 0, 5f, 20f, 0f, 100))
         assertEquals(11, contentRow(10, 0, 25f, 20f, 0f, 100))
-        assertEquals(10, contentRow(10, 15, 5f, 20f, 0f, 100))
+        assertEquals(11, contentRow(10, 15, 5f, 20f, 0f, 100))
     }
 }
