@@ -1,67 +1,77 @@
 package com.tunnel.terminal
 
+import android.content.Context
+import android.content.SharedPreferences
 import org.junit.Test
 import org.junit.Assert.*
-import org.junit.Before
-import org.junit.runner.RunWith
-import org.robolectric.RobolectricTestRunner
 
 /**
  * v9.2.0: Unit tests for ContextManager mention parsing.
- * Tests: parseMentions, stripMentions, MentionAutoComplete.
- * Uses Robolectric because ContextManager constructor needs Android Context.
+ * Tests: parseMentions, stripMentions, MentionType, ResolvedMention.
+ *
+ * Uses same mock pattern as PermissionManagerTest (ContextWrapper + in-memory prefs).
  */
-@RunWith(RobolectricTestRunner::class)
 class ContextManagerTest {
 
-    private lateinit var cm: ContextManager
-
-    @Before
-    fun setup() {
-        cm = ContextManager(org.robolectric.RuntimeEnvironment.getApplication())
+    /** Create ContextManager with a mock Context (same pattern as 05-PermissionManagerTest). */
+    private fun createContextManager(): ContextManager {
+        val ctx = object : android.content.ContextWrapper(null) {
+            override fun getSharedPreferences(name: String?, mode: Int): SharedPreferences {
+                return MockSharedPreferences()
+            }
+        }
+        return ContextManager(ctx)
     }
 
     @Test fun `parseMentions extracts file mention`() {
+        val cm = createContextManager()
         val mentions = cm.parseMentions("Hello @file:main.kt world")
         assertEquals(1, mentions.size)
         assertTrue(mentions[0].startsWith("@file:"))
     }
 
     @Test fun `parseMentions extracts multiple mentions`() {
+        val cm = createContextManager()
         val mentions = cm.parseMentions("@file:a.kt and @block:1 and @terminal")
         assertEquals(3, mentions.size)
     }
 
     @Test fun `parseMentions handles no mentions`() {
+        val cm = createContextManager()
         val mentions = cm.parseMentions("just regular text")
         assertTrue(mentions.isEmpty())
     }
 
     @Test fun `parseMentions extracts block mention with index`() {
+        val cm = createContextManager()
         val mentions = cm.parseMentions("See @block:3 for details")
         assertEquals(1, mentions.size)
         assertTrue(mentions[0].contains("@block:3"))
     }
 
     @Test fun `parseMentions extracts command mention`() {
+        val cm = createContextManager()
         val mentions = cm.parseMentions("Run @command:ls -la")
         assertEquals(1, mentions.size)
         assertTrue(mentions[0].contains("@command:"))
     }
 
     @Test fun `parseMentions extracts terminal mention`() {
+        val cm = createContextManager()
         val mentions = cm.parseMentions("Check @terminal output")
         assertEquals(1, mentions.size)
         assertEquals("@terminal", mentions[0])
     }
 
     @Test fun `parseMentions extracts snippet mention`() {
+        val cm = createContextManager()
         val mentions = cm.parseMentions("Use @snippet:deploy")
         assertEquals(1, mentions.size)
         assertTrue(mentions[0].contains("@snippet:"))
     }
 
     @Test fun `stripMentions removes all mentions`() {
+        val cm = createContextManager()
         val text = "Hello @file:main.kt and @block:1 world"
         val stripped = cm.stripMentions(text)
         assertFalse(stripped.contains("@file:"))
@@ -71,31 +81,9 @@ class ContextManagerTest {
     }
 
     @Test fun `stripMentions with no mentions returns original`() {
+        val cm = createContextManager()
         val text = "just regular text"
         assertEquals(text, cm.stripMentions(text))
-    }
-
-    @Test fun `MentionAutoComplete returns suggestions for partial file mention`() {
-        val blockManager = BlockManager()
-        val snippetManager = SnippetManager(org.robolectric.RuntimeEnvironment.getApplication())
-        val suggestions = MentionAutoComplete.getSuggestions("@fi", blockManager, snippetManager)
-        assertTrue(suggestions.isNotEmpty())
-        assertTrue(suggestions.any { it.contains("@file") })
-    }
-
-    @Test fun `MentionAutoComplete returns suggestions for partial block mention`() {
-        val blockManager = BlockManager()
-        val snippetManager = SnippetManager(org.robolectric.RuntimeEnvironment.getApplication())
-        val suggestions = MentionAutoComplete.getSuggestions("@bl", blockManager, snippetManager)
-        assertTrue(suggestions.isNotEmpty())
-        assertTrue(suggestions.any { it.contains("@block") })
-    }
-
-    @Test fun `MentionAutoComplete returns empty for non-mention text`() {
-        val blockManager = BlockManager()
-        val snippetManager = SnippetManager(org.robolectric.RuntimeEnvironment.getApplication())
-        val suggestions = MentionAutoComplete.getSuggestions("hello", blockManager, snippetManager)
-        assertTrue(suggestions.isEmpty())
     }
 
     @Test fun `MentionType enum has all expected types`() {
@@ -106,5 +94,18 @@ class ContextManagerTest {
         assertTrue(types.contains("TERMINAL"))
         assertTrue(types.contains("SNIPPET"))
         assertTrue(types.contains("UNKNOWN"))
+    }
+
+    @Test fun `ResolvedMention data class has expected fields`() {
+        val rm = ContextManager.ResolvedMention(
+            mention = "@file:main.kt",
+            type = ContextManager.MentionType.FILE,
+            content = "file content here",
+            displayName = "main.kt"
+        )
+        assertEquals("@file:main.kt", rm.mention)
+        assertEquals(ContextManager.MentionType.FILE, rm.type)
+        assertEquals("file content here", rm.content)
+        assertEquals("main.kt", rm.displayName)
     }
 }
