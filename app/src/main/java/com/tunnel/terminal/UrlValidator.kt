@@ -23,14 +23,15 @@ object UrlValidator {
         if (host.isBlank()) {
             return Result(false, "Host kosong")
         }
-        val isLocal = host == "localhost" || host == "127.0.0.1" ||
-            host == "10.0.2.2" || host == "::1"
+        /* v8.5.0 fix (C4): Pakai NetworkPolicy.isLocalOrPrivate (RFC1918 + loopback).
+         * Sebelumnya: hardcoded 4 hosts, miss 192.168.x, 0.0.0.0, [::1]. */
+        val isLocal = NetworkPolicy.isLocalOrPrivate(url)
         val protocol = url.protocol.lowercase()
         if (protocol != "https" && protocol != "http") {
             return Result(false, "Protocol harus http atau https")
         }
         if (protocol == "http" && !isLocal) {
-            return Result(false, "HTTP hanya diizinkan untuk localhost / 10.0.2.2")
+            return Result(false, "HTTP hanya diizinkan untuk local/private IP (localhost, 127.0.0.1, 10.x, 192.168.x, 172.16-31.x)")
         }
         return Result(true, withScheme.trimEnd('/'))
     }

@@ -26,7 +26,14 @@ data class AISettings(
      * - "openai": OpenAI-compatible /chat/completions
      * - "anthropic": Anthropic Messages API /v1/messages
      */
-    val apiStyle: String = "openai"
+    val apiStyle: String = "openai",
+    /**
+     * v8.5.0 fix (H4): Max tool loop depth untuk multi-turn tool calling.
+     * Sebelumnya: hardcoded 8 di MainActivity.maxToolLoopDepth — terlalu rendah
+     * untuk task kompleks (e.g. "build Flask app" butuh 15+ tool calls).
+     * Sekarang: configurable per-provider, default 16.
+     */
+    val toolLoopDepth: Int = 16
 ) {
     /** True when using Anthropic Messages API (not OpenAI-compat proxy).
      * Driven only by apiStyle so "Anthropic (OpenAI Compat)" stays on chat/completions. */

@@ -428,9 +428,12 @@ class AIAgent(
     /* ─── Helpers ─── */
 
     private fun isConfigured(settings: AISettings): Boolean {
-        /* Local providers (Ollama, LM Studio) tidak butuh API key. */
-        val isLocal = settings.baseUrl.contains("localhost") ||
-                      settings.baseUrl.contains("127.0.0.1")
+        /* v8.5.0 fix (C4): Pakai NetworkPolicy.isLocalOrPrivate untuk cek local.
+         * Sebelumnya: substring match "localhost"/"127.0.0.1" — miss 10.0.2.2,
+         * 192.168.x, ::1, 0.0.0.0. Sekarang: RFC1918 + loopback + emulator host. */
+        val isLocal = try {
+            NetworkPolicy.isLocalOrPrivate(URL(settings.baseUrl))
+        } catch (_: Exception) { false }
         return settings.apiKey.isNotBlank() || isLocal
     }
 
@@ -470,19 +473,10 @@ class AIAgent(
         }
     }
 
-    /** Shared HTTPS check for OpenAI + Anthropic + ModelFetcher. */
+    /** Shared HTTPS check for OpenAI + Anthropic + ModelFetcher.
+     *  v8.5.0 fix (C4): Delegate ke NetworkPolicy.enforceHttpsOrThrow. */
     internal fun enforceHttpsOrLocal(url: URL) {
-        if (!url.protocol.equals("https", ignoreCase = true)) {
-            val host = url.host.lowercase()
-            val isLocal = host == "localhost" || host == "127.0.0.1" ||
-                host == "10.0.2.2" || host == "::1"
-            if (!isLocal) {
-                throw java.io.IOException(
-                    "Security: Hanya HTTPS yang didukung untuk provider eksternal. " +
-                        "URL '$host' menggunakan HTTP tidak aman."
-                )
-            }
-        }
+        NetworkPolicy.enforceHttpsOrThrow(url)
     }
 
     private fun buildRequestBody(

@@ -38,8 +38,12 @@ class ProotBootstrap(private val context: Context) {
 
     companion object {
         private const val TAG = "ProotBootstrap"
-        private const val USER_AGENT =
-            "TunnelTerminal/8.4.1 (Android; Ubuntu-Rootfs-Bootstrap)"
+        /* v8.5.0 fix (M8): Pakai BuildConfig.VERSION_NAME supaya User-Agent selalu
+         * sync dengan versionName di build.gradle.kts. Sebelumnya: hardcoded "8.4.1"
+         * yang drift 5 patch versions (actual was 8.4.6). Harus val (bukan const)
+         * karena BuildConfig di-resolve saat runtime. */
+        private val USER_AGENT =
+            "TunnelTerminal/${com.tunnel.terminal.BuildConfig.VERSION_NAME} (Android; Ubuntu-Rootfs-Bootstrap)"
 
         val ROOTFS_URLS_ARM64 = listOf(
             "https://cdimage.ubuntu.com/ubuntu-base/releases/24.04.4/release/ubuntu-base-24.04.4-base-arm64.tar.gz",

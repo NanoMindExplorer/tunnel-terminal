@@ -5,10 +5,10 @@
 ![Architecture](https://img.shields.io/badge/Architecture-NDK%20%2B%20Jetpack%20Compose-purple)
 ![AI](https://img.shields.io/badge/AI-Skills%20%2B%20Copilot%20%2B%20Agent%20%2B%20MCP-cyan)
 ![Linux](https://img.shields.io/badge/Linux-Ubuntu%2024.04%20via%20proot-orange)
-![Version](https://img.shields.io/badge/version-8.4.0-blue)
+![Version](https://img.shields.io/badge/version-8.5.0-blue)
 ![Kotlin](https://img.shields.io/badge/Kotlin-2.0.21-7F52FF)
 ![AGP](https://img.shields.io/badge/AGP-8.5.2-orange)
-![Tests](https://img.shields.io/badge/tests-25%20files-green)
+![Tests](https://img.shields.io/badge/tests-22%20files-green)
 ![Stability](https://img.shields.io/badge/stability-production-green)
 
 ## Quick Links
@@ -42,7 +42,7 @@ Terminal Android konvensional hanya menampilkan teks dan mengeksekusi command. T
 - **EncryptedSharedPreferences** (Phase 41) — API key AES256-GCM encrypted at rest
 - **Wave 10-25 UX + AI polish** — bookmarks, safe paste, ExtraKeys, font zoom, AI side panel, storage SAF, Ubuntu download, AI Skills CRUD
 - **AI Skills** — custom instruction packs (scope always/chat/agent/local/ubuntu/ssh), inject ke semua jalur AI
-- **25 test files** — emulator, tools, IME, layout, selection, Ubuntu paths, skills, storage commands
+- **22 test files** — emulator, tools, IME, layout, selection, Ubuntu paths, skills, storage commands
 
 ## Fitur Utama (Ringkas)
 
@@ -83,7 +83,7 @@ Terminal Android konvensional hanya menampilkan teks dan mengeksekusi command. T
 | 33 | **Project Context** (Phase 50) | **git branch + 10 manifest types + file tree auto-injected ke AI prompt** |
 | 34 | **Scrollback buffer** (Phase 49) | **2000-line ring buffer, LazyColumn virtualized (Wave 15), Unicode code-points** |
 | 35 | **EncryptedSharedPreferences** (Phase 41) | **API key + SSH creds + MCP keys AES256-GCM encrypted at rest** |
-| 36 | **Automated tests** (Phase 51+) | **25 test files (03–25): emulator, tools, IME, selection, Ubuntu, skills** |
+| 36 | **Automated tests** (Phase 51+) | **22 test files (03-27): emulator, tools, IME, selection, Ubuntu, skills** |
 | 37 | **Wave 10-25 UX + AI** | **Bookmarks, ExtraKeys, side panel AI, SAF storage, Ubuntu download, Skills** |
 | 38 | **Anthropic Native API** (Wave 5) | **Claude via Messages API (`apiStyle: anthropic`)** |
 | 39 | **AI Skills** (Wave 25) | **CRUD skill, scope, keyword trigger, inject chat/agent/all sessions** |
@@ -134,7 +134,7 @@ Terminal Android konvensional hanya menampilkan teks dan mengeksekusi command. T
 
 **UX Wave 24:** Paste di kolom chat AI + Agent (📋), multi-line, snippet `>_` output terminal (v8.3.3).
 
-**UX Wave 25:** **AI Skills** — tambah/edit/hapus, scope, keyword, inject ke chat & agent (v8.4.0).
+**UX Wave 25:** **AI Skills** — tambah/edit/hapus, scope, keyword, inject ke chat & agent (v8.5.0).
 
 ## 🐧 Linux Environment (Ubuntu via proot)
 
@@ -313,15 +313,15 @@ Tanpa binary ini, app tetap jalan normal untuk semua fitur lain (local shell, SS
 | **Wave 22** | **Ubuntu download IO thread + multi-mirror + resume (v8.3.1)** |
 | **Wave 23** | **AI/Agent path integration with Ubuntu proot (v8.3.2)** |
 | **Wave 24** | **Paste di chat AI & Agent + terminal snippet (v8.3.3)** |
-| **Wave 25** | **AI Skills system — CRUD + inject all AI paths (v8.4.0)** |
+| **Wave 25** | **AI Skills system — CRUD + inject all AI paths (v8.5.0)** |
 
-**Total: 60+ Kotlin sources + NDK + 25 unit test files · version 8.4.0 (versionCode 61)**
+**Total: 60+ Kotlin sources + NDK + 22 unit test files · version 8.5.0 (versionCode 68)**
 
-## Release v8.4.0
+## Release v8.5.0
 
-Release **v8.4.0** menggabungkan Wave 18–25 di atas v8.1.x: storage perangkat, terminal polish, AI side panel, Ubuntu download/AI path, paste chat, dan **AI Skills**.
+Release **v8.5.0** menggabungkan Wave 18–25 di atas v8.1.x: storage perangkat, terminal polish, AI side panel, Ubuntu download/AI path, paste chat, dan **AI Skills**.
 
-### Highlights v8.4.0
+### Highlights v8.5.0
 
 - **AI Skills** — skill custom + built-in; scope always/chat/agent/local/ubuntu/ssh; keyword trigger; budget inject
 - **AI side panel** — Chat | Flow | Skill | Set di kanan; terminal kiri tetap terlihat saat AI bekerja

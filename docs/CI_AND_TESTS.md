@@ -1,6 +1,6 @@
 # CI & Unit Tests
 
-**App version:** 8.4.0 (versionCode 61) · **Tests:** 25 files under `app/src/test/`
+**App version:** 8.5.0 (versionCode 68) · **Tests:** 22 files under `app/src/test/`
 
 ## Local
 
@@ -51,7 +51,7 @@ jobs:
       - run: ./gradlew testFullDebugUnitTest --no-daemon --continue
 ```
 
-## Test modules (25 files)
+## Test modules (22 files)
 
 | File | Coverage |
 |------|----------|

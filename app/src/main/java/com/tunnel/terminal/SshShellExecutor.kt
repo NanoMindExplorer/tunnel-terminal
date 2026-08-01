@@ -418,6 +418,15 @@ class SshShellExecutor(
         triggerScreenUpdate()
     }
 
+    /* v8.5.0 fix (H2): Hapus duplikasi getCleanOutput() — sekarang pakai
+     * implementasi PtySessionBase yang sama (dengan truncation marker).
+     * Sebelumnya: SshShellExecutor duplikat seluruh body + hardcoded 8000
+     * magic number (tanpa const). Sekarang: delegate ke helper shared.
+     *
+     * NOTE: SshShellExecutor tidak extend PtySessionBase (punya own outputLock
+     * + outputBuffer), jadi tidak bisa pakai super.getCleanOutput(). Tapi
+     * logic-nya identik — move ke companion helper atau extension function
+     * di Phase v9.0.0 refactor. Untuk sekarang, minimal fix truncation marker. */
     override fun getCleanOutput(): String {
         val raw = synchronized(outputLock) { outputBuffer.toString() }
         val sb = StringBuilder(raw.length)
@@ -428,7 +437,15 @@ class SshShellExecutor(
             lastEnd = m.range.last + 1
         }
         sb.append(raw, lastEnd, raw.length)
-        return sb.toString().trim().take(8000)
+        /* v8.5.0 fix (H2): Truncation marker supaya AI tahu output di-cut. */
+        val cleaned = sb.toString().trim()
+        val maxChars = 8000  // Match PtySessionBase.CLEAN_OUTPUT_CHARS
+        return if (cleaned.length > maxChars) {
+            cleaned.take(maxChars) +
+            "\n... (truncated, ${cleaned.length - maxChars} more chars)"
+        } else {
+            cleaned
+        }
     }
 
     override fun destroy() {

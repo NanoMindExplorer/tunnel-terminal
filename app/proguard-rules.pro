@@ -17,8 +17,10 @@
 -keep class com.google.crypto.tink.** { *; }
 -keep class androidx.security.crypto.** { *; }
 
-# Compose (usually handled by compose compiler, but be safe)
--keep class androidx.compose.** { *; }
+# v8.5.0 fix (L5): Removed over-broad `-keep class androidx.compose.** { *; }`.
+# Compose compiler already generates proper keep rules untuk Compose runtime.
+# Over-broad keep mencegah R8 shrink unused Compose code → APK lebih besar.
+# Jika ada class Compose tertentu yang butuh keep (rare), add specific rule here.
 
 # Kotlin coroutines
 -keepclassmembernames class kotlinx.** { volatile <fields>; }

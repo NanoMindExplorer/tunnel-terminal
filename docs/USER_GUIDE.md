@@ -1,6 +1,6 @@
 # Tunnel Terminal — Panduan Penggunaan Lengkap
 
-**Versi:** 8.4.0 (Wave 25 — AI Skills + side panel + Ubuntu AI + storage) | **Platform:** Android 7.0+ (API 24+) | **ABI:** arm64-v8a | **Kotlin:** 2.0.21 | **AGP:** 8.5.2 | **versionCode:** 61
+**Versi:** 8.5.0 (Wave 31 — AI Skills + side panel + Ubuntu AI + storage) | **Platform:** Android 7.0+ (API 24+) | **ABI:** arm64-v8a | **Kotlin:** 2.0.21 | **AGP:** 8.5.2 | **versionCode:** 61
 
 ---
 
@@ -45,7 +45,7 @@
 ### Dari GitHub Releases (disarankan)
 
 1. Buka [Releases](https://github.com/NanoMindExplorer/tunnel-terminal/releases)
-2. Unduh APK **full** (debug atau release) untuk **v8.4.0**
+2. Unduh APK **full** (debug atau release) untuk **v8.5.0**
 3. Install di perangkat (izinkan “Unknown sources” / Install unknown apps)
 
 ### Build dari Source
@@ -83,7 +83,7 @@ Saat app pertama dibuka, Anda akan melihat:
 
 ```
 ╔══════════════════════════════════════════════════════════════╗
-║     TUNNEL TERMINAL v8.4.0 — AI Native Dev Environment         ║
+║     TUNNEL TERMINAL v8.5.0 — AI Native Dev Environment         ║
 ║     NDK PTY + Copilot/Skills + Ubuntu proot + Storage         ║
 ╚══════════════════════════════════════════════════════════════╝
 ─ System Info ────────────────────────────────────────────────
@@ -967,7 +967,7 @@ Jika model support vision → **👁 Vision** badge muncul
 
 ### App Crash saat Dibuka
 
-**Penyebab:** (sudah di-fix di Phase 31, pastikan pakai v8.4.0+)
+**Penyebab:** (sudah di-fix di Phase 31, pastikan pakai v8.5.0+)
 
 **Jika masih crash:**
 1. Cek logcat: `adb logcat | grep -i "tunnel\|fatal\|androidruntime"`
@@ -1045,7 +1045,7 @@ Jika model support vision → **👁 Vision** badge muncul
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                 TUNNEL TERMINAL v8.4.0                       │
+│                 TUNNEL TERMINAL v8.5.0                       │
 ├─────────────────────────────────────────────────────────────┤
 │ TAB BAR:  [Tab X]  +  📁  💾  🔌  🐧  ⬡  ⊞  ⌘K  AI       │
 ├─────────────────────────────────────────────────────────────┤
@@ -1068,4 +1068,4 @@ Jika model support vision → **👁 Vision** badge muncul
 
 Untuk dokumentasi teknis lengkap, lihat [WIKI.md](WIKI.md).  
 Untuk CI & daftar test, lihat [CI_AND_TESTS.md](CI_AND_TESTS.md).  
-Source & APK: [GitHub](https://github.com/NanoMindExplorer/tunnel-terminal) · [Release v8.4.0](https://github.com/NanoMindExplorer/tunnel-terminal/releases/tag/v8.4.0).
+Source & APK: [GitHub](https://github.com/NanoMindExplorer/tunnel-terminal) · [Release v8.5.0](https://github.com/NanoMindExplorer/tunnel-terminal/releases/tag/v8.5.0).

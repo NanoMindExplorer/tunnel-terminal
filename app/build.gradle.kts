@@ -24,8 +24,11 @@ android {
         // Phase 58: TaskPlanManager (plan/act/observe/verify) + SFTP for SSH file I/O
         // Phase 59: Native API tool-calling (B-1) + AGP/Kotlin upgrade (C-2)
         /* Wave 31: proot EACCES via linker64+codeCache; IME no Ctrl+E on local sh. */
-        versionCode = 67
-        versionName = "8.4.6"
+        /* v8.5.0: Stabilization release — NetworkPolicy centralization, SSH host key
+         * CompletableDeferred, Ubuntu early-death detector removal, output truncation
+         * marker, configurable toolLoopDepth, CI test workflow, Gradle cache. */
+        versionCode = 68
+        versionName = "8.5.0"
 
         /* Phase 40 fix (M10): Restrict ke arm64-v8a saja — proot binary di assets
          * hanya arm64. Tanpa abiFilters, APK universal akan crash di device x86_64

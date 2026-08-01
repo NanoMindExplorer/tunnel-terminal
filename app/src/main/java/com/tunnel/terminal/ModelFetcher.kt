@@ -53,13 +53,13 @@ object ModelFetcher {
         if (settings.baseUrl.isBlank()) {
             return@withContext Result.failure(IllegalArgumentException("Base URL kosong"))
         }
-        /* Local providers tidak butuh API key — parse host, not substring. */
+        /* Local providers tidak butuh API key — parse host, not substring.
+         * v8.5.0 fix (C4): Pakai NetworkPolicy.isLocalOrPrivate (RFC1918 + loopback). */
         val base = settings.baseUrl.trimEnd('/')
         val parsed = try { URL(if (base.contains("://")) base else "https://$base") } catch (e: Exception) {
             return@withContext Result.failure(IllegalArgumentException("Base URL invalid: ${e.message}"))
         }
-        val host = parsed.host.lowercase()
-        val isLocal = host == "localhost" || host == "127.0.0.1" || host == "10.0.2.2" || host == "::1"
+        val isLocal = NetworkPolicy.isLocalOrPrivate(parsed)
         if (!isLocal && settings.apiKey.isBlank()) {
             return@withContext Result.failure(IllegalArgumentException("API Key kosong"))
         }
@@ -79,11 +79,11 @@ object ModelFetcher {
             }
             val apiUrl = "$base/models"
             val url = URL(apiUrl)
-            /* Wave-5: same HTTPS policy as chat completions. */
-            if (!url.protocol.equals("https", ignoreCase = true) && !isLocal) {
-                return@withContext Result.failure(
-                    IllegalArgumentException("Security: only HTTPS allowed for external model list")
-                )
+            /* v8.5.0 fix (C4): Pakai NetworkPolicy.enforceHttpsOrThrow. */
+            try {
+                NetworkPolicy.enforceHttpsOrThrow(url)
+            } catch (e: java.io.IOException) {
+                return@withContext Result.failure(IllegalArgumentException(e.message))
             }
             connection = (url.openConnection() as HttpURLConnection).apply {
                 requestMethod = "GET"

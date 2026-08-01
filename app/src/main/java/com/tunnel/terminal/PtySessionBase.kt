@@ -233,7 +233,16 @@ abstract class PtySessionBase(
             lastEnd = m.range.last + 1
         }
         sb.append(raw, lastEnd, raw.length)
-        return sb.toString().trim().take(CLEAN_OUTPUT_CHARS)
+        /* v8.5.0 fix (H2): Append truncation marker supaya AI tahu output di-cut.
+         * Sebelumnya: .take(CLEAN_OUTPUT_CHARS) silent truncation — AI bisa mislead
+         * kalau output ter-cut di tengah baris. Sekarang: marker eksplisit. */
+        val cleaned = sb.toString().trim()
+        return if (cleaned.length > CLEAN_OUTPUT_CHARS) {
+            cleaned.take(CLEAN_OUTPUT_CHARS) +
+            "\n... (truncated, ${cleaned.length - CLEAN_OUTPUT_CHARS} more chars)"
+        } else {
+            cleaned
+        }
     }
 
     override fun destroy() {

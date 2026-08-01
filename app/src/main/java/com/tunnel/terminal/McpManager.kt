@@ -123,23 +123,10 @@ class McpManager(private val context: Context) {
      * - http only for true loopback hosts (parsed host, not substring)
      */
     fun isAllowedMcpUrl(urlStr: String): Boolean {
-        return try {
-            val url = URL(urlStr)
-            val host = url.host?.lowercase() ?: return false
-            val isLoopback = host == "localhost" || host == "127.0.0.1" ||
-                host == "::1" || host == "[::1]" || host == "10.0.2.2"
-            when {
-                url.protocol.equals("http", ignoreCase = true) -> isLoopback
-                url.protocol.equals("https", ignoreCase = true) -> {
-                    /* Block cloud metadata / link-local. */
-                    if (host == "169.254.169.254" || host.endsWith(".internal")) return false
-                    true
-                }
-                else -> false
-            }
-        } catch (_: Exception) {
-            false
-        }
+        /* v8.5.0 fix (C4): Delegate ke NetworkPolicy.isAllowedMcpUrl.
+         * Sebelumnya: hardcoded host list yang miss RFC1918 private ranges.
+         * Sekarang: NetworkPolicy handle loopback + RFC1918 + cloud metadata block. */
+        return NetworkPolicy.isAllowedMcpUrl(urlStr)
     }
 
     /** Add new MCP server. */

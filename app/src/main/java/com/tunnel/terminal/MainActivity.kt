@@ -216,9 +216,11 @@ class MainActivity : ComponentActivity() {
     private val blockManager = BlockManager()
     /** Phase 22: AI tool call pending permission. */
     private var pendingToolCall by mutableStateOf<AiToolCall?>(null)
-    /** Wave-2: Multi-turn tool loop depth (chat auto-continue after tool results). */
+    /** Wave-2: Multi-turn tool loop depth (chat auto-continue after tool results).
+     *  v8.5.0 fix (H4): maxToolLoopDepth sekarang configurable via AISettings.toolLoopDepth
+     *  (default 16, sebelumnya hardcoded 8). */
     private var toolLoopDepth = 0
-    private val maxToolLoopDepth = 8
+    private val maxToolLoopDepth get() = aiSettings.toolLoopDepth
     /** Phase 22: Tool executor + permission manager. */
     private lateinit var toolExecutor: ToolExecutor
     private lateinit var permissionManager: PermissionManager
@@ -1249,29 +1251,29 @@ class MainActivity : ComponentActivity() {
      */
     private suspend fun createSshTab(config: SshConnectionConfig) {
         /* Phase 41 fix (CRIT-02): Pass hostKeyChangeCallback supaya user dapat dialog
-         * blocking saat fingerprint server berubah (potensi MITM). */
+         * blocking saat fingerprint server berubah (potensi MITM).
+         *
+         * v8.5.0 fix (C2): Replace runBlocking { suspendCancellableCoroutine } dengan
+         * CompletableDeferred. runBlocking memblock thread JSch KEX secara indefinite
+         * kalau user tidak respond dialog (e.g. app di-background). CompletableDeferred
+         * adalah suspend-friendly — bisa di-cancel saat Activity destroy, tidak leak
+         * thread. */
         val sshExecutor = SshShellExecutor(
             themeHolder = themeHolder,
             config = config,
             context = this,
             hostKeyChangeCallback = { oldKey, newKey ->
-                /* Blocking call — wait for user decision via suspendCancellableCoroutine..
-                 * Karena callback ini dipanggil dari suspend context (start()), kita bisa
-                 * suspend di sini sampai user tap tombol di dialog. */
-                kotlinx.coroutines.runBlocking {
-                    kotlinx.coroutines.suspendCancellableCoroutine<Boolean> { cont ->
-                        _sshHostKeyDialogState.value = SshHostKeyDialogState(
-                            host = "${config.host}:${config.port}",
-                            oldFingerprint = oldKey,
-                            newFingerprint = newKey,
-                            onResolve = { approved ->
-                                if (cont.isActive) {
-                                    cont.resume(approved) {}
-                                }
-                            }
-                        )
-                    }
-                }
+                /* Suspends sampai user tap Approve/Reject di dialog.
+                 * Dipanggil dari suspend context (sshExecutor.start() runs in IO dispatcher),
+                 * jadi await() di sini aman — tidak block thread, bisa di-cancel. */
+                val deferred = kotlinx.coroutines.CompletableDeferred<Boolean>()
+                _sshHostKeyDialogState.value = SshHostKeyDialogState(
+                    host = "${config.host}:${config.port}",
+                    oldFingerprint = oldKey,
+                    newFingerprint = newKey,
+                    onResolve = { approved -> deferred.complete(approved) }
+                )
+                deferred.await()
             }
         )
         shellExecutors.add(sshExecutor)
@@ -1356,38 +1358,21 @@ class MainActivity : ComponentActivity() {
         )
         executor.triggerScreenUpdate()
 
-        // Phase 39: Deteksi early death (SECCOMP issue) → retry sekali dengan flag.
-        Thread {
-            try {
-                Thread.sleep(2500)
-                if (!executor.isAlive) {
-                    Log.w("MainActivity", "Sesi Ubuntu mati prematur — retry dengan PROOT_NO_SECCOMP=1")
-                    // Hapus executor yang mati.
-                    shellExecutors.removeAll { it.id == executor.id }
-                    if (activeExecutorId == executor.id) {
-                        activeExecutorId = shellExecutors.firstOrNull()?.id ?: 0
-                    }
-                    // Simpan preferensi supaya percobaan berikutnya pakai flag ini.
-                    prefs.edit().putBoolean("proot_no_seccomp", true).apply()
-                    // Retry.
-                    lifecycleScope.launch {
-                        val retryExecutor = ProotShellExecutor(
-                            themeHolder = themeHolder,
-                            bootstrap = prootBootstrap,
-                            disableSeccomp = true
-                        )
-                        shellExecutors.add(retryExecutor)
-                        activeExecutorId = retryExecutor.id
-                        syncToolExecutorToSession(retryExecutor)
-                        retryExecutor.start()
-                        retryExecutor.emulator.process(
-                            "\u001B[33m[RETRY] Sesi sebelumnya mati prematur — menggunakan PROOT_NO_SECCOMP=1.\u001B[0m\n\n"
-                        )
-                        retryExecutor.triggerScreenUpdate()
-                    }
-                }
-            } catch (_: InterruptedException) {}
-        }.apply { isDaemon = true; start() }
+        /* v8.5.0 fix (C3): Hapus Thread+sleep(2500) early-death detector.
+         *
+         * Sebelumnya: Thread daemon sleep 2.5s, lalu cek executor.isAlive.
+         * Jika mati, retry dengan PROOT_NO_SECCOMP=1. Tapi:
+         *   - Race condition: kalau proot mati dalam 100ms, user tunggu 2.4s sia-sia
+         *   - Kalau proot mati setelah 2.6s, tidak terdeteksi (false negative)
+         *   - Thread daemon tidak ter-cancel saat Activity destroy → leak
+         *
+         * Sekarang: ProotShellExecutor punya early-death detection bawaan via
+         * processExitMessage() + firstByteLatch (5s timeout). Retry SECCOMP
+         * sekarang ditangani oleh ProotShellExecutor internal logic, bukan
+         * polling manual di MainActivity.
+         *
+         * SECCOMP fallback flag masih tersimpan di SharedPreferences saat
+         * ProotShellExecutor detect exit prematur, lalu retry otomatis. */
     }
 
     /**
