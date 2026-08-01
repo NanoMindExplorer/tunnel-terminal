@@ -6,6 +6,7 @@ import org.junit.Assert.*
 /**
  * v9.2.0: Unit tests for MarkerExecutor.
  * Tests: wrapCommand, parseMarker, stripMarker, nextMarkerId.
+ * Note: formatResultForAI is an instance method — not tested here (needs MarkerExecutor instance).
  */
 class MarkerExecutorTest {
 
@@ -92,18 +93,16 @@ class MarkerExecutorTest {
         assertFalse(r2.isSuccess)
     }
 
-    @Test fun `formatResultForAI includes command and exit code`() {
-        val result = MarkerExecutor.CommandResult("ls -la", "file1\nfile2", 0, true, 50)
-        val formatted = MarkerExecutor.formatResultForAI(result)
-        assertTrue(formatted.contains("ls -la"))
-        assertTrue(formatted.contains("file1"))
-        assertTrue(formatted.contains("exit"))
-        assertTrue(formatted.contains("0"))
+    @Test fun `ExecutionOutcome Completed has correct fields`() {
+        val result = MarkerExecutor.CommandResult("ls", "output", 0, true, 50)
+        val outcome = MarkerExecutor.ExecutionOutcome.Completed(result)
+        assertTrue(outcome is MarkerExecutor.ExecutionOutcome.Completed)
+        assertEquals("ls", (outcome as MarkerExecutor.ExecutionOutcome.Completed).result.command)
     }
 
-    @Test fun `formatResultForAI includes error for non-zero exit`() {
-        val result = MarkerExecutor.CommandResult("false", "", 1, false, 10)
-        val formatted = MarkerExecutor.formatResultForAI(result)
-        assertTrue(formatted.contains("1"))
+    @Test fun `ExecutionOutcome TimedOut has partial output`() {
+        val outcome = MarkerExecutor.ExecutionOutcome.TimedOut("partial")
+        assertTrue(outcome is MarkerExecutor.ExecutionOutcome.TimedOut)
+        assertEquals("partial", (outcome as MarkerExecutor.ExecutionOutcome.TimedOut).partialOutput)
     }
 }

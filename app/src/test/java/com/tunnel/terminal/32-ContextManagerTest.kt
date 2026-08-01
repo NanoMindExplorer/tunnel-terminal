@@ -2,56 +2,68 @@ package com.tunnel.terminal
 
 import org.junit.Test
 import org.junit.Assert.*
+import org.junit.Before
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
 
 /**
  * v9.2.0: Unit tests for ContextManager mention parsing.
  * Tests: parseMentions, stripMentions, MentionAutoComplete.
+ * Uses Robolectric because ContextManager constructor needs Android Context.
  */
+@RunWith(RobolectricTestRunner::class)
 class ContextManagerTest {
 
+    private lateinit var cm: ContextManager
+
+    @Before
+    fun setup() {
+        cm = ContextManager(org.robolectric.RuntimeEnvironment.getApplication())
+    }
+
     @Test fun `parseMentions extracts file mention`() {
-        val mentions = ContextManager.parseMentions("Hello @file:main.kt world")
+        val mentions = cm.parseMentions("Hello @file:main.kt world")
         assertEquals(1, mentions.size)
         assertTrue(mentions[0].startsWith("@file:"))
     }
 
     @Test fun `parseMentions extracts multiple mentions`() {
-        val mentions = ContextManager.parseMentions("@file:a.kt and @block:1 and @terminal")
+        val mentions = cm.parseMentions("@file:a.kt and @block:1 and @terminal")
         assertEquals(3, mentions.size)
     }
 
     @Test fun `parseMentions handles no mentions`() {
-        val mentions = ContextManager.parseMentions("just regular text")
+        val mentions = cm.parseMentions("just regular text")
         assertTrue(mentions.isEmpty())
     }
 
     @Test fun `parseMentions extracts block mention with index`() {
-        val mentions = ContextManager.parseMentions("See @block:3 for details")
+        val mentions = cm.parseMentions("See @block:3 for details")
         assertEquals(1, mentions.size)
         assertTrue(mentions[0].contains("@block:3"))
     }
 
     @Test fun `parseMentions extracts command mention`() {
-        val mentions = ContextManager.parseMentions("Run @command:ls -la")
+        val mentions = cm.parseMentions("Run @command:ls -la")
         assertEquals(1, mentions.size)
         assertTrue(mentions[0].contains("@command:"))
     }
 
     @Test fun `parseMentions extracts terminal mention`() {
-        val mentions = ContextManager.parseMentions("Check @terminal output")
+        val mentions = cm.parseMentions("Check @terminal output")
         assertEquals(1, mentions.size)
         assertEquals("@terminal", mentions[0])
     }
 
     @Test fun `parseMentions extracts snippet mention`() {
-        val mentions = ContextManager.parseMentions("Use @snippet:deploy")
+        val mentions = cm.parseMentions("Use @snippet:deploy")
         assertEquals(1, mentions.size)
         assertTrue(mentions[0].contains("@snippet:"))
     }
 
     @Test fun `stripMentions removes all mentions`() {
         val text = "Hello @file:main.kt and @block:1 world"
-        val stripped = ContextManager.stripMentions(text)
+        val stripped = cm.stripMentions(text)
         assertFalse(stripped.contains("@file:"))
         assertFalse(stripped.contains("@block:"))
         assertTrue(stripped.contains("Hello"))
@@ -60,7 +72,7 @@ class ContextManagerTest {
 
     @Test fun `stripMentions with no mentions returns original`() {
         val text = "just regular text"
-        assertEquals(text, ContextManager.stripMentions(text))
+        assertEquals(text, cm.stripMentions(text))
     }
 
     @Test fun `MentionAutoComplete returns suggestions for partial file mention`() {
