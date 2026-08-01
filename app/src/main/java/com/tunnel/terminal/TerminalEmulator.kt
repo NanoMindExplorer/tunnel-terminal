@@ -7,70 +7,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.sp
 
-/**
- * Representasi satu sel terminal dengan karakter, warna foreground, dan style.
- * Terminal cell with char, fg color, bg color, and text style attributes.
- */
-data class TerminalCell(
-    /**
-     * Wave-15: Full glyph string (may be multi-code-point with combining marks,
-     * or a single non-BMP emoji). Prefer [displayText] when rendering.
-     */
-    var glyph: String = " ",
-    var fgColor: Color = Color(0xFF00FF00),
-    var bgColor: Color = Color.Black,
-    var bold: Boolean = false,
-    var italic: Boolean = false,
-    var underline: Boolean = false,
-    var reverse: Boolean = false,
-    /** Wave-5: true if this cell is the right half of a double-width glyph (CJK/emoji). */
-    var wideContinuation: Boolean = false
-) {
-    /** Back-compat single-char access (first code unit). */
-    var char: Char
-        get() = glyph.firstOrNull() ?: ' '
-        set(value) {
-            glyph = value.toString()
-        }
-
-    fun displayText(): String = if (wideContinuation) "" else glyph
-}
-
-/**
- * Wave-5 + Wave-15: Approximate terminal column width (wcwidth-lite).
- * 0 = combining / zero-width, 1 = normal, 2 = CJK / many emoji.
- */
-object CharDisplayWidth {
-    fun of(ch: Char): Int = ofCodePoint(ch.code)
-
-    /** Wave-15: Width by Unicode code point (handles astral emoji as 2). */
-    fun ofCodePoint(cp: Int): Int {
-        /* Zero-width joiners / variation selectors / ZWSP. */
-        if (cp == 0x200D || cp == 0x200B || cp in 0xFE00..0xFE0F) return 0
-        val type = Character.getType(cp)
-        if (type == Character.NON_SPACING_MARK.toInt() ||
-            type == Character.ENCLOSING_MARK.toInt() ||
-            type == Character.FORMAT.toInt()
-        ) {
-            return 0
-        }
-        /* Common East Asian / fullwidth ranges. */
-        if (cp in 0x1100..0x115F ||
-            cp in 0x2E80..0xA4CF ||
-            cp in 0xAC00..0xD7A3 ||
-            cp in 0xF900..0xFAFF ||
-            cp in 0xFE10..0xFE19 ||
-            cp in 0xFE30..0xFE6F ||
-            cp in 0xFF00..0xFF60 ||
-            cp in 0xFFE0..0xFFE6
-        ) {
-            return 2
-        }
-        /* Most non-BMP (emoji, etc.) occupy 2 columns in modern terminals. */
-        if (cp > 0xFFFF) return 2
-        return 1
-    }
-}
+/* v9.0.0 fix (H7a+H7b): TerminalCell + CharDisplayWidth extracted to separate files.
+ * TerminalCell.kt dan CharDisplayWidth.kt sekarang top-level declarations
+ * di package yang sama — no import changes needed untuk existing code. */
 
 /**
  * ThemeHolder - holder sederhana untuk tema aktif yang bisa di-share
