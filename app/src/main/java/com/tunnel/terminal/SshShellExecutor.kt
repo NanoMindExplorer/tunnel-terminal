@@ -464,7 +464,10 @@ class SshShellExecutor(
     private fun mkdirRecursive(sftp: ChannelSftp, path: String) {
         val absolute = path.startsWith("/")
         val parts = path.trim('/').split("/").filter { it.isNotEmpty() }
-        var current = if (absolute) "" else ""
+        /* v9.1.0 fix (C-4): Dead branch 'if (absolute) "" else ""' — both return "".
+         * Simplify to var current = "". The absolute/relative distinction is handled
+         * in the loop body at line 470 (if (absolute) "/$part" else part). */
+        var current = ""
         for (part in parts) {
             current = if (current.isEmpty()) {
                 if (absolute) "/$part" else part

@@ -881,12 +881,10 @@ class AIAgent(
         return sb.toString()
     }
 
-    /** Strip ANSI escape codes dari string. Strip ANSI escape codes. */
-    private fun stripAnsi(text: String): String {
-        if (text.isEmpty()) return text
-        val regex = Regex("\u001B\\[[;?0-9]*[A-Za-z]|\u001B\\][^\u0007]*\u0007|\u001B[=>78cHM()*+]")
-        return regex.replace(text, "").replace(Regex("\u0007"), "")
-    }
+    /* v9.1.0 fix (C-5): Hapus duplicate stripAnsi() — delegate ke AnsiUtils.stripAnsi().
+     * Sebelumnya: AIAgent punya regex sendiri yang drift dari AnsiUtils (different
+     * escape coverage). Sekarang: single source of truth di AnsiUtils. */
+    private fun stripAnsi(text: String): String = AnsiUtils.stripAnsi(text)
 
     private fun formatHttpError(code: Int, body: String): String {
         return when (code) {

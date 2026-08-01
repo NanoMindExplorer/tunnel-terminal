@@ -205,7 +205,7 @@ class ProotShellExecutor(
                 triggerScreenUpdate()
                 return@withContext
             }
-            Thread.sleep(100)
+            delay(100)
             writeRaw("export PS1='\\u@\\h:\\w\\$ '\n")
             TerminalJni.resize(masterFd, geo.rows, geo.cols)
         }

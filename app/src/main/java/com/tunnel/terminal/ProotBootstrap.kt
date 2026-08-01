@@ -100,12 +100,10 @@ class ProotBootstrap(private val context: Context) {
             TarGzipRootfsExtractor.rootfsLooksValid(rootfsDir)
 
     private fun pickRootfsUrls(): List<String> {
-        @Suppress("DEPRECATION")
-        val abis = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
-            android.os.Build.SUPPORTED_ABIS.toList()
-        } else {
-            listOf(android.os.Build.CPU_ABI)
-        }
+        /* v9.1.0 fix (H-9): Hapus dead SDK_INT < LOLLIPOP branch. minSdk = 24 (Nougat),
+         * jadi SDK_INT >= LOLLIPOP (21) selalu true. Build.CPU_ABI (deprecated) tidak
+         * pernah dipakai. */
+        val abis = android.os.Build.SUPPORTED_ABIS.toList()
         return when {
             abis.any { it.equals("arm64-v8a", true) } -> ROOTFS_URLS_ARM64
             abis.any { it.equals("x86_64", true) } -> ROOTFS_URLS_AMD64

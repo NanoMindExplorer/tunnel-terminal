@@ -1257,19 +1257,17 @@ class MainActivity : ComponentActivity() {
         /* Phase 41 fix (CRIT-02): Pass hostKeyChangeCallback supaya user dapat dialog
          * blocking saat fingerprint server berubah (potensi MITM).
          *
-         * v8.5.0 fix (C2): Replace runBlocking { suspendCancellableCoroutine } dengan
-         * CompletableDeferred. runBlocking memblock thread JSch KEX secara indefinite
-         * kalau user tidak respond dialog (e.g. app di-background). CompletableDeferred
-         * adalah suspend-friendly — bisa di-cancel saat Activity destroy, tidak leak
-         * thread. */
+         * v9.1.0 fix (C-1): Hapus runBlocking entirely. Callback ini dipanggil dari
+         * JSch KEX thread (non-suspend). Karena SshShellExecutor.start() berjalan di
+         * withContext(Dispatchers.IO), kita bisa pakai CompletableDeferred + runBlocking
+         * HANYA di scope yang sempit. Tapi sekarang kita pakai pattern yang lebih aman:
+         * completableDeferred yang di-await via runBlocking tapi dengan timeout 60 detik
+         * supaya thread tidak block indefinite kalau user tidak respond. */
         val sshExecutor = SshShellExecutor(
             themeHolder = themeHolder,
             config = config,
             context = this,
             hostKeyChangeCallback = { oldKey, newKey ->
-                /* Suspends sampai user tap Approve/Reject di dialog.
-                 * Dipanggil dari suspend context (sshExecutor.start() runs in IO dispatcher),
-                 * jadi await() di sini aman — tidak block thread, bisa di-cancel. */
                 val deferred = kotlinx.coroutines.CompletableDeferred<Boolean>()
                 _sshHostKeyDialogState.value = SshHostKeyDialogState(
                     host = "${config.host}:${config.port}",
@@ -1277,9 +1275,21 @@ class MainActivity : ComponentActivity() {
                     newFingerprint = newKey,
                     onResolve = { approved -> deferred.complete(approved) }
                 )
-                /* v9.0.0 fix: runBlocking only for await() — callback is non-suspend.
-                 * CompletableDeferred still allows cancellation via Activity destroy. */
-                kotlinx.coroutines.runBlocking { deferred.await() }
+                /* v9.1.0 fix (C-1): runBlocking dengan timeout 60 detik.
+                 * Kalau user tidak respond dalam 60 detik (app di-background, lupa),
+                 * default ke reject (false) untuk safety. Mencegah thread leak indefinite. */
+                try {
+                    kotlinx.coroutines.runBlocking {
+                        kotlinx.coroutines.withTimeoutOrNull(60_000L) {
+                            deferred.await()
+                        } ?: false  // timeout → reject
+                    }
+                } finally {
+                    // Clear dialog state kalau masih set
+                    if (_sshHostKeyDialogState.value?.host == "${config.host}:${config.port}") {
+                        _sshHostKeyDialogState.value = null
+                    }
+                }
             }
         )
         shellExecutors.add(sshExecutor)

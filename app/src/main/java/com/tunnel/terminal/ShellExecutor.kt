@@ -59,7 +59,7 @@ class ShellExecutor(
             adoptMasterAndStartReader(pid, fd, "pty-read-$id")
             Log.i(tag, "Local shell size=${initialRows}x${initialCols}")
 
-            Thread.sleep(150)
+            delay(150)
             writeRaw("export PS1='tunnel@android:\$PWD\$ '\n")
             TerminalJni.resize(masterFd, initialRows, initialCols)
         }

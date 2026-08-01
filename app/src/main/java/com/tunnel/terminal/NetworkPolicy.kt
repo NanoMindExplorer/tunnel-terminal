@@ -59,14 +59,23 @@ object NetworkPolicy {
     fun isLocalOrPrivate(url: URL): Boolean {
         val host = url.host?.lowercase() ?: return false
 
-        // Fast path: known local hostnames
+        // Fast path: known local hostnames (no DNS lookup needed)
         if (host in LOCAL_HOSTNAMES) return true
 
         // Block cloud metadata endpoints explicitly
         if (host in BLOCKED_HOSTS) return false
-        if (host.endsWith(".internal")) return false
+        if (host.endsWith(".internal") || host.endsWith(".local") ||
+            host.endsWith(".localhost") || host.endsWith(".home") ||
+            host.endsWith(".lan") || host.endsWith(".corp")) return false
 
-        // Resolve ke InetAddress untuk cek range
+        /* v9.1.0 fix (H-2): Cek IP literal dulu (no DNS lookup) sebelum resolve hostname.
+         * Jika host adalah IP literal (e.g. "192.168.1.10"), InetAddress.getByName tidak
+         * melakukan DNS query — langsung parse. Hanya hostname (e.g. "myserver.local")
+         * yang membutuhkan DNS.
+         *
+         * Untuk mencegah NetworkOnMainThreadException, caller harus memanggil ini dari
+         * background thread. UrlValidator.validateAiBaseUrl sekarang dipanggil dari
+         * lifecycleScope.launch (background). */
         return try {
             val addr = InetAddress.getByName(host)
             addr.isLoopbackAddress ||

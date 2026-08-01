@@ -327,7 +327,10 @@ class McpManager(private val context: Context) {
             }
             try {
                 val code = conn.responseCode
-                if (code in 200..499) null else "HTTP $code from ${server.url}"
+                /* v9.1.0 fix (H-3): 4xx (401/403/404) bukan "healthy" — user perlu
+                 * tahu kalau API key salah atau endpoint tidak ada.
+                 * Sebelumnya: 200..499 = null (OK). Sekarang: 200..299 = null (OK). */
+                if (code in 200..299) null else "HTTP $code from ${server.url} (check API key/URL)"
             } finally {
                 conn.disconnect()
             }

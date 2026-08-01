@@ -196,14 +196,19 @@ object TarGzipRootfsExtractor {
     }
 
     private fun applyFileMode(file: File, mode: Int) {
+        /* v9.1.0 fix (H-10): Hapus '|| true' dead code yang membuat ownerRead dan
+         * ownerWrite selalu true. Sebelumnya: files yang should be 0o600 (owner-only)
+         * become world-readable. Sekarang: respect tar mode bits, but ensure owner
+         * write for app updates via Os.chmod below. */
         val ownerExec = (mode and 0x40) != 0 || (mode and 0x49) != 0
         val ownerWrite = (mode and 0x80) != 0
-        val ownerRead = (mode and 0x100) != 0 || true
+        val ownerRead = (mode and 0x100) != 0
         file.setReadable(ownerRead, false)
-        file.setWritable(ownerWrite || true, true) /* always keep owner write for app updates */
+        file.setWritable(ownerWrite, true)
         file.setExecutable(ownerExec, false)
         try {
-            android.system.Os.chmod(file.absolutePath, mode or 0x80) /* ensure owner write bit */
+            /* Ensure owner write bit set for app updates, regardless of tar mode. */
+            android.system.Os.chmod(file.absolutePath, mode or 0x80)
         } catch (_: Throwable) {
         }
     }
@@ -384,10 +389,12 @@ object TarGzipRootfsExtractor {
         try {
             android.system.Os.chmod(file.absolutePath, mode)
         } catch (_: Throwable) {
+            /* v9.1.0 fix (H-10): Hapus '|| true' — respect mode bits. */
             val ownerExec = (mode and 0x40) != 0
             val ownerWrite = (mode and 0x80) != 0
-            file.setReadable(true, false)
-            file.setWritable(ownerWrite || (mode and 0x80) != 0 || true, true)
+            val ownerRead = (mode and 0x100) != 0
+            file.setReadable(ownerRead, false)
+            file.setWritable(ownerWrite, true)
             file.setExecutable(ownerExec || file.isDirectory, false)
         }
     }

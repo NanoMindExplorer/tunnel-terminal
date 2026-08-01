@@ -81,18 +81,32 @@ class AgentTaskRunner(
     /** Phase 52 fix (Bug #2): Result dari executeViaMarker — text + success flag. */
     private data class ExecResult(val text: String, val success: Boolean)
 
-    /** Pola command berisiko yang tetap butuh approval manual walau mode otonom. */
+    /** Pola command berisiko yang tetap butuh approval manual walau mode otonom.
+     *  v9.1.0 fix (H-5): Broadened patterns untuk catch obfuscation bypass. */
     private val highRiskPatterns = listOf(
-        Regex("""rm\s+-rf\s+/(?!root/workspace|home/)"""),  // rm -rf di luar workspace/home
-        Regex("""rm\s+-rf\s+\.(?:\s|$)"""),                 // rm -rf .
-        Regex("""curl.*\|\s*(sh|bash|python)"""),           // pipe ke shell/python dari internet
-        Regex("""wget.*\|\s*(sh|bash|python)"""),
-        Regex("\\bdd\\b.*of="),                            // dd ke device
-        Regex("""\bsudo\b"""),                               // sudo (tidak ada di proot, tapi jaga)
-        Regex("mkfs\\."),  // format filesystem
-        Regex(""">\s*/dev/sd[a-z]"""),                        // write langsung ke device
+        // rm -rf di luar workspace/home — broadened untuk catch /etc, /var, /usr, /*, ~, etc.
+        Regex("""rm\s+(-[a-zA-Z]*r[a-zA-Z]*f?|--recursive\s+--force)\s+/(?:etc|var|usr|sys|proc|dev|boot|bin|sbin|lib|root/(?!workspace)|home/(?!\S*workspace))"""),
+        Regex("""rm\s+(-[a-zA-Z]*r[a-zA-Z]*f?|--recursive\s+--force)\s+/*$"""),  // rm -rf /
+        Regex("""rm\s+(-[a-zA-Z]*r[a-zA-Z]*f?|--recursive\s+--force)\s+\.(?:/|\s|$)"""),  // rm -rf .
+        Regex("""rm\s+(-[a-zA-Z]*r[a-zA-Z]*f?|--recursive\s+--force)\s+~"""),  // rm -rf ~
+        Regex("""rm\s+(-[a-zA-Z]*r[a-zA-Z]*f?|--recursive\s+--force)\s+\*"""),  // rm -rf *
+        // pipe ke shell/python dari internet — broadened
+        Regex("""(curl|wget|fetch).*\|\s*(sh|bash|python|python3|zsh|fish)"""),
+        Regex("""(curl|wget|fetch).*\|\s*base64.*\|"""),  // curl URL | base64 -d | sh
+        // dd ke device — broadened untuk /dev/nvme, /dev/mmcblk, etc.
+        Regex("""\bdd\b.*\b(?:of=|>)\s*/dev/"""),
+        // privilege escalation — broadened
+        Regex("""\b(?:sudo|su\s+-|doas|pkexec)\b"""),
+        // format filesystem — broadened
+        Regex("""\b(?:mkfs|mke2fs|mkswap|fdisk|parted|gdisk)\b"""),
+        // write langsung ke device — broadened untuk /dev/nvme, /dev/mmcblk, /dev/vd, /dev/zram
+        Regex(""">\s*/dev/(?:sd|nvme|mmcblk|vd|zram)"""),
+        // dangerous chmod
         Regex("""chmod\s+-R\s+777"""),
-        Regex(":\\(\\)\\s*\\{")  // fork bomb pattern
+        // fork bomb — broadened untuk spaces
+        Regex("""\w+\s*\(\s*\)\s*\{"""),
+        // shutdown/reboot
+        Regex("""\b(?:shutdown|reboot|halt|poweroff)\b""")
     )
 
     /** Flag untuk Pause — dicek di awal tiap iterasi. */

@@ -34,8 +34,8 @@ android {
         /* v9.0.0: Architecture refactor — TerminalEmulator split (TerminalCell +
          * CharDisplayWidth extracted), AiMetrics persistence, NetworkPolicy +
          * AiMetrics tests (24 test files). */
-        versionCode = 70
-        versionName = "9.0.0"
+        versionCode = 71
+        versionName = "9.1.0"
 
         /* Phase 40 fix (M10): Restrict ke arm64-v8a saja — proot binary di assets
          * hanya arm64. Tanpa abiFilters, APK universal akan crash di device x86_64

@@ -83,9 +83,15 @@ class CheckpointManager(private val context: Context) {
         val turnDir = File(sessionDir, "turn_${currentTurn}")
         turnDir.mkdirs()
 
-        // Sanitize path untuk nama file (ganti / dengan _)
-        val sanitizedPath = filePath.replace("/", "_").replace("\\", "_").takeLast(100)
-        val snapshotFile = File(turnDir, sanitizedPath)
+        // v9.1.0 fix (C-2): Tambah hash prefix ke sanitized filename untuk mencegah
+        // collision antara paths yang share last 100 chars. Hash dari full path
+        // menjamin uniqueness; sanitized name tetap untuk readability.
+        val sanitizedPath = filePath.replace("/", "_").replace("\\", "_").takeLast(80)
+        val pathHash = java.security.MessageDigest.getInstance("SHA-256")
+            .digest(filePath.toByteArray())
+            .joinToString("") { "%02x".format(it) }
+            .take(16)
+        val snapshotFile = File(turnDir, "${pathHash}_${sanitizedPath}")
         try {
             file.copyTo(snapshotFile, overwrite = true)
         } catch (e: Exception) {
