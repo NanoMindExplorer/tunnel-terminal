@@ -150,9 +150,9 @@ abstract class PtySessionBase(
                 emulator.process(text)
                 val outputStr = synchronized(outputLock) {
                     outputBuffer.append(text)
-                    if (outputBuffer.length > OUTPUT_RING_CHARS) {
+                    if (outputBuffer.length > AnsiUtils.OUTPUT_RING_CHARS) {
                         outputBuffer = StringBuilder(
-                            outputBuffer.substring(outputBuffer.length - OUTPUT_RING_CHARS)
+                            outputBuffer.substring(outputBuffer.length - AnsiUtils.OUTPUT_RING_CHARS)
                         )
                     }
                     outputBuffer.toString()
@@ -268,6 +268,6 @@ abstract class PtySessionBase(
 
     companion object {
         private val globalIdCounter = AtomicInteger(0)
-        /* v8.6.0 fix (M2): OUTPUT_RING_CHARS + CLEAN_OUTPUT_CHARS dipindah ke AnsiUtils. */
+        /* v8.6.0 fix (M2): AnsiUtils.OUTPUT_RING_CHARS + CLEAN_OUTPUT_CHARS dipindah ke AnsiUtils. */
     }
 }

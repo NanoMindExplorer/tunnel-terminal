@@ -24,7 +24,7 @@ import java.util.concurrent.atomic.AtomicInteger
  * - Guarantees max ~30fps update rate + no missed final update
  */
 class ScreenDirtyThrottle(
-    private val onDirty: () -> Unit,
+    private val onDirty: () -> Any,  // v9.0.0 fix: accept Any return (e.g. Int from value++)
     private val throttleMs: Long = 33L
 ) {
     @Volatile

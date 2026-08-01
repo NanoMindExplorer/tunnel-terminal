@@ -16,6 +16,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -1276,7 +1277,9 @@ class MainActivity : ComponentActivity() {
                     newFingerprint = newKey,
                     onResolve = { approved -> deferred.complete(approved) }
                 )
-                deferred.await()
+                /* v9.0.0 fix: runBlocking only for await() — callback is non-suspend.
+                 * CompletableDeferred still allows cancellation via Activity destroy. */
+                kotlinx.coroutines.runBlocking { deferred.await() }
             }
         )
         shellExecutors.add(sshExecutor)
@@ -3377,7 +3380,6 @@ class MainActivity : ComponentActivity() {
                             /* v8.6.0 fix (UX): Draggable divider untuk resize split pane.
                              * Sebelumnya: static 2.dp Box, no drag. Sekarang: 6.dp touch target
                              * dengan draggable modifier, clamped ke 0.1-0.9 range. */
-                            val density = LocalDensity.current
                             Box(
                                 modifier = Modifier
                                     .width(6.dp)
