@@ -61,7 +61,7 @@ abstract class PtySessionBase(
      * Sekarang: delegate ke shared ScreenDirtyThrottle instance.
      */
     private val screenDirtyThrottle by lazy {
-        ScreenDirtyThrottle { _screenDirty.value++ }
+        ScreenDirtyThrottle(onDirty = { _screenDirty.value++ })
     }
 
     override fun triggerScreenUpdate() {

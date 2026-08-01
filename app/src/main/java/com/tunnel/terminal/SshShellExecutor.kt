@@ -104,7 +104,7 @@ class SshShellExecutor(
 
     /** v8.6.0 fix (M1): Delegate throttle ke ScreenDirtyThrottle (shared dengan PtySessionBase). */
     private val screenDirtyThrottle by lazy {
-        ScreenDirtyThrottle { _screenDirty.value++ }
+        ScreenDirtyThrottle(onDirty = { _screenDirty.value++ })
     }
 
     override fun triggerScreenUpdate() {
