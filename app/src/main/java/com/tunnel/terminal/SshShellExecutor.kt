@@ -481,7 +481,7 @@ class SshShellExecutor(
                 sftp.mkdir(current)
             } catch (e: com.jcraft.jsch.SftpException) {
                 /* SSH_FX_FAILURE = 4 = "already exists" or similar — expected, skip. */
-                if (e.id != com.jcraft.jsch.SftpException.SSH_FX_FAILURE) {
+                if (e.id != com.jcraft.jsch.ChannelSftp.SSH_FX_FAILURE) {
                     android.util.Log.w("SshShellExecutor", "mkdir '$current' failed: ${e.message}")
                 }
             } catch (e: Exception) {

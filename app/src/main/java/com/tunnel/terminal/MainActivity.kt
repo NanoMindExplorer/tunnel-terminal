@@ -3160,7 +3160,7 @@ class MainActivity : ComponentActivity() {
                         }
                         /* v9.3.0 fix (E.2.2): Ctrl+N = new tab. */
                         Key.N -> {
-                            createNewTab()
+                            scope.launch { createNewTab() }
                             return true
                         }
                         Key.C -> {
