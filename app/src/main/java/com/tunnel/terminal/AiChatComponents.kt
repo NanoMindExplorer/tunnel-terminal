@@ -171,12 +171,19 @@ fun AiMessageBubble(
                     modifier = Modifier.fillMaxWidth()
                 )
             } else {
-                Text(
-                    displayContent.ifBlank { if (msg.isStreaming) "● berpikir…" else "" },
-                    color = if (msg.isError) Color(0xFFFF8A80) else theme.uiText,
-                    fontSize = 13.sp,
-                    fontFamily = FontFamily.Monospace
-                )
+                /* v8.6.0 fix (UX): AI thinking indicator dengan elapsed time counter.
+                 * Sebelumnya: static "● berpikir…" text tanpa feedback progress.
+                 * Sekarang: animated "● berpikir… 3.2s" supaya user tahu AI masih kerja. */
+                if (msg.isStreaming && displayContent.isBlank()) {
+                    AiThinkingIndicator(theme = theme)
+                } else {
+                    Text(
+                        displayContent.ifBlank { if (msg.isStreaming) "● berpikir…" else "" },
+                        color = if (msg.isError) Color(0xFFFF8A80) else theme.uiText,
+                        fontSize = 13.sp,
+                        fontFamily = FontFamily.Monospace
+                    )
+                }
             }
 
             /* Actions */
@@ -359,5 +366,44 @@ fun AiPasteButton(
         contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp)
     ) {
         Text("📋", fontSize = 14.sp)
+    }
+}
+
+/**
+ * v8.6.0 fix (UX): AI thinking indicator dengan elapsed time counter.
+ * Shows "● berpikir… 3.2s" dengan animated dots + elapsed seconds.
+ * Update setiap 100ms untuk smooth counter.
+ */
+@Composable
+fun AiThinkingIndicator(theme: TerminalTheme) {
+    val elapsedMs = remember { mutableStateOf(0L) }
+    val dotCount = remember { mutableStateOf(0) }
+    val startTimeMs = remember { System.currentTimeMillis() }
+
+    LaunchedEffect(Unit) {
+        while (true) {
+            elapsedMs.value = System.currentTimeMillis() - startTimeMs
+            dotCount.value = (dotCount.value + 1) % 4
+            kotlinx.coroutines.delay(100)
+        }
+    }
+
+    val seconds = (elapsedMs.value / 1000.0)
+    val dots = ".".repeat(dotCount.value)
+    val text = String.format("● berpikir%s %.1fs", dots, seconds)
+
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        CircularProgressIndicator(
+            modifier = Modifier.size(12.dp),
+            strokeWidth = 1.5.dp,
+            color = theme.uiAccent
+        )
+        Spacer(modifier = Modifier.width(6.dp))
+        Text(
+            text,
+            color = theme.uiAccent,
+            fontSize = 12.sp,
+            fontFamily = FontFamily.Monospace
+        )
     }
 }

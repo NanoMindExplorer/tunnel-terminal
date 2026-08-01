@@ -195,6 +195,11 @@ class MarkerExecutor {
         var lastOutputLen = outputBefore.length
         var lastChangeTime = startTime
         var outputAfter = outputBefore
+        /* v8.6.0 fix (H3): Adaptive poll delay — exponential backoff saat output stabil.
+         * Sebelumnya: fixed delay(25) = 12,000 polls untuk apt install 5 menit.
+         * Sekarang: start 25ms, double saat output tidak berubah (cap 500ms).
+         * Reset ke 25ms saat output berubah lagi. Saves ~90% CPU untuk long commands. */
+        var pollDelayMs = 25L
 
         while (System.currentTimeMillis() - startTime < maxTimeoutMs) {
             /* Wave-3: Abort early if session died (no point waiting for marker). */
@@ -203,8 +208,7 @@ class MarkerExecutor {
                 Log.w(TAG, "Session died while waiting for marker $markerIdCounter (cmd: $command)")
                 return@withContext ExecutionOutcome.TimedOut(partialOutput)
             }
-            /* Phase 40 fix (M2): poll delay 25ms — cukup responsif tanpa CPU waste. */
-            delay(25)
+            delay(pollDelayMs)
             outputAfter = session.getCleanOutput()
 
             // Phase 46 (Pilar 1a): Pakai computeNewOutput helper (fix roll-over bug)
@@ -236,7 +240,15 @@ class MarkerExecutor {
             if (outputAfter.length != lastOutputLen) {
                 lastOutputLen = outputAfter.length
                 lastChangeTime = System.currentTimeMillis()
-            } else if (System.currentTimeMillis() - lastChangeTime > idleTimeoutMs) {
+                /* v8.6.0 fix (H3): Output berubah → reset poll delay ke 25ms
+                 * untuk responsif saat output aktif (apt sedang print progress). */
+                pollDelayMs = 25L
+            } else {
+                /* v8.6.0 fix (H3): Output stabil → exponential backoff (cap 500ms).
+                 * Saves CPU saat command butuh waktu lama tanpa output (e.g. compile). */
+                pollDelayMs = (pollDelayMs * 2).coerceAtMost(500L)
+            }
+            if (System.currentTimeMillis() - lastChangeTime > idleTimeoutMs) {
                 // Idle > idleTimeoutMs → kemungkinan menunggu input interaktif
                 val elapsedMs = System.currentTimeMillis() - startTime
                 val partialOutput = stripMarker(computeNewOutput(outputBefore, outputAfter))

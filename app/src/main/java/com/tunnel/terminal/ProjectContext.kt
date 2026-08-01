@@ -29,6 +29,30 @@ class ProjectContext(private val context: Context) {
     }
 
     /**
+     * v8.6.0 fix (H5): Optional git status provider lambda.
+     * MainActivity sets ini ke lambda yang calls MarkerExecutor.executeWithMarker()
+     * dengan active session untuk run `git status --porcelain`.
+     *
+     * Sebelumnya: detectGitState() hanya baca .git/HEAD untuk branch name.
+     * Modified/untracked/staged count TIDAK pernah terisi (acknowledged TODO).
+     * Sekarang: lambda provider supaya AI dapat real git status di Ubuntu tab.
+     *
+     * Cache 30 detik untuk avoid repeated PTY round-trips.
+     */
+    @Volatile
+    private var gitStatusProvider: (() -> String?)? = null
+    @Volatile
+    private var cachedGitStatus: String? = null
+    @Volatile
+    private var cachedGitStatusTime: Long = 0
+    private val GIT_STATUS_CACHE_MS = 30_000L  // 30 seconds
+
+    fun setGitStatusProvider(provider: (() -> String?)?) {
+        gitStatusProvider = provider
+        cachedGitStatus = null  // invalidate cache
+    }
+
+    /**
      * Build project context string untuk AI system prompt.
      * @param workspaceRoot Root direktori project (dari ToolExecutor.getWorkspaceRoot())
      * @param sessionType active terminal session type (local/ssh/ubuntu) for git hints
@@ -148,13 +172,47 @@ class ProjectContext(private val context: Context) {
             Log.w(TAG, "Gagal baca git log: ${e.message}")
         }
 
-        sb.append(
-            when (sessionType) {
-                "ubuntu" -> "Status: run `git status --porcelain` in Ubuntu tab for full dirty list\n"
-                "ssh" -> "Status: run `git status` on remote for dirty files\n"
-                else -> "Status: (no system git on Android shell — use Ubuntu tab or remote)\n"
+        /* v8.6.0 fix (H5): Coba get real git status via provider (MarkerExecutor).
+         * Provider di-set oleh MainActivity ke lambda yang calls executeWithMarker
+         * dengan active session. Cache 30 detik untuk avoid repeated PTY calls.
+         * Jika provider tidak tersedia (local Android shell), fallback ke hint. */
+        val provider = gitStatusProvider
+        if (provider != null) {
+            val now = System.currentTimeMillis()
+            if (cachedGitStatus != null && (now - cachedGitStatusTime) < GIT_STATUS_CACHE_MS) {
+                sb.append(cachedGitStatus)
+            } else {
+                try {
+                    val statusOutput = provider()
+                    if (statusOutput != null && statusOutput.isNotBlank()) {
+                        val lines = statusOutput.trim().lines().filter { it.isNotBlank() }
+                        val modified = lines.count { it.startsWith(" M") || it.startsWith("M ") }
+                        val untracked = lines.count { it.startsWith("??") }
+                        val staged = lines.count { it.startsWith("A ") || it.startsWith("M  ") }
+                        val statusLine = "Modified: $modified, Untracked: $untracked, Staged: $staged\n"
+                        sb.append(statusLine)
+                        cachedGitStatus = statusLine
+                        cachedGitStatusTime = now
+                    } else {
+                        val cleanLine = "Status: clean (no modified files)\n"
+                        sb.append(cleanLine)
+                        cachedGitStatus = cleanLine
+                        cachedGitStatusTime = now
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "Git status provider failed: ${e.message}")
+                    sb.append("Status: (git status unavailable: ${e.message?.take(50)})\n")
+                }
             }
-        )
+        } else {
+            sb.append(
+                when (sessionType) {
+                    "ubuntu" -> "Status: run `git status --porcelain` in Ubuntu tab for full dirty list\n"
+                    "ssh" -> "Status: run `git status` on remote for dirty files\n"
+                    else -> "Status: (no system git on Android shell — use Ubuntu tab or remote)\n"
+                }
+            )
+        }
 
         return sb.toString()
     }

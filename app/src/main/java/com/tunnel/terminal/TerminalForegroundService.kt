@@ -26,7 +26,18 @@ class TerminalForegroundService : Service() {
         const val CHANNEL_ID = "TunnelTerminalChannel"
         const val NOTIFICATION_ID = 1
         const val ACTION_STOP = "com.tunnel.terminal.STOP_SERVICE"
+        const val ACTION_UPDATE_SESSIONS = "com.tunnel.terminal.UPDATE_SESSIONS"
+        private const val EXTRA_SESSION_COUNT = "session_count"
+        private const val EXTRA_SESSION_LABELS = "session_labels"
     }
+
+    /* v8.6.0 fix (M9): Track session labels untuk per-session notification.
+     * Sebelumnya: notification text static "Sesi terminal berjalan di latar belakang".
+     * Sekarang: "3 sessions: local, SSH user@host, Ubuntu" — user tahu apa yang aktif. */
+    @Volatile
+    private var sessionCount: Int = 0
+    @Volatile
+    private var sessionLabels: List<String> = emptyList()
 
     override fun onCreate() {
         super.onCreate()
@@ -58,15 +69,37 @@ class TerminalForegroundService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
+        /* v8.6.0 fix (M9): Per-session notification text.
+         * 1 session: "1 session: local"
+         * 3 sessions: "3 sessions: local, SSH user@host, Ubuntu" */
+        val contentText = if (sessionLabels.isNotEmpty()) {
+            if (sessionLabels.size == 1) {
+                "1 session: ${sessionLabels[0]}"
+            } else {
+                "${sessionLabels.size} sessions: ${sessionLabels.joinToString(", ")}"
+            }
+        } else {
+            "Sesi terminal berjalan di latar belakang"
+        }
+
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("Tunnel Terminal Aktif")
-            .setContentText("Sesi terminal berjalan di latar belakang")
+            .setContentText(contentText)
             .setSmallIcon(android.R.drawable.ic_dialog_info)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setOngoing(true)
             .setContentIntent(openPi)
             .addAction(android.R.drawable.ic_menu_close_clear_cancel, "Stop", stopPi)
             .build()
+    }
+
+    /** v8.6.0 fix (M9): Update notification dengan session labels terbaru. */
+    fun updateSessions(count: Int, labels: List<String>) {
+        sessionCount = count
+        sessionLabels = labels.take(5)  // cap di 5 supaya notifikasi tidak terlalu panjang
+        val notification = buildNotification()
+        val manager = getSystemService(NotificationManager::class.java)
+        manager?.notify(NOTIFICATION_ID, notification)
     }
 
     private fun createNotificationChannel() {
@@ -85,10 +118,18 @@ class TerminalForegroundService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent?.action == ACTION_STOP) {
-            stopForeground(STOP_FOREGROUND_REMOVE)
-            stopSelf()
-            return START_NOT_STICKY
+        when (intent?.action) {
+            ACTION_STOP -> {
+                stopForeground(STOP_FOREGROUND_REMOVE)
+                stopSelf()
+                return START_NOT_STICKY
+            }
+            ACTION_UPDATE_SESSIONS -> {
+                /* v8.6.0 fix (M9): Update notification dengan session info terbaru. */
+                val count = intent.getIntExtra(EXTRA_SESSION_COUNT, 0)
+                val labels = intent.getStringArrayListExtra(EXTRA_SESSION_LABELS) ?: arrayListOf()
+                updateSessions(count, labels)
+            }
         }
         return START_STICKY
     }

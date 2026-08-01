@@ -102,31 +102,13 @@ class SshShellExecutor(
     private val _screenDirty = MutableStateFlow(0)
     override val screenDirty: StateFlow<Int> = _screenDirty.asStateFlow()
 
-    /** Wave-20: ~30fps throttle + trailing edge (same as PtySessionBase). */
-    @Volatile
-    private var lastScreenDirtyTime: Long = 0
-    private val pendingTrailingDirty = java.util.concurrent.atomic.AtomicBoolean(false)
-    private val dirtyHandler by lazy { android.os.Handler(android.os.Looper.getMainLooper()) }
-    private val trailingDirtyRunnable = Runnable {
-        if (pendingTrailingDirty.compareAndSet(true, false)) {
-            lastScreenDirtyTime = System.currentTimeMillis()
-            _screenDirty.value++
-        }
+    /** v8.6.0 fix (M1): Delegate throttle ke ScreenDirtyThrottle (shared dengan PtySessionBase). */
+    private val screenDirtyThrottle by lazy {
+        ScreenDirtyThrottle { _screenDirty.value++ }
     }
 
     override fun triggerScreenUpdate() {
-        val now = System.currentTimeMillis()
-        val elapsed = now - lastScreenDirtyTime
-        if (elapsed >= 33) {
-            pendingTrailingDirty.set(false)
-            dirtyHandler.removeCallbacks(trailingDirtyRunnable)
-            lastScreenDirtyTime = now
-            _screenDirty.value++
-        } else {
-            pendingTrailingDirty.set(true)
-            dirtyHandler.removeCallbacks(trailingDirtyRunnable)
-            dirtyHandler.postDelayed(trailingDirtyRunnable, (33 - elapsed).coerceAtLeast(1))
-        }
+        screenDirtyThrottle.trigger()
     }
 
     private val _lastCommandOutput = MutableStateFlow("")
@@ -341,8 +323,9 @@ class SshShellExecutor(
                 emulator.process(text)
                 val outputStr = synchronized(outputLock) {
                     outputBuffer.append(text)
-                    if (outputBuffer.length > 16000) {
-                        outputBuffer = StringBuilder(outputBuffer.substring(outputBuffer.length - 16000))
+                    /* v8.6.0 fix (M2): Pakai AnsiUtils.OUTPUT_RING_CHARS (was hardcoded 16000). */
+                    if (outputBuffer.length > AnsiUtils.OUTPUT_RING_CHARS) {
+                        outputBuffer = StringBuilder(outputBuffer.substring(outputBuffer.length - AnsiUtils.OUTPUT_RING_CHARS))
                     }
                     outputBuffer.toString()
                 }
@@ -425,34 +408,16 @@ class SshShellExecutor(
      *
      * NOTE: SshShellExecutor tidak extend PtySessionBase (punya own outputLock
      * + outputBuffer), jadi tidak bisa pakai super.getCleanOutput(). Tapi
-     * logic-nya identik — move ke companion helper atau extension function
-     * di Phase v9.0.0 refactor. Untuk sekarang, minimal fix truncation marker. */
+     * v8.6.0 fix (M2): Delegate ke AnsiUtils.stripAnsiAndTruncate — hapus duplikasi. */
     override fun getCleanOutput(): String {
         val raw = synchronized(outputLock) { outputBuffer.toString() }
-        val sb = StringBuilder(raw.length)
-        val regex = Regex("\u001B\\[[;?\\d]*[A-Za-z]|\u001B\\][^\\u0007]*\\u0007|\u001B\\[[0-9;]*[A-Za-z]")
-        var lastEnd = 0
-        regex.findAll(raw).forEach { m ->
-            sb.append(raw, lastEnd, m.range.first)
-            lastEnd = m.range.last + 1
-        }
-        sb.append(raw, lastEnd, raw.length)
-        /* v8.5.0 fix (H2): Truncation marker supaya AI tahu output di-cut. */
-        val cleaned = sb.toString().trim()
-        val maxChars = 8000  // Match PtySessionBase.CLEAN_OUTPUT_CHARS
-        return if (cleaned.length > maxChars) {
-            cleaned.take(maxChars) +
-            "\n... (truncated, ${cleaned.length - maxChars} more chars)"
-        } else {
-            cleaned
-        }
+        return AnsiUtils.stripAnsiAndTruncate(raw)
     }
 
     override fun destroy() {
         if (!isAlive && session == null && channel == null && readThread == null) return
         isAlive = false
-        pendingTrailingDirty.set(false)
-        try { dirtyHandler.removeCallbacks(trailingDirtyRunnable) } catch (_: Exception) {}
+        screenDirtyThrottle.cancel()
 
         /* Phase 58: Disconnect SFTP channel too. */
         try { sftpChannel?.disconnect() } catch (_: Exception) {}

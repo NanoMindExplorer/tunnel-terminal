@@ -27,10 +27,31 @@ class CheckpointManager(private val context: Context) {
     companion object {
         private const val TAG = "CheckpointManager"
         private const val MAX_CHECKPOINTS = 50  // batas supaya storage tidak membengkak
+        private const val SESSION_MAX_AGE_MS = 7L * 24 * 60 * 60 * 1000  // 7 hari
     }
 
     private val checkpointRoot = File(context.filesDir, "checkpoints")
     private var currentTurn = 0
+
+    init {
+        /* v8.6.0 fix (M4): Garbage collect old session dirs on init.
+         * Sebelumnya: session_* dirs accumulate forever across app restarts
+         * karena in-memory list di-clear pada process death, tapi on-disk
+         * dirs tidak pernah di-clean. Sekarang: prune dirs older than 7 days. */
+        try {
+            if (checkpointRoot.isDirectory) {
+                val cutoff = System.currentTimeMillis() - SESSION_MAX_AGE_MS
+                checkpointRoot.listFiles()?.forEach { sessionDir ->
+                    try {
+                        if (sessionDir.isDirectory && sessionDir.lastModified() < cutoff) {
+                            sessionDir.deleteRecursively()
+                            Log.i(TAG, "GC: old checkpoint session dir deleted: ${sessionDir.name}")
+                        }
+                    } catch (_: Exception) {}
+                }
+            }
+        } catch (_: Exception) {}
+    }
 
     data class Checkpoint(
         val turn: Int,

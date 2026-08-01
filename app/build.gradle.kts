@@ -6,12 +6,12 @@ plugins {
 
 android {
     namespace = "com.tunnel.terminal"
-    compileSdk = 34
+    compileSdk = 35  // v8.6.0 fix (L6): Android 15 (SDK 35) — 16KB page size, edge-to-edge
 
     defaultConfig {
         applicationId = "com.tunnel.terminal"
         minSdk = 24
-        targetSdk = 34
+        targetSdk = 35  // v8.6.0 fix (L6): Android 15
         // Phase 41: Security & Privacy fixes (CRIT-01..04, LOW-02)
         // Phase 45: Realtime audit fixes (Bug #1 shell cwd, Bug #2 pseudo-cmd stick, Bug #3 proot readiness)
         // Phase 46: AI↔Ubuntu integration (4 pillars: MarkerExecutor fix, environmentDescription, non-interactive apt, AgentWorkflow unify)
@@ -27,8 +27,12 @@ android {
         /* v8.5.0: Stabilization release — NetworkPolicy centralization, SSH host key
          * CompletableDeferred, Ubuntu early-death detector removal, output truncation
          * marker, configurable toolLoopDepth, CI test workflow, Gradle cache. */
-        versionCode = 68
-        versionName = "8.5.0"
+        /* v8.6.0: Performance & UX — MarkerExecutor adaptive delay, git status via
+         * provider, ScreenDirtyThrottle + AnsiUtils DRY, CheckpointManager GC,
+         * per-session notification, compileSdk 35, EncryptedSharedPreferences cache,
+         * AI thinking indicator, split pane resize handle. */
+        versionCode = 69
+        versionName = "8.6.0"
 
         /* Phase 40 fix (M10): Restrict ke arm64-v8a saja — proot binary di assets
          * hanya arm64. Tanpa abiFilters, APK universal akan crash di device x86_64

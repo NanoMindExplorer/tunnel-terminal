@@ -55,31 +55,17 @@ abstract class PtySessionBase(
      * OLD BUG: updates inside the 33ms window were dropped entirely — if the last
      * PTY chunk arrived mid-window, the final prompt/cursor never painted until
      * another write happened (felt like "missing last line" / frozen prompt).
+     *
+     * v8.6.0 fix (M1): Extract throttle logic ke ScreenDirtyThrottle class.
+     * Sebelumnya: ~25 lines duplikasi verbatim dengan SshShellExecutor.
+     * Sekarang: delegate ke shared ScreenDirtyThrottle instance.
      */
-    @Volatile
-    private var lastScreenDirtyTime: Long = 0
-    private val pendingTrailingDirty = AtomicBoolean(false)
-    private val dirtyHandler by lazy { android.os.Handler(android.os.Looper.getMainLooper()) }
-    private val trailingDirtyRunnable = Runnable {
-        if (pendingTrailingDirty.compareAndSet(true, false)) {
-            lastScreenDirtyTime = System.currentTimeMillis()
-            _screenDirty.value++
-        }
+    private val screenDirtyThrottle by lazy {
+        ScreenDirtyThrottle { _screenDirty.value++ }
     }
 
     override fun triggerScreenUpdate() {
-        val now = System.currentTimeMillis()
-        val elapsed = now - lastScreenDirtyTime
-        if (elapsed >= 33) {
-            pendingTrailingDirty.set(false)
-            dirtyHandler.removeCallbacks(trailingDirtyRunnable)
-            lastScreenDirtyTime = now
-            _screenDirty.value++
-        } else {
-            pendingTrailingDirty.set(true)
-            dirtyHandler.removeCallbacks(trailingDirtyRunnable)
-            dirtyHandler.postDelayed(trailingDirtyRunnable, (33 - elapsed).coerceAtLeast(1))
-        }
+        screenDirtyThrottle.trigger()
     }
 
     private val _lastCommandOutput = MutableStateFlow("")
@@ -224,32 +210,17 @@ abstract class PtySessionBase(
     }
 
     override fun getCleanOutput(): String {
+        /* v8.6.0 fix (M2): Delegate ke AnsiUtils.stripAnsiAndTruncate.
+         * Sebelumnya: 12 lines duplikasi regex + truncation logic dengan SshShellExecutor.
+         * Sekarang: single call ke shared utility. */
         val raw = synchronized(outputLock) { outputBuffer.toString() }
-        val sb = StringBuilder(raw.length)
-        val regex = Regex("\u001B\\[[;?\\d]*[A-Za-z]|\u001B\\][^\\u0007]*\\u0007|\u001B\\[[0-9;]*[A-Za-z]")
-        var lastEnd = 0
-        regex.findAll(raw).forEach { m ->
-            sb.append(raw, lastEnd, m.range.first)
-            lastEnd = m.range.last + 1
-        }
-        sb.append(raw, lastEnd, raw.length)
-        /* v8.5.0 fix (H2): Append truncation marker supaya AI tahu output di-cut.
-         * Sebelumnya: .take(CLEAN_OUTPUT_CHARS) silent truncation — AI bisa mislead
-         * kalau output ter-cut di tengah baris. Sekarang: marker eksplisit. */
-        val cleaned = sb.toString().trim()
-        return if (cleaned.length > CLEAN_OUTPUT_CHARS) {
-            cleaned.take(CLEAN_OUTPUT_CHARS) +
-            "\n... (truncated, ${cleaned.length - CLEAN_OUTPUT_CHARS} more chars)"
-        } else {
-            cleaned
-        }
+        return AnsiUtils.stripAnsiAndTruncate(raw)
     }
 
     override fun destroy() {
         if (!isAlive && masterFd < 0 && childPid < 0 && readThread == null) return
         isAlive = false
-        pendingTrailingDirty.set(false)
-        try { dirtyHandler.removeCallbacks(trailingDirtyRunnable) } catch (_: Exception) {}
+        screenDirtyThrottle.cancel()
 
         try {
             if (fdClosed.compareAndSet(false, true)) {
@@ -297,7 +268,6 @@ abstract class PtySessionBase(
 
     companion object {
         private val globalIdCounter = AtomicInteger(0)
-        private const val OUTPUT_RING_CHARS = 16000
-        private const val CLEAN_OUTPUT_CHARS = 8000
+        /* v8.6.0 fix (M2): OUTPUT_RING_CHARS + CLEAN_OUTPUT_CHARS dipindah ke AnsiUtils. */
     }
 }

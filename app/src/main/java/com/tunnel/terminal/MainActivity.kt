@@ -208,6 +208,9 @@ class MainActivity : ComponentActivity() {
     private var splitMode by mutableStateOf(false)
     /** Phase 21: Second pane session ID (for split mode). */
     private var splitPaneId by mutableStateOf(0)
+    /** v8.6.0 fix (UX): Split pane resize ratio (0.1 to 0.9, default 0.5 = 50/50).
+     * User bisa drag divider untuk resize kedua pane. */
+    private var splitRatio by mutableStateOf(0.5f)
     /** Phase 22: Command palette (Ctrl+K) visibility. */
     private var showCommandPalette by mutableStateOf(false)
     /** Phase 22: Block mode (Warp-style block terminal) toggle. */
@@ -3328,7 +3331,8 @@ class MainActivity : ComponentActivity() {
                         if (splitExecutor != null) splitPaneId = splitExecutor.id
                         Row(modifier = Modifier.weight(1f)) {
                             /* Left pane: active terminal. */
-                            Box(modifier = Modifier.weight(1f)) {
+                            /* v8.6.0 fix (UX): Pakai splitRatio untuk resizable panes. */
+                            Box(modifier = Modifier.weight(splitRatio)) {
                                 val focusRequester = remember { FocusRequester() }
                                 val keyboardController = LocalSoftwareKeyboardController.current
                                 /* Wave-13/20: On tab change restore IME from that tab's buffer. */
@@ -3370,11 +3374,35 @@ class MainActivity : ComponentActivity() {
                                     onFontSizeChange = { applyTerminalFontSize(it) }
                                 )
                             }
-                            /* Divider. */
-                            Box(modifier = Modifier.width(2.dp).fillMaxHeight().background(currentTheme.uiSurface))
+                            /* v8.6.0 fix (UX): Draggable divider untuk resize split pane.
+                             * Sebelumnya: static 2.dp Box, no drag. Sekarang: 6.dp touch target
+                             * dengan draggable modifier, clamped ke 0.1-0.9 range. */
+                            val density = LocalDensity.current
+                            Box(
+                                modifier = Modifier
+                                    .width(6.dp)
+                                    .fillMaxHeight()
+                                    .background(currentTheme.uiSurface)
+                                    .pointerInput(Unit) {
+                                        detectDragGestures { change, dragAmount ->
+                                            change.consume()
+                                            val widthPx = size.width.toFloat()
+                                            if (widthPx > 0) {
+                                                val delta = dragAmount.x / widthPx
+                                                splitRatio = (splitRatio + delta)
+                                                    .coerceIn(0.1f, 0.9f)
+                                            }
+                                        }
+                                    }
+                                    .pointerInput(Unit) {
+                                        detectTapGestures(
+                                            onDoubleTap = { splitRatio = 0.5f }  // double-tap = reset 50/50
+                                        )
+                                    }
+                            )
                             /* Right pane: second terminal — Wave-13: tap focuses + becomes active
                              * (left pane always shows activeExecutor after swap). */
-                            Box(modifier = Modifier.weight(1f)) {
+                            Box(modifier = Modifier.weight(1f - splitRatio)) {
                                 splitExecutor?.let { exec ->
                                     val sd by exec.screenDirty.collectAsState()
                                     TerminalScreenView(

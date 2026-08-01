@@ -40,20 +40,27 @@ object SecureStorage {
         private set
 
     /**
-     * Buat MasterKey untuk EncryptedSharedPreferences.
-     * Key disimpan di Android Keystore (hardware-backed di device yang support).
+     * v8.6.0 fix (L10): Cache MasterKey + EncryptedSharedPreferences per fileName.
+     * Sebelumnya: setiap getAIPrefs/getSshCredsPrefs/getMcpKeysPrefs call re-create
+     * MasterKey + EncryptedSharedPreferences (heavy: ~5-10ms each, involves Keystore
+     * + AES key unwrap). Sekarang: cache di ConcurrentHashMap, lazy init sekali.
      */
+    private val prefsCache = java.util.concurrent.ConcurrentHashMap<String, SharedPreferences>()
+    @Volatile
+    private var cachedMasterKey: MasterKey? = null
+
     private fun getMasterKey(context: Context): MasterKey {
-        return MasterKey.Builder(context)
+        cachedMasterKey?.let { return it }
+        val key = MasterKey.Builder(context)
             .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
             .build()
+        cachedMasterKey = key
+        return key
     }
 
-    /**
-     * Buat instance EncryptedSharedPreferences.
-     * Wave-2: fail-closed — throw SecurityException instead of plaintext fallback.
-     */
     fun getEncryptedPrefs(context: Context, fileName: String): SharedPreferences {
+        /* v8.6.0 fix (L10): Return cached instance jika sudah dibuat. */
+        prefsCache[fileName]?.let { return it }
         return try {
             val prefs = EncryptedSharedPreferences.create(
                 context,
@@ -64,6 +71,7 @@ object SecureStorage {
             )
             isEncryptionAvailable = true
             lastEncryptionError = null
+            prefsCache[fileName] = prefs
             prefs
         } catch (e: Exception) {
             isEncryptionAvailable = false
