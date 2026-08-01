@@ -36,7 +36,7 @@ class NetworkPolicyTest {
         assertTrue(NetworkPolicy.isLocalOrPrivate(URL("http://0.0.0.0:8080")))
     }
 
-    @Test fun `RFC1918 10.x is local`() {
+    @Test fun `RFC1918 10 range is local`() {
         assertTrue(NetworkPolicy.isLocalOrPrivate(URL("http://10.1.2.3:11434")))
     }
 

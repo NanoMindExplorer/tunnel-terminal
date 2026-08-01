@@ -68,7 +68,7 @@ class TerminalWave20Test {
         val elapsed = now - last
         val delay = (33 - elapsed).coerceAtLeast(1)
         assertEquals(23L, delay)
-        assertTrue((33 - 40).coerceAtLeast(1) == 1L)
+        assertTrue((33 - 40).coerceAtLeast(1) == 1)
     }
 
     @Test
