@@ -2573,15 +2573,8 @@ class MainActivity : ComponentActivity() {
                  *
                  * Wave-20: `find` is NO LONGER local — use `tt-find` so real shell find works.
                  */
-                val isLocalOnly = cmd == "help" || cmd == "clear" || cmd == "setup-storage" ||
-                    cmd == "storage-status" || cmd == "storage-reset" ||
-                    cmd == "storage-grant-all" ||
-                    cmd == "storage-ls" || cmd.startsWith("storage-ls ") ||
-                    cmd == "storage-put" || cmd.startsWith("storage-put ") ||
-                    cmd == "storage-get" || cmd.startsWith("storage-get ") ||
-                    cmd == "storage-save-download" || cmd.startsWith("storage-save-download ") ||
-                    cmd == "storage-write" || cmd.startsWith("storage-write ") ||
-                    cmd == "storage-rm" || cmd.startsWith("storage-rm ") ||
+                val isLocalOnly = cmd == "help" || cmd == "clear" ||
+                    StorageCommands.isStorageCommand(cmd) ||
                     cmd == "ssh-reset-hostkeys" || cmd == "ssh-list-hostkeys" ||
                     cmd == "system-info" ||
                     cmd == "history" || cmd == "history-clear" ||
@@ -2635,154 +2628,22 @@ class MainActivity : ComponentActivity() {
                             blockManager.completeRunning("(cleared)", CommandBlock.BlockStatus.SUCCESS)
                         }
                     }
-                    cmd == "setup-storage" -> {
-                        activeExecutor.emulator.process(
-                            "\n\u001B[36m[Setup Storage] Membuka picker folder perangkat...\u001B[0m\n" +
-                            "\u001B[33mDisarankan pilih folder Download (atau Documents).\u001B[0m\n" +
-                            "\u001B[33mSetelah grant, gunakan storage-ls / storage-put / storage-save-download.\u001B[0m\n"
-                        )
-                        activeExecutor.triggerScreenUpdate()
-                        storageLauncher.launch(storageManager.createOpenTreeIntent())
-                    }
-                    cmd == "storage-status" -> {
-                        val report = storageManager.statusReport()
-                        activeExecutor.emulator.process("\n$report\n")
-                        activeExecutor.triggerScreenUpdate()
-                    }
-                    cmd == "storage-reset" -> {
-                        storageManager.clearSetup()
-                        activeExecutor.emulator.process(
-                            "\n\u001B[33m[Storage] Setup direset. Ketik 'setup-storage' untuk pilih folder lagi.\u001B[0m\n"
-                        )
-                        activeExecutor.triggerScreenUpdate()
-                    }
-                    cmd == "storage-grant-all" -> {
-                        activeExecutor.emulator.process(
-                            "\n\u001B[36m[Storage] Membuka pengaturan \"Akses semua file\"...\u001B[0m\n" +
-                            "\u001B[33mIzinkan Tunnel Terminal, lalu kembali ke app.\u001B[0m\n" +
-                            "\u001B[33mIni opsional — storage-* (SAF) tetap bekerja tanpa ini.\u001B[0m\n"
-                        )
-                        activeExecutor.triggerScreenUpdate()
-                        manageAllFilesLauncher.launch(storageManager.createManageAllFilesIntent())
-                    }
-                    cmd == "storage-ls" || cmd.startsWith("storage-ls ") -> {
-                        val sub = cmd.removePrefix("storage-ls").trim()
-                        val result = storageManager.listRelative(sub)
-                        val out = result.fold(
-                            onSuccess = { rows ->
-                                if (rows.isEmpty()) "(kosong) ${storageManager.getDisplayName()}/${sub.trim('/')}"
-                                else rows.joinToString("\n")
+                    StorageCommands.isStorageCommand(cmd) -> {
+                        StorageCommands.handle(
+                            cmd = cmd,
+                            storage = storageManager,
+                            resolveLocalFile = { resolveLocalStorageFile(it) },
+                            print = { msg ->
+                                activeExecutor.emulator.process(msg)
+                                activeExecutor.triggerScreenUpdate()
                             },
-                            onFailure = { "Error: ${it.message}" }
+                            requestTreePicker = {
+                                storageLauncher.launch(storageManager.createOpenTreeIntent())
+                            },
+                            requestAllFiles = {
+                                manageAllFilesLauncher.launch(storageManager.createManageAllFilesIntent())
+                            }
                         )
-                        activeExecutor.emulator.process("\n\u001B[36m$out\u001B[0m\n")
-                        activeExecutor.triggerScreenUpdate()
-                    }
-                    cmd == "storage-put" || cmd.startsWith("storage-put ") -> {
-                        val rest = if (cmd == "storage-put") "" else cmd.removePrefix("storage-put ").trim()
-                        val parts = rest.split(Regex("\\s+"), limit = 2).filter { it.isNotEmpty() }
-                        val srcName = parts.getOrNull(0).orEmpty()
-                        val dest = parts.getOrNull(1)
-                        if (srcName.isBlank()) {
-                            activeExecutor.emulator.process(
-                                "\n\u001B[31mUsage: storage-put <file-workspace|path> [nama-di-folder-SAF]\u001B[0m\n"
-                            )
-                        } else {
-                            val local = resolveLocalStorageFile(srcName)
-                            val r = if (local != null) {
-                                storageManager.putLocalFile(local, dest)
-                            } else {
-                                Result.failure(IllegalArgumentException("File tidak ditemukan: $srcName (coba path di workspace)"))
-                            }
-                            val msg = r.fold(
-                                onSuccess = { "\u001B[32m$it\u001B[0m" },
-                                onFailure = { "\u001B[31mError: ${it.message}\u001B[0m" }
-                            )
-                            activeExecutor.emulator.process("\n$msg\n")
-                        }
-                        activeExecutor.triggerScreenUpdate()
-                    }
-                    cmd == "storage-get" || cmd.startsWith("storage-get ") -> {
-                        val rest = if (cmd == "storage-get") "" else cmd.removePrefix("storage-get ").trim()
-                        val parts = rest.split(Regex("\\s+"), limit = 2).filter { it.isNotEmpty() }
-                        val remote = parts.getOrNull(0).orEmpty()
-                        val localName = parts.getOrNull(1) ?: File(remote).name
-                        if (remote.isBlank()) {
-                            activeExecutor.emulator.process(
-                                "\n\u001B[31mUsage: storage-get <file-di-folder-SAF> [nama-lokal-di-workspace]\u001B[0m\n"
-                            )
-                        } else {
-                            val dest = File(storageManager.workspaceDir, localName)
-                            val r = storageManager.getToLocalFile(remote, dest)
-                            val msg = r.fold(
-                                onSuccess = { "\u001B[32m$it\u001B[0m" },
-                                onFailure = { "\u001B[31mError: ${it.message}\u001B[0m" }
-                            )
-                            activeExecutor.emulator.process("\n$msg\n")
-                        }
-                        activeExecutor.triggerScreenUpdate()
-                    }
-                    cmd == "storage-save-download" || cmd.startsWith("storage-save-download ") -> {
-                        val rest = if (cmd == "storage-save-download") "" else cmd.removePrefix("storage-save-download ").trim()
-                        val parts = rest.split(Regex("\\s+"), limit = 2).filter { it.isNotEmpty() }
-                        val srcName = parts.getOrNull(0).orEmpty()
-                        val displayName = parts.getOrNull(1)
-                        if (srcName.isBlank()) {
-                            activeExecutor.emulator.process(
-                                "\n\u001B[31mUsage: storage-save-download <file-workspace> [nama-di-Download]\u001B[0m\n" +
-                                    "\u001B[33mMenyimpan ke Download publik (MediaStore) — terlihat di app Files/Downloads.\u001B[0m\n"
-                            )
-                        } else {
-                            val local = resolveLocalStorageFile(srcName)
-                            val r = if (local != null) {
-                                storageManager.saveLocalFileToPublicDownloads(local, displayName)
-                            } else {
-                                Result.failure(IllegalArgumentException("File tidak ditemukan: $srcName"))
-                            }
-                            val msg = r.fold(
-                                onSuccess = { "\u001B[32m$it\u001B[0m" },
-                                onFailure = { "\u001B[31mError: ${it.message}\u001B[0m" }
-                            )
-                            activeExecutor.emulator.process("\n$msg\n")
-                        }
-                        activeExecutor.triggerScreenUpdate()
-                    }
-                    cmd == "storage-write" || cmd.startsWith("storage-write ") -> {
-                        /* storage-write <rel-path> <text...> */
-                        val rest = if (cmd == "storage-write") "" else cmd.removePrefix("storage-write ").trim()
-                        val sp = rest.indexOf(' ')
-                        if (sp <= 0) {
-                            activeExecutor.emulator.process(
-                                "\n\u001B[31mUsage: storage-write <path-relatif-SAF> <teks>\u001B[0m\n" +
-                                    "\u001B[33mContoh: storage-write catatan.txt Halo dari Tunnel\u001B[0m\n"
-                            )
-                        } else {
-                            val rel = rest.substring(0, sp).trim()
-                            val text = rest.substring(sp + 1)
-                            val r = storageManager.writeTextRelative(rel, text)
-                            val msg = r.fold(
-                                onSuccess = { "\u001B[32m$it\u001B[0m" },
-                                onFailure = { "\u001B[31mError: ${it.message}\u001B[0m" }
-                            )
-                            activeExecutor.emulator.process("\n$msg\n")
-                        }
-                        activeExecutor.triggerScreenUpdate()
-                    }
-                    cmd == "storage-rm" || cmd.startsWith("storage-rm ") -> {
-                        val rel = if (cmd == "storage-rm") "" else cmd.removePrefix("storage-rm ").trim()
-                        if (rel.isBlank()) {
-                            activeExecutor.emulator.process(
-                                "\n\u001B[31mUsage: storage-rm <path-relatif-SAF>\u001B[0m\n"
-                            )
-                        } else {
-                            val r = storageManager.deleteRelative(rel)
-                            val msg = r.fold(
-                                onSuccess = { "\u001B[32m$it\u001B[0m" },
-                                onFailure = { "\u001B[31mError: ${it.message}\u001B[0m" }
-                            )
-                            activeExecutor.emulator.process("\n$msg\n")
-                        }
-                        activeExecutor.triggerScreenUpdate()
                     }
                     cmd == "ssh-reset-hostkeys" -> {
                         /* BUG-02: Reset SSH host key fingerprints (TOFU). */
@@ -2961,107 +2822,43 @@ class MainActivity : ComponentActivity() {
             }
 
             /**
-             * Wave-31 IME: Never send Ctrl+E on local Android sh (it is NOT readline —
-             * every keystroke was injecting 0x05 and/or mass-backspace rewrites that
-             * made "ls"/"cd" disappear). LCP append/backspace only; rewrite only after
-             * Home/← when cursor is mid-line.
+             * v9.4.0: Delegate to [TerminalInputController] (unit-testable).
              */
             fun applyImeValueChange(newValue: String) {
-                val lastInputValue = imeFieldLast
-                if (newValue == lastInputValue) {
-                    pinImeCaretToEnd()
-                    return
-                }
-
-                fun sendBackspace() {
-                    if (activeExecutor.currentCommandBuffer.isNotEmpty()) {
-                        activeExecutor.currentCommandBuffer =
-                            activeExecutor.currentCommandBuffer.dropLast(1)
-                    }
-                    activeExecutor.writeRaw("\u007F")
-                }
-
-                fun typePrintable(ch: Char) {
-                    val translated = handleChar(ch)
-                    activeExecutor.currentCommandBuffer += translated
-                    activeExecutor.writeRaw(translated)
-                }
-
-                val isReadlineSession =
-                    activeExecutor.sessionType == "ubuntu" || activeExecutor.sessionType == "ssh"
-
-                fun clearShellLineFromTracker() {
-                    /* Only Ctrl+E on bash/readline sessions — NOT local toybox sh. */
-                    if (isReadlineSession) {
-                        activeExecutor.writeRaw(5.toChar().toString())
-                    }
-                    val n = activeExecutor.currentCommandBuffer.length
-                    repeat(n) { activeExecutor.writeRaw("\u007F") }
-                    activeExecutor.currentCommandBuffer = ""
-                }
-
-                fun rewriteShellLine(desired: String) {
-                    clearShellLineFromTracker()
-                    if (desired.isNotEmpty()) {
-                        activeExecutor.writeRaw(desired)
-                    }
-                    activeExecutor.currentCommandBuffer = desired
-                    imeLineCursorAtEnd = true
-                }
-
-                /* Soft-repair tracker-only drift (do not touch PTY). */
-                if (activeExecutor.currentCommandBuffer != lastInputValue && imeLineCursorAtEnd) {
-                    val buf = activeExecutor.currentCommandBuffer
-                    if (lastInputValue.startsWith(buf) || buf.startsWith(lastInputValue) ||
-                        buf.isEmpty() || lastInputValue.isEmpty()
-                    ) {
-                        activeExecutor.currentCommandBuffer = lastInputValue
-                    }
-                }
-
-                val plan = TerminalImeDelta.plan(
-                    last = lastInputValue,
-                    newValue = newValue,
-                    commandBuffer = activeExecutor.currentCommandBuffer,
-                    cursorLikelyAtEnd = imeLineCursorAtEnd
+                val controller = TerminalInputController(
+                    sessionType = { activeExecutor.sessionType },
+                    getBuffer = { activeExecutor.currentCommandBuffer },
+                    setBuffer = { activeExecutor.currentCommandBuffer = it },
+                    writeRaw = { raw ->
+                        if (raw.length == 1 && !raw[0].isISOControl()) {
+                            val translated = handleChar(raw[0])
+                            /* Buffer already updated by controller with raw char; if Ctrl/Alt
+                             * rewrites the byte, keep buffer in sync with what was sent. */
+                            if (translated != raw) {
+                                val b = activeExecutor.currentCommandBuffer
+                                if (b.endsWith(raw)) {
+                                    activeExecutor.currentCommandBuffer = b.dropLast(1) + translated
+                                }
+                            }
+                            activeExecutor.writeRaw(translated)
+                        } else {
+                            activeExecutor.writeRaw(raw)
+                        }
+                    },
+                    isCursorAtEnd = { imeLineCursorAtEnd },
+                    setCursorAtEnd = { imeLineCursorAtEnd = it },
+                    getImeLast = { imeFieldLast },
+                    setImeLast = { imeFieldLast = it },
+                    pinIme = { t ->
+                        imeFieldLast = t
+                        imeFieldValue = TextFieldValue(t, selection = TextRange(t.length))
+                    },
+                    onEnterLine = { line -> processInput(line) },
+                    isEnterHandledByKey = { enterHandledByKeyEvent },
+                    clearEnterHandled = { enterHandledByKeyEvent = false }
                 )
-                if (plan.ignored) {
-                    syncImeLine(plan.syncTo)
-                    return
-                }
-
-                if (plan.containsEnter) {
-                    val line = newValue.replace("\r", "").replace("\n", "")
-                    if (plan.fullRewrite) {
-                        rewriteShellLine(line)
-                    } else if (activeExecutor.currentCommandBuffer != line) {
-                        /* Align buffer then Enter — chars already on shell via type path. */
-                        activeExecutor.currentCommandBuffer = line
-                    }
-                    if (!enterHandledByKeyEvent) {
-                        processInput(activeExecutor.currentCommandBuffer + "\n")
-                        activeExecutor.currentCommandBuffer = ""
-                    }
-                    enterHandledByKeyEvent = false
-                    clearImeLine()
-                    return
-                }
-
-                if (plan.fullRewrite) {
-                    rewriteShellLine(plan.syncTo)
-                    syncImeLine(plan.syncTo)
-                    return
-                }
-
-                /* LCP delta only — no Ctrl+E (breaks local sh). */
-                imeLineCursorAtEnd = true
-                repeat(plan.backspaces) { sendBackspace() }
-                for (ch in plan.typeChars) {
-                    if (ch == '\n' || ch == '\r') continue
-                    if (ch == '\u007F' || ch == '\b') sendBackspace()
-                    else typePrintable(ch)
-                }
-                syncImeLine(plan.syncTo)
+                controller.onImeTextChange(newValue)
+                pinImeCaretToEnd()
             }
 
             /* Wave-27: ASCII, no autocorrect/suggestions — fewer IME replace/shrink glitches.

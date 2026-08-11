@@ -243,7 +243,7 @@ class ProotBootstrap(private val context: Context) {
 
         // 8. marker then delete tarball
         markerFile.writeText(
-            "version=8.4.1\n" +
+            "version=9.4.0\n" +
                 "installedAt=${System.currentTimeMillis()}\n" +
                 "rootfs=${rootfsDir.absolutePath}\n" +
                 "source=$usedUrl\n"

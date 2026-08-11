@@ -1,9 +1,9 @@
 # Tunnel Terminal — Wiki
 
-**Versi:** 9.3.0 (Phase 6 — Performance & UX: MCP parallel, StringBuilder in-place, Ctrl+Tab, pendingBuffer 256, terminalContext takeLast 4000)
+**Versi:** 9.4.0 (Phase 6 — Performance & UX: MCP parallel, StringBuilder in-place, Ctrl+Tab, pendingBuffer 256, terminalContext takeLast 4000)
 **Repo:** https://github.com/NanoMindExplorer/tunnel-terminal
-**Release:** [v9.3.0](https://github.com/NanoMindExplorer/tunnel-terminal/releases/tag/v9.3.0)
-**Stats:** 68 Kotlin sources · NDK C++ · 27 unit test files · versionCode 73 · 210 commits
+**Release:** [v9.4.0](https://github.com/NanoMindExplorer/tunnel-terminal/releases/tag/v9.4.0)
+**Stats:** 68 Kotlin sources · NDK C++ · 34 unit test files · versionCode 74 · 210 commits
 
 ---
 
@@ -748,7 +748,7 @@ Keep rules untuk:
 | **Wave 24** | **AI chat paste** (v8.3.3) — paste clipboard di chat/agent, multi-line, snippet `>_` terminal | +200/-30 |
 | **Wave 25** | **AI Skills** (v8.5.0) — SkillManager CRUD, scope always/chat/agent/local/ubuntu/ssh, keyword trigger, inject AIAgent + AgentTaskRunner | +700/-50 |
 
-**Total: 68 Kotlin sources + NDK C++ + 27 unit test files · version 9.3.0 (versionCode 73) · 210 commits**
+**Total: 68 Kotlin sources + NDK C++ + 34 unit test files · version 9.4.0 (versionCode 74) · 210 commits**
 
 ---
 
@@ -798,11 +798,11 @@ Keep rules untuk:
 
 ## Catatan Penutup
 
-Tunnel Terminal **v9.3.0 (Phase 6)** melanjutkan Phase 1–60 + Wave 1–25 + v8.5.0–v9.3.0: terminal AI-native dengan **AI Skills**, **side panel Copilot**, storage perangkat (SAF/Download), Ubuntu proot yang andal, path AI sinkron dengan guest Linux, paste chat, seleksi text akurat, **27 unit test files**, NetworkPolicy centralization, SSH CompletableDeferred, MCP parallel discovery, Ctrl+Tab/Ctrl+N keyboard shortcuts, dan **49 fixes total** across 6 improvement phases (versionCode **73**).
+Tunnel Terminal **v9.4.0 (Phase 6)** melanjutkan Phase 1–60 + Wave 1–25 + v8.5.0–v9.4.0: terminal AI-native dengan **AI Skills**, **side panel Copilot**, storage perangkat (SAF/Download), Ubuntu proot yang andal, path AI sinkron dengan guest Linux, paste chat, seleksi text akurat, **34 unit test files**, NetworkPolicy centralization, SSH CompletableDeferred, MCP parallel discovery, Ctrl+Tab/Ctrl+N keyboard shortcuts, dan **49 fixes total** across 6 improvement phases (versionCode **73**).
 
 Codebase telah melalui multiple comprehensive audit plus 25 waves polish (stabilitas, security, UX terminal, AI, Ubuntu, storage).
 
 **Status backlog:** B-1 / B-4 / B-5 / C-2 / C-5 ✅ · Wave 19–25 (storage, selection, side panel, Ubuntu, paste, skills) ✅.
 
 Untuk panduan cara penggunaan, lihat [USER_GUIDE.md](USER_GUIDE.md).  
-Untuk release notes + APK, lihat [GitHub Release v9.3.0](https://github.com/NanoMindExplorer/tunnel-terminal/releases/tag/v9.3.0).
+Untuk release notes + APK, lihat [GitHub Release v9.4.0](https://github.com/NanoMindExplorer/tunnel-terminal/releases/tag/v9.4.0).

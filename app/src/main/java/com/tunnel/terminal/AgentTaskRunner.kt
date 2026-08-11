@@ -284,13 +284,12 @@ class AgentTaskRunner(
                             val argsJson = org.json.JSONObject()
                             call.args.forEach { (k, v) -> argsJson.put(k, v) }
                             val text = mcpManager.invokeTool(parts[0], parts[1], argsJson.toString())
-                            text to (!text.startsWith("Error") && !text.startsWith("MCP error") &&
-                                !text.startsWith("MCP invoke error"))
+                            text to toolResultLooksSuccessful(text)
                         }
                     }
                     else -> {
                         val text = toolExecutor.execute(call)
-                        text to (!text.startsWith("Error") && !text.startsWith("Ditolak"))
+                        text to toolResultLooksSuccessful(text)
                     }
                 }
 
@@ -350,6 +349,26 @@ class AgentTaskRunner(
             }
         }
         return null
+    }
+
+    /**
+     * v9.4.0: Structured success for non-marker tools.
+     * Fail on Error/Ditolak/Exception prefixes and empty failure markers.
+     * Success when starts with OK: or clear positive outcome strings.
+     */
+    private fun toolResultLooksSuccessful(text: String): Boolean {
+        val t = text.trim()
+        if (t.isEmpty()) return false
+        val failPrefixes = listOf(
+            "Error", "ERROR", "Ditolak", "DITOLAK", "MCP error", "MCP invoke error",
+            "Exception", "SecurityException", "failed", "Failed", "FAIL"
+        )
+        if (failPrefixes.any { t.startsWith(it) }) return false
+        if (t.contains("permission denied", ignoreCase = true) && t.startsWith("Error")) return false
+        /* Prefer explicit OK from ToolExecutor. */
+        if (t.startsWith("OK:") || t.startsWith("OK ") || t.startsWith("✓")) return true
+        /* Neutral list/read outputs without Error prefix count as success. */
+        return !t.startsWith("Error:")
     }
 
     /** Eksekusi run_command via MarkerExecutor dengan ExecutionOutcome handling.

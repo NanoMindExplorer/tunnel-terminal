@@ -5,10 +5,10 @@
 ![Architecture](https://img.shields.io/badge/Architecture-NDK%20%2B%20Jetpack%20Compose-purple)
 ![AI](https://img.shields.io/badge/AI-Skills%20%2B%20Copilot%20%2B%20Agent%20%2B%20MCP-cyan)
 ![Linux](https://img.shields.io/badge/Linux-Ubuntu%2024.04%20via%20proot-orange)
-![Version](https://img.shields.io/badge/version-9.3.0-blue)
+![Version](https://img.shields.io/badge/version-9.4.0-blue)
 ![Kotlin](https://img.shields.io/badge/Kotlin-2.0.21-7F52FF)
 ![AGP](https://img.shields.io/badge/AGP-8.5.2-orange)
-![Tests](https://img.shields.io/badge/tests-27%20files-green)
+![Tests](https://img.shields.io/badge/tests-34%20files-green)
 ![SDK](https://img.shields.io/badge/compileSdk-35-green)
 ![Stability](https://img.shields.io/badge/stability-production-green)
 
@@ -320,15 +320,15 @@ Tanpa binary ini, app tetap jalan normal untuk semua fitur lain (local shell, SS
 | **v9.0.0** | **Architecture Refactor — TerminalCell + CharDisplayWidth extracted, AiMetrics persistence, NetworkPolicy + AiMetrics tests** |
 | **v9.1.0** | **Critical Fixes — SSH timeout 60s, checkpoint hash, delay() in suspend, ANSI regex consolidation, broadened risk patterns, dead code cleanup** |
 | **v9.2.0** | **Architecture + Tests — PermissionManager + PermissionDialog extracted, MarkerExecutor + SyntaxHighlighter + ContextManager tests** |
-| **v9.3.0** | **Performance & UX — MCP parallel discovery, StringBuilder in-place, listFiles cache, Ctrl+Tab/Ctrl+N, pendingBuffer 256, terminalContext takeLast 4000** |
+| **v9.4.0** | **Performance & UX — MCP parallel discovery, StringBuilder in-place, listFiles cache, Ctrl+Tab/Ctrl+N, pendingBuffer 256, terminalContext takeLast 4000** |
 
-**Total: 68 Kotlin sources + NDK + 27 unit test files · version 9.3.0 (versionCode 73) · 210 commits**
+**Total: 68 Kotlin sources + NDK + 34 unit test files · version 9.4.0 (versionCode 74) · 210 commits**
 
-## Release v9.3.0 (Latest)
+## Release v9.4.0 (Latest)
 
-Release **v9.3.0** adalah hasil 6 phase improvement (v8.5.0→v9.3.0) dengan **49 fixes total**:
+Release **v9.4.0** adalah hasil 6 phase improvement (v8.5.0→v9.4.0) dengan **49 fixes total**:
 
-### v9.3.0 Highlights (Phase 6 — Performance & UX)
+### v9.4.0 Highlights (Phase 6 — Performance & UX)
 - **MCP parallel discovery** — 5 servers × 20s → max 20s total (async/awaitAll)
 - **StringBuilder in-place** — O(n²)→O(n) untuk heavy terminal output
 - **listFiles cache** — 2×→1× syscall per directory in ProjectContext

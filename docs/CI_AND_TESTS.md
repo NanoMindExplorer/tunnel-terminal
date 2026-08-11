@@ -1,6 +1,6 @@
 # CI & Unit Tests
 
-**App version:** 9.3.0 (versionCode 73) · **Tests:** 27 files under `app/src/test/`
+**App version:** 9.3.0 (versionCode 74) · **Tests:** 27 files under `app/src/test/`
 
 ## Local
 
