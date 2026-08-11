@@ -22,15 +22,38 @@ jobs:
 
     - name: Setup Android SDK
       uses: android-actions/setup-android@v3
+      with:
+        packages: 'ndk;25.1.8937393 cmake;3.22.1'
+
+    - name: Obtain proot binary (full flavor assets)
+      run: |
+        chmod +x scripts/obtain-proot.sh
+        ./scripts/obtain-proot.sh app/src/full/assets/proot
 
     - name: Grant execute permission for gradlew
       run: chmod +x gradlew
 
-    - name: Build Debug APK
-      run: ./gradlew assembleDebug --no-daemon
+    - name: Build Full Debug APK
+      run: ./gradlew assembleFullDebug --no-daemon
+
+    - name: Verify APK exists
+      run: ls -la app/build/outputs/apk/full/debug/*.apk
+
+    - name: Assert playstore APK has no proot assets
+      run: |
+        ./gradlew assemblePlaystoreDebug --no-daemon
+        APK=$(ls app/build/outputs/apk/playstore/debug/*.apk | head -1)
+        echo "Checking $APK"
+        if unzip -l "$APK" | grep -E 'assets/proot/proot'; then
+          echo "ERROR: playstore APK still contains assets/proot/proot"
+          exit 1
+        fi
+        echo "OK: playstore APK has no proot binary"
 
     - name: Upload APK Artifact
       uses: actions/upload-artifact@v4
       with:
-        name: TunnelTerminal-Masterpiece
-        path: app/build/outputs/apk/debug/*.apk
+        name: TunnelTerminal-Full-Debug
+        path: app/build/outputs/apk/full/debug/*.apk
+        if-no-files-found: error
+        retention-days: 30

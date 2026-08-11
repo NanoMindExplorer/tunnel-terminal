@@ -23,19 +23,10 @@ android {
         // Phase 52: Agent Mode audit fixes (Bug #1 approval dialog, Bug #2 success detection, Bug #3 Stop cancel)
         // Phase 58: TaskPlanManager (plan/act/observe/verify) + SFTP for SSH file I/O
         // Phase 59: Native API tool-calling (B-1) + AGP/Kotlin upgrade (C-2)
-        /* Wave 31: proot EACCES via linker64+codeCache; IME no Ctrl+E on local sh. */
-        /* v8.5.0: Stabilization release — NetworkPolicy centralization, SSH host key
-         * CompletableDeferred, Ubuntu early-death detector removal, output truncation
-         * marker, configurable toolLoopDepth, CI test workflow, Gradle cache. */
-        /* v8.6.0: Performance & UX — MarkerExecutor adaptive delay, git status via
-         * provider, ScreenDirtyThrottle + AnsiUtils DRY, CheckpointManager GC,
-         * per-session notification, compileSdk 35, EncryptedSharedPreferences cache,
-         * AI thinking indicator, split pane resize handle. */
-        /* v9.0.0: Architecture refactor — TerminalEmulator split (TerminalCell +
-         * CharDisplayWidth extracted), AiMetrics persistence, NetworkPolicy +
-         * AiMetrics tests (24 test files). */
-        versionCode = 73
-        versionName = "9.3.0"
+        /* v9.4.0: Full remediation — playstore strips proot assets, TerminalInputController,
+         * StorageCommands, proot pin CI, linker spawn, IME local-sh safe, AI success harden. */
+        versionCode = 74
+        versionName = "9.4.0"
 
         /* Phase 40 fix (M10): Restrict ke arm64-v8a saja — proot binary di assets
          * hanya arm64. Tanpa abiFilters, APK universal akan crash di device x86_64
@@ -50,8 +41,8 @@ android {
      * - "full" (default): Semua fitur termasuk proot/Ubuntu. Untuk GitHub Releases/F-Droid.
      *   Fitur proot didownload+exec runtime → melanggar Play Store policy.
      *
-     * - "playstore": Exclude kode path proot (ProotBootstrap, ProotShellExecutor) +
-     *   assets/proot. Aman untuk Play Store, tapi fitur 🐧 dinonaktifkan.
+     * - "playstore": ENABLE_PROOT=false + proot assets only in src/full/assets
+     *   (not in main). Play APK must not contain assets/proot/proot.
      *
      * Build command:
      *   ./gradlew assembleFullRelease      → APK untuk GitHub/F-Droid (dengan proot)
@@ -61,13 +52,18 @@ android {
     productFlavors {
         create("full") {
             dimension = "distribution"
-            /* Default — semua fitur aktif. */
             buildConfigField("Boolean", "ENABLE_PROOT", "true")
         }
         create("playstore") {
             dimension = "distribution"
-            /* Exclude assets/proot folder dari playstore build. */
             buildConfigField("Boolean", "ENABLE_PROOT", "false")
+        }
+    }
+
+    /* proot lives under src/full/assets only — merged for full flavor, absent on playstore. */
+    sourceSets {
+        getByName("full") {
+            assets.srcDirs("src/full/assets")
         }
     }
 

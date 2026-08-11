@@ -28,26 +28,10 @@ jobs:
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v3
 
-      - name: Obtain proot binary from Termux package
+      - name: Obtain proot binary (pinned, full flavor)
         run: |
-          mkdir -p app/src/main/assets/proot/lib
-          echo "Downloading proot .deb from Termux packages..."
-          DEB_URL=$(curl -s "https://packages.termux.dev/apt/termux-main/pool/main/p/proot/" | \
-            grep -oE 'proot_[0-9][^"]*_aarch64.deb' | sort -V | tail -1)
-          if [ -z "$DEB_URL" ]; then
-            echo "ERROR: Could not find proot aarch64 .deb"
-            exit 1
-          fi
-          echo "Found: $DEB_URL"
-          curl -L -o proot.deb "https://packages.termux.dev/apt/termux-main/pool/main/p/proot/$DEB_URL"
-          ar x proot.deb
-          tar -xf data.tar.xz
-          cp ./data/data/com.termux/files/usr/bin/proot app/src/main/assets/proot/proot
-          chmod 755 app/src/main/assets/proot/proot
-          cp ./data/data/com.termux/files/usr/lib/libtalloc.so.2 app/src/main/assets/proot/lib/ 2>/dev/null || true
-          cp ./data/data/com.termux/files/usr/lib/libandroid-shmem.so app/src/main/assets/proot/lib/ 2>/dev/null || true
-          file app/src/main/assets/proot/proot
-          ls -la app/src/main/assets/proot/lib/
+          chmod +x scripts/obtain-proot.sh
+          ./scripts/obtain-proot.sh app/src/full/assets/proot
 
       - name: Build Full Debug APK
         run: ./gradlew assembleFullDebug --no-daemon
