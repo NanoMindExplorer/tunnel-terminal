@@ -43,10 +43,7 @@ class TaskHistoryLogger(context: Context) {
                 .put("trace", org.json.JSONArray(trace))
                 .put("timestamp", System.currentTimeMillis())
 
-            historyFile.bufferedWriter(useAppend = true).use { writer ->
-                writer.write(json.toString())
-                writer.newLine()
-            }
+            historyFile.appendText(json.toString() + System.lineSeparator())
         } catch (e: Exception) {
             Log.w(TAG, "Failed to log task: ${e.message}")
         }

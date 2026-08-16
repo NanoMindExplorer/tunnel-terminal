@@ -23,8 +23,8 @@ class SkillMemoryStore(context: Context) {
     companion object {
         private const val TAG = "SkillMemoryStore"
         private const val FILE_NAME = "agent_skills.jsonl"
-        private const val SIMILARITY_THRESHOLD = 0.6
-        private const val UPDATE_THRESHOLD = 0.8
+        private const val SIMILARITY_THRESHOLD = 0.5
+        private const val UPDATE_THRESHOLD = 0.5
         private val STOP_WORDS = setOf(
             "to", "and", "the", "a", "in", "of", "for", "on", "with", "at", "by", "from",
             "go", "turn", "open"
@@ -180,7 +180,12 @@ class SkillMemoryStore(context: Context) {
         val setB = b.toSet()
         val intersection = setA.intersect(setB).size
         val union = setA.union(setB).size
-        return intersection.toDouble() / union
+        val jaccard = intersection.toDouble() / union
+        // Containment boost: short saved skill should match longer query.
+        val containmentA = intersection.toDouble() / setA.size
+        val containmentB = intersection.toDouble() / setB.size
+        val containment = maxOf(containmentA, containmentB)
+        return maxOf(jaccard, containment)
     }
 
     private fun persist() {
