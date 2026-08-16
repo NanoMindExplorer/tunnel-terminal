@@ -24,6 +24,9 @@
     <!-- Wave-10: short haptic when long AI response finishes -->
     <uses-permission android:name="android.permission.VIBRATE" />
 
+    <!-- v9.5.0 Phase 1: Agent Mode — Accessibility Service for UI automation -->
+    <!-- No extra permission needed — BIND_ACCESSIBILITY_SERVICE is declared on the service itself -->
+
     <application
         android:name=".TunnelApp"
         android:allowBackup="false"
@@ -37,6 +40,20 @@
             android:name=".TerminalForegroundService"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
+
+        <!-- v9.5.0 Phase 1: Agent Accessibility Service -->
+        <service
+            android:name=".AgentAccessibilityService"
+            android:exported="false"
+            android:label="Tunnel Terminal Agent"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/agent_accessibility_service_config" />
+        </service>
 
         <activity
             android:name=".MainActivity"

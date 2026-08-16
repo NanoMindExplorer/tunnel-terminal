@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- v9.5.0 Phase 1: Accessibility service config for Agent Mode.
+     Ported from private-agent, with security hardening:
+     - typeAllMask → specific event types actually used
+     - flagRequestTouchExplorationMode REMOVED (not needed, causes Play Store issues)
+     - canRetrieveWindowContent, canPerformGestures, canTakeScreenshot retained (needed) -->
+<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:description="@string/agent_accessibility_description"
+    android:accessibilityEventTypes="typeViewClicked|typeViewScrolled|typeWindowStateChanged|typeWindowContentChanged"
+    android:accessibilityFlags="flagDefault|flagIncludeNotImportantViews|flagRetrieveInteractiveWindows"
+    android:canRetrieveWindowContent="true"
+    android:canPerformGestures="true"
+    android:canTakeScreenshot="true"
+    android:accessibilityFeedbackType="feedbackGeneric"
+    android:notificationTimeout="100"
+    android:settingsActivity="com.tunnel.terminal.MainActivity" />

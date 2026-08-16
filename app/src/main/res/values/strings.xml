@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- v9.5.0 Phase 1: Accessibility service description for Agent Mode -->
+    <string name="agent_accessibility_description">Tunnel Terminal Agent Mode — Reads screen content and performs UI actions (click, type, scroll) to automate tasks on your device. Only active when you explicitly start an Agent task.</string>
+</resources>
