@@ -193,6 +193,12 @@ class MainActivity : ComponentActivity() {
     private var agentApprovalDeferred: kotlinx.coroutines.CompletableDeferred<Boolean>? = null
     /** Phase 52 fix (Bug #3): Job reference untuk Stop via cancel(). */
     private var agentJob: kotlinx.coroutines.Job? = null
+
+    /** v9.5.3 Phase 4: Phone Agent (AccessibilityService-based UI automation). */
+    private var showPhoneAgentScreen by mutableStateOf(false)
+    private lateinit var phoneAgentExecutor: AgentActionExecutor
+    private lateinit var phoneSkillMemory: SkillMemoryStore
+    private lateinit var phoneTaskHistory: TaskHistoryLogger
     /** Phase 41 fix (CRIT-02): State untuk SSH host key change dialog (blocking).
      *  Non-null = dialog sedang visible, user harus pilih approve/reject. */
     private val _sshHostKeyDialogState = mutableStateOf<SshHostKeyDialogState?>(null)
@@ -394,6 +400,20 @@ class MainActivity : ComponentActivity() {
         /* Phase 38 (proot/Ubuntu): Bootstrap instance untuk download/extract rootfs. */
         prootBootstrap = ProotBootstrap(this)
         agentWorkflows.addAll(agentWorkflowManager.workflows)
+
+        /* v9.5.3 Phase 4: Initialize Phone Agent (AccessibilityService-based UI automation).
+         * Reuses existing aiAgent for LLM calls + aiSettings for provider config.
+         * SkillMemoryStore + TaskHistoryLogger use filesDir (private, no permission). */
+        phoneSkillMemory = SkillMemoryStore(this)
+        phoneTaskHistory = TaskHistoryLogger(this)
+        phoneAgentExecutor = AgentActionExecutor(
+            context = this,
+            aiAgent = aiAgent,
+            aiSettings = aiSettings,
+            skillMemoryStore = phoneSkillMemory,
+            taskHistoryLogger = phoneTaskHistory
+        )
+
         loadAISettings()
         loadTheme()
         /* C1 fix: Load fontSize di onCreate (bukan di property initializer). */
@@ -1826,6 +1846,8 @@ class MainActivity : ComponentActivity() {
                 add(PaletteItem("manage_ubuntu", "Manage Linux Environment", "Setting", Icons.Default.Build, PaletteCategory.SETTING) { showUbuntuInstallDialog = true })
                 /* Phase 47 (Bagian 2): Agent Mode — autonomous task runner. */
                 add(PaletteItem("open_agent", "🤖 Agent Mode (Autonomous)", "AI", Icons.Default.SmartToy, PaletteCategory.AI) { showAgentScreen = true })
+                /* v9.5.3 Phase 4: Phone Agent — AccessibilityService-based UI automation. */
+                add(PaletteItem("phone_agent", "📱 Phone Agent (UI Automation)", "AI", Icons.Default.PhoneAndroid, PaletteCategory.AI) { showPhoneAgentScreen = true })
                 /* Phase 49 (D-4): MCP server management UI. */
                 add(PaletteItem("manage_mcp", "Manage MCP Servers", "Setting", Icons.Default.Cloud, PaletteCategory.SETTING) { showMcpServerDialog = true })
                 /* Commands. */
@@ -2138,6 +2160,17 @@ class MainActivity : ComponentActivity() {
                 },
                 onDismiss = { showAgentScreen = false },
                 onAnswerClarification = { answer -> continueAgentWithClarification(answer) }
+            )
+        }
+
+        /* v9.5.3 Phase 4: Phone Agent Screen — AccessibilityService-based UI automation. */
+        if (showPhoneAgentScreen) {
+            PhoneAgentScreen(
+                theme = currentTheme,
+                executor = phoneAgentExecutor,
+                skillMemoryStore = phoneSkillMemory,
+                taskHistoryLogger = phoneTaskHistory,
+                onDismiss = { showPhoneAgentScreen = false }
             )
         }
 
