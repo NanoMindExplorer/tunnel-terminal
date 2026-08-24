@@ -18,7 +18,12 @@ import androidx.compose.ui.unit.sp
  */
 object TerminalLayoutMetrics {
     /** Monospace cell width as fraction of font size (em). */
-    const val CHAR_WIDTH_EM = 0.62f
+    /**
+     * Conservative cell width. 0.62em under-counted real Droid/Noto monospace
+     * (~0.65–0.72em), so PTY cols overflowed the LazyColumn Text and the
+     * command line was Clip-truncated on the right.
+     */
+    const val CHAR_WIDTH_EM = 0.72f
     /**
      * Line box height as fraction of font size.
      * Must be ≥ real glyph box without font padding (~1.0–1.2) plus a little slack.
@@ -30,7 +35,7 @@ object TerminalLayoutMetrics {
      * Leave this many rows of free space so the last line (prompt + cursor)
      * is never flush against the ExtraKeys bar / clipped by the viewport.
      */
-    const val BOTTOM_ROW_MARGIN = 0.85f
+    const val BOTTOM_ROW_MARGIN = 1.15f
 
     fun charWidthPx(fontSp: Float, density: Density): Float =
         with(density) { fontSp.sp.toPx() * CHAR_WIDTH_EM }

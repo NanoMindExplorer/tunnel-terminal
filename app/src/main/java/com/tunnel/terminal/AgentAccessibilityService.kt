@@ -271,10 +271,13 @@ class AgentAccessibilityService : AccessibilityService() {
         val text = node.text?.toString() ?: ""
         val desc = node.contentDescription?.toString() ?: ""
 
+        val hint = node.hintText?.toString() ?: ""
         val exactMatch = text.equals(targetText, ignoreCase = true)
             || desc.equals(targetText, ignoreCase = true)
+            || hint.equals(targetText, ignoreCase = true)
         val containsMatch = text.contains(targetText, ignoreCase = true)
             || desc.contains(targetText, ignoreCase = true)
+            || hint.contains(targetText, ignoreCase = true)
         val matches = if (exactOnly) exactMatch else containsMatch
 
         if (matches && (!skipEditable || !node.isEditable) && clickNodeOrParent(node)) {
@@ -336,7 +339,12 @@ class AgentAccessibilityService : AccessibilityService() {
                 continue
             }
 
-            var editNode = findEditableNode(root, fieldHint)
+            val focused = root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+            var editNode = if (focused != null && focused.isEditable) focused else null
+            if (editNode == null) {
+                focused?.recycle()
+                editNode = findEditableNode(root, fieldHint)
+            }
             if (editNode == null && !fieldHint.isNullOrEmpty()) {
                 editNode = findEditableNode(root, null)
             }

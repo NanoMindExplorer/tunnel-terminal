@@ -124,8 +124,8 @@ class TerminalInputController(
             if (ch == '\u007F' || ch == '\b') sendBackspace()
             else typePrintable(ch)
         }
-        pinIme(plan.syncTo)
         setImeLast(plan.syncTo)
+        pinIme(plan.syncTo)
         return HandleResult(applied = true)
     }
 }

@@ -2899,8 +2899,9 @@ class MainActivity : ComponentActivity() {
                     pinIme = { t ->
                         imeFieldLast = t
                         imeFieldValue = if (t == tv.text) {
-                            /* Keep composition so the IME does not drop prior glyphs. */
-                            tv.copy(selection = TextRange(t.length))
+                            /* Keep IME composition + caret. Forcing selection-to-end
+                             * commits composition and the next key is only the new glyph. */
+                            tv
                         } else {
                             TextFieldValue(t, selection = TextRange(t.length))
                         }

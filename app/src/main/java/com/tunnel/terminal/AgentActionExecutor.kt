@@ -189,18 +189,25 @@ Rules:
         }
 
         // 2. Skill memory lookup
-        val existingSkill = skillMemoryStore.findSkill(userGoal)
-        if (existingSkill != null && existingSkill.isReliable) {
-            _events.emit(AgentEvent.SkillReplay(existingSkill.task, 0, existingSkill.steps.size))
-            val replayResult = replaySkill(service, existingSkill)
-            if (replayResult) {
-                taskHistoryLogger.logTask(userGoal, "Success", 0, existingSkill.steps.size,
-                    listOf("Skill replayed: ${existingSkill.task}"))
-                _events.emit(AgentEvent.Complete(true, "Task completed via skill replay: ${existingSkill.task}"))
-                return "Task completed via saved skill: ${existingSkill.task}"
-            } else {
-                skillMemoryStore.recordFailure(existingSkill.id)
-                Log.w(TAG, "Skill replay failed, falling back to AI: ${existingSkill.task}")
+        val seededSteps = mutableListOf<ActionStep>()
+        when (val match = skillMemoryStore.findSkillMatch(userGoal)) {
+            null -> { }
+            else -> {
+                _events.emit(AgentEvent.SkillReplay(match.skill.task, 0, match.skill.steps.size))
+                val replayResult = replaySkill(service, match.skill)
+                if (replayResult && match.kind == SkillMemoryStore.MatchKind.FULL) {
+                    taskHistoryLogger.logTask(userGoal, "Success", 0, match.skill.steps.size,
+                        listOf("Skill replayed: ${match.skill.task}"))
+                    _events.emit(AgentEvent.Complete(true, "Task completed via skill replay: ${match.skill.task}"))
+                    return "Task completed via saved skill: ${match.skill.task}"
+                } else if (replayResult) {
+                    seededSteps.addAll(match.skill.steps)
+                    _events.emit(AgentEvent.SkillReplay(match.skill.task, match.skill.steps.size, match.skill.steps.size))
+                    Log.i(TAG, "Prefix skill replayed, continuing AI for remaining goal")
+                } else {
+                    skillMemoryStore.recordFailure(match.skill.id)
+                    Log.w(TAG, "Skill replay failed, falling back to AI: ${match.skill.task}")
+                }
             }
         }
 
@@ -224,13 +231,17 @@ Rules:
         }
 
         // 5. Main AI loop
-        return executeAILoop(service, userGoal)
+        return executeAILoop(service, userGoal, seededSteps)
     }
 
     /** Main AI-driven execution loop. */
-    private suspend fun executeAILoop(service: AgentAccessibilityService, userGoal: String): String {
+    private suspend fun executeAILoop(
+        service: AgentAccessibilityService,
+        userGoal: String,
+        initialSteps: List<ActionStep> = emptyList()
+    ): String {
         val results = mutableListOf<String>()
-        val executedSteps = mutableListOf<ActionStep>()
+        val executedSteps = initialSteps.toMutableList()
         var step = 0
         var consecutiveFailures = 0
         var lastFailedAction = ""
@@ -445,7 +456,10 @@ Rules:
             val apps = pm.getInstalledApplications(0)
             val match = apps.find {
                 pm.getApplicationLabel(it).toString().equals(trimmed, ignoreCase = true)
-            } ?: run {
+            } ?: apps.filter {
+                val label = pm.getApplicationLabel(it).toString()
+                trimmed.length >= 3 && label.contains(trimmed, ignoreCase = true)
+            }.minByOrNull { pm.getApplicationLabel(it).length } ?: run {
                 Log.w(TAG, "App not installed: $trimmed")
                 return false
             }
@@ -547,7 +561,7 @@ Rules:
         /* Only a bare "open AppName" is a shortcut. "open WhatsApp and send …"
          * must go through the AI loop — otherwise we mark the whole task done. */
         val openMatch = Regex(
-            "^open\\s+([A-Za-z0-9][A-Za-z0-9+._ -]{0,40}?)\\s*$",
+            "^(?:open|buka)\\s+([A-Za-z0-9][A-Za-z0-9+._ -]{0,40}?)\\s*$",
             RegexOption.IGNORE_CASE
         ).find(goal.trim())
         if (openMatch != null) {
@@ -555,6 +569,7 @@ Rules:
             val words = appName.split(Regex("\\s+")).filter { it.isNotEmpty() }
             val looksCompound = appName.contains(" and ", ignoreCase = true) ||
                 appName.contains(" then ", ignoreCase = true) ||
+                appName.contains(" dan ", ignoreCase = true) ||
                 words.size > 3
             if (appName.isNotEmpty() && !looksCompound) {
                 return listOf(ActionStep("open_app", mapOf("app_name" to appName)))
