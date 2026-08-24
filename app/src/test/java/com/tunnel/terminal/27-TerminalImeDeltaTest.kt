@@ -119,6 +119,23 @@ class TerminalImeDeltaTest {
     }
 
     @Test
+    fun `ime restart sending only last glyph is ignored`() {
+        val p = TerminalImeDelta.plan("ls", "s")
+        assertTrue(p.ignored)
+        assertEquals(0, p.backspaces)
+        assertEquals("ls", p.syncTo)
+    }
+
+    @Test
+    fun `ime restart with a new glyph appends without deleting the line`() {
+        val p = TerminalImeDelta.plan("ls", "c")
+        assertFalse(p.ignored)
+        assertEquals(0, p.backspaces)
+        assertEquals("c", p.typeChars)
+        assertEquals("lsc", p.syncTo)
+    }
+
+    @Test
     fun `lcp helper`() {
         assertEquals(0, TerminalImeDelta.longestCommonPrefixLen("", "a"))
         assertEquals(3, TerminalImeDelta.longestCommonPrefixLen("hello", "help"))

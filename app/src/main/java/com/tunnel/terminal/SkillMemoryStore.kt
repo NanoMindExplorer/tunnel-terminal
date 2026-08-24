@@ -28,9 +28,15 @@ class SkillMemoryStore(context: Context) {
         private const val UPDATE_THRESHOLD = 0.8
         private val STOP_WORDS = setOf(
             "to", "and", "the", "a", "in", "of", "for", "on", "with", "at", "by", "from",
-            "go", "turn", "open"
+            "go", "turn", "open",
+            "yang", "di", "ke", "dari", "untuk", "dan", "atau", "ini", "itu",
+            "ada", "saya", "kamu", "dong", "lah", "pun", "ya"
         )
     }
+
+    enum class MatchKind { FULL, PREFIX }
+
+    data class SkillMatch(val skill: SavedSkill, val kind: MatchKind)
 
     private val skillsFile = File(context.filesDir, FILE_NAME)
     private val skills = mutableListOf<SavedSkill>()
@@ -60,25 +66,51 @@ class SkillMemoryStore(context: Context) {
      * Find a reliable skill matching the task goal.
      * @return SavedSkill if found (Jaccard > 0.6 AND isReliable), null otherwise.
      */
-    fun findSkill(taskGoal: String): SavedSkill? {
-        ensureLoaded()
-        val keywords = extractKeywords(taskGoal)
-        if (keywords.isEmpty()) return null
+    fun findSkill(taskGoal: String): SavedSkill? =
+        findSkillMatch(taskGoal)?.takeIf { it.kind == MatchKind.FULL }?.skill
 
-        var bestSkill: SavedSkill? = null
-        var bestScore = 0.0
+    /**
+     * FULL: goals are about the same size (Jaccard > 0.6, query not much longer)
+     *   → safe to replay and mark the task complete.
+     * PREFIX: saved keywords are a subset of the new goal → replay as a start,
+     *   then continue the AI loop (do not mark complete).
+     */
+    fun findSkillMatch(taskGoal: String): SkillMatch? {
+        ensureLoaded()
+        val query = extractKeywords(taskGoal).toSet()
+        if (query.isEmpty()) return null
+
+        var bestFull: Pair<SavedSkill, Double>? = null
+        var bestPrefix: Pair<SavedSkill, Int>? = null
 
         for (skill in skills) {
-            val score = jaccardSimilarity(keywords, skill.taskKeywords)
-            if (score > bestScore) {
-                bestScore = score
-                bestSkill = skill
+            if (!skill.isReliable) continue
+            val saved = skill.taskKeywords.toSet()
+            if (saved.isEmpty()) continue
+            val inter = query.intersect(saved).size
+            val union = query.union(saved).size
+            if (union == 0) continue
+            val jaccard = inter.toDouble() / union
+            val subset = saved.all { it in query }
+
+            if (jaccard > SIMILARITY_THRESHOLD && query.size <= saved.size + 1) {
+                if (bestFull == null || jaccard > bestFull.second) {
+                    bestFull = skill to jaccard
+                }
+            } else if (subset && query.size > saved.size) {
+                if (bestPrefix == null || saved.size > bestPrefix.second) {
+                    bestPrefix = skill to saved.size
+                }
             }
         }
 
-        if (bestScore > SIMILARITY_THRESHOLD && bestSkill?.isReliable == true) {
-            Log.i(TAG, "Found skill: '${bestSkill.task}' (score=$bestScore, success=${bestSkill.successCount})")
-            return bestSkill
+        bestFull?.let {
+            Log.i(TAG, "Full skill match: '${it.first.task}' (jaccard=${it.second})")
+            return SkillMatch(it.first, MatchKind.FULL)
+        }
+        bestPrefix?.let {
+            Log.i(TAG, "Prefix skill match: '${it.first.task}' (saved=${it.second} keywords)")
+            return SkillMatch(it.first, MatchKind.PREFIX)
         }
         return null
     }
@@ -107,9 +139,9 @@ class SkillMemoryStore(context: Context) {
             // Update existing
             existingSkill.successCount++
             existingSkill.lastUsed = System.currentTimeMillis()
-            // Replace steps if new sequence is shorter (more efficient)
-            if (steps.size < existingSkill.steps.size) {
-                Log.i(TAG, "Updating skill '${existingSkill.task}' with shorter sequence (${steps.size} < ${existingSkill.steps.size})")
+            /* Never shrink a taught sequence — keep the more complete lesson. */
+            if (steps.size > existingSkill.steps.size) {
+                Log.i(TAG, "Updating skill '${existingSkill.task}' with longer taught sequence (${steps.size} > ${existingSkill.steps.size})")
                 val updated = SavedSkill(
                     id = existingSkill.id,
                     task = existingSkill.task,
@@ -161,7 +193,9 @@ class SkillMemoryStore(context: Context) {
 
     /** Clear all skills. */
     fun clearAll() {
+        ensureLoaded()
         skills.clear()
+        loaded = true
         try { skillsFile.delete() } catch (_: Exception) {}
         Log.i(TAG, "All skills cleared")
     }
@@ -190,11 +224,16 @@ class SkillMemoryStore(context: Context) {
 
     private fun persist() {
         try {
-            skillsFile.bufferedWriter().use { writer ->
+            val tmp = File(skillsFile.absolutePath + ".tmp")
+            tmp.bufferedWriter().use { writer ->
                 skills.forEach { skill ->
                     writer.write(skill.toJson().toString())
                     writer.newLine()
                 }
+            }
+            if (!tmp.renameTo(skillsFile)) {
+                tmp.copyTo(skillsFile, overwrite = true)
+                tmp.delete()
             }
         } catch (e: Exception) {
             Log.w(TAG, "Failed to persist skills: ${e.message}")

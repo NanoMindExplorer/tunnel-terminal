@@ -168,4 +168,27 @@ class SkillMemoryStoreTest {
         val result = store.findSkill("buka whatsapp kirim pesan")
         assertNotNull(result)
     }
+
+    @Test fun `longer taught sequence is kept not shrunk`() {
+        val longSteps = listOf(
+            ActionStep("open_app", mapOf("app_name" to "WhatsApp")),
+            ActionStep("click_text", mapOf("text" to "Budi")),
+            ActionStep("type_text", mapOf("text" to "halo")),
+            ActionStep("click_text", mapOf("text" to "Kirim"))
+        )
+        store.saveSkill("buka whatsapp kirim halo ke budi", longSteps)
+        store.saveSkill("buka whatsapp kirim halo ke budi", listOf(ActionStep("open_app", mapOf("app_name" to "WhatsApp"))))
+        val skills = store.getAllSkills()
+        assertEquals(1, skills.size)
+        assertEquals(4, skills[0].steps.size)
+        assertEquals(2, skills[0].successCount)
+    }
+
+    @Test fun `findSkillMatch uses prefix for a longer follow-up goal`() {
+        store.saveSkill("buka whatsapp", listOf(ActionStep("open_app", mapOf("app_name" to "WhatsApp"))))
+        val match = store.findSkillMatch("buka whatsapp kirim pesan ke budi")
+        assertNotNull(match)
+        assertEquals(SkillMemoryStore.MatchKind.PREFIX, match!!.kind)
+        assertTrue(match.skill.task.contains("whatsapp"))
+    }
 }

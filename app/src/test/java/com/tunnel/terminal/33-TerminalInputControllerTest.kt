@@ -62,6 +62,18 @@ class TerminalInputControllerTest {
     }
 
     @Test
+    fun `ime restart of last glyph does not erase the line`() {
+        val h = Harness()
+        h.controller.onImeTextChange("l")
+        h.controller.onImeTextChange("ls")
+        h.written.clear()
+        h.controller.onImeTextChange("s")
+        assertEquals("ls", h.buffer)
+        assertEquals("", h.written.toString())
+        assertEquals("ls", h.pinned)
+    }
+
+    @Test
     fun `enter after extra suffix writes missing chars to pty`() {
         val h = Harness()
         h.controller.onImeTextChange("l")

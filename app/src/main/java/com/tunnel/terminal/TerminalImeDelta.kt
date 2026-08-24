@@ -45,6 +45,26 @@ object TerminalImeDelta {
             return Plan(backspaces = 1, typeChars = "", syncTo = "")
         }
 
+        /*
+         * IME restart: after we rewrite TextFieldValue (or composition commits),
+         * many keyboards send only the newest glyph ("ls" → "s") instead of the
+         * full line. Treating that as LCP=0 would backspace the whole command.
+         */
+        if (lcp == 0 && last.isNotEmpty() && newValue.isNotEmpty() &&
+            !containsEnter && cursorLikelyAtEnd
+        ) {
+            if (newValue.length <= 2 && last.endsWith(newValue) && last.length > newValue.length) {
+                return Plan(0, "", last, ignored = true)
+            }
+            if (newValue.length == 1 && last.length >= 2) {
+                return Plan(
+                    backspaces = 0,
+                    typeChars = newValue,
+                    syncTo = last + newValue
+                )
+            }
+        }
+
         /* Only rewrite when cursor was moved mid-line — not on buffer drift. */
         val needRewrite = !cursorLikelyAtEnd
 
