@@ -28,7 +28,8 @@ class TerminalInputController(
     fun onImeTextChange(newValue: String): HandleResult {
         val last = getImeLast()
         if (newValue == last) {
-            pinIme(last)
+            /* Do not rebuild the IME field — that drops composition and some
+             * keyboards then send only the next glyph ("l"+"s" → "s"). */
             return HandleResult(applied = false)
         }
 
@@ -83,8 +84,13 @@ class TerminalInputController(
             val line = newValue.replace("\r", "").replace("\n", "")
             if (plan.fullRewrite) {
                 rewrite(line)
-            } else if (getBuffer() != line) {
-                setBuffer(line)
+            } else {
+                val buf = getBuffer()
+                if (buf != line) {
+                    val lcp = TerminalImeDelta.longestCommonPrefixLen(buf, line)
+                    repeat((buf.length - lcp).coerceAtLeast(0)) { sendBackspace() }
+                    for (ch in line.substring(lcp)) typePrintable(ch)
+                }
             }
             if (!isEnterHandledByKey()) {
                 onEnterLine(getBuffer() + "\n")
@@ -98,6 +104,12 @@ class TerminalInputController(
         }
 
         if (plan.fullRewrite) {
+            if (!readline) {
+                /* Local toybox sh cannot wipe mid-line; do not send DEL-from-cursor. */
+                pinIme(getBuffer())
+                setImeLast(getBuffer())
+                return HandleResult(applied = false, ignoredNoise = true)
+            }
             rewrite(plan.syncTo)
             pinIme(plan.syncTo)
             setImeLast(plan.syncTo)

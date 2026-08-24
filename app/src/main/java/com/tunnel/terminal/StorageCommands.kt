@@ -94,7 +94,7 @@ object StorageCommands {
                 val rest = if (c == "storage-get") "" else c.removePrefix("storage-get ").trim()
                 val parts = rest.split(Regex("\\s+"), limit = 2).filter { it.isNotEmpty() }
                 val remote = parts.getOrNull(0).orEmpty()
-                val localName = parts.getOrNull(1) ?: File(remote).name
+                val localName = File(parts.getOrNull(1) ?: File(remote).name).name
                 if (remote.isBlank()) {
                     print("\n\u001B[31mUsage: storage-get <file-di-folder-SAF> [nama-lokal-di-workspace]\u001B[0m\n")
                 } else {

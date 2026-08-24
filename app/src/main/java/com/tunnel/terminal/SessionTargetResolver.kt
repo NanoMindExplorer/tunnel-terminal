@@ -31,6 +31,21 @@ class SessionTargetResolver(
      * @param logicalPath path the AI sees (e.g. "/root/app.py" or "main.py")
      */
     fun resolvePhysicalPath(logicalPath: String): File {
+        /* Chat Apply re-submits host absolute paths (filesDir/...). Don't wrap
+         * those again under rootfs or they nest as rootfs/data/data/... */
+        if (logicalPath.startsWith("/")) {
+            val host = try { File(logicalPath).canonicalFile } catch (_: Exception) { File(logicalPath) }
+            val ws = try { workspaceRoot.canonicalPath } catch (_: Exception) { workspaceRoot.absolutePath }
+            if (isPathInside(host.absolutePath, ws) || isPathInside(host.canonicalPath, ws)) {
+                return host
+            }
+            if (sessionType == "ubuntu" && rootfsDir != null) {
+                val rf = try { rootfsDir.canonicalPath } catch (_: Exception) { rootfsDir.absolutePath }
+                if (isPathInside(host.absolutePath, rf) || isPathInside(host.canonicalPath, rf)) {
+                    return host
+                }
+            }
+        }
         return when (sessionType) {
             "ubuntu" -> {
                 val rootfs = rootfsDir

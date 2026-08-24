@@ -79,7 +79,7 @@ data class AiToolCall(
                     val argsJson = json.optJSONObject("args") ?: JSONObject()
                     val args = mutableMapOf<String, String>()
                     argsJson.keys().forEach { key ->
-                        args[key] = argsJson.optString(key)
+                        args[key] = AgentAction.jsonScalarToString(argsJson.opt(key))
                     }
                     val reasoning = json.optString("reasoning", "")
                     if (tool.isNotBlank()) {
@@ -229,8 +229,15 @@ class ToolExecutor(
             if (storageRel != null) {
                 val root = sm.getGrantedRootPath()
                     ?: throw SecurityException("setup-storage belum memetakan path root. Jalankan setup-storage lagi.")
+                if (storageRel.split('/').any { it == ".." }) {
+                    throw SecurityException("Path storage tidak boleh berisi '..': $rawPath")
+                }
                 val mapped = if (storageRel.isBlank()) File(root) else File(root, storageRel)
-                return mapped
+                val canonical = try { mapped.canonicalFile } catch (_: Exception) { mapped }
+                if (!sm.isPathWithinGrantedTree(canonical)) {
+                    throw SecurityException("Path storage di luar folder yang diizinkan: $rawPath")
+                }
+                return canonical
             }
         }
 
@@ -488,6 +495,10 @@ class ToolExecutor(
                     }
                 }
                 "search_files" -> {
+                    val sessionType = sessionTargetResolver?.sessionType ?: "local"
+                    if (sessionType == "ssh") {
+                        return "Error: search_files di sesi SSH belum tersedia. Gunakan run_command (find/ls)."
+                    }
                     val pattern = call.args["pattern"] ?: return "Error: pattern required"
                     val dirRaw = call.args["dir"] ?: "."
                     /* Wave-4/23: match by filename; Ubuntu default = guest /root. */
@@ -512,6 +523,10 @@ class ToolExecutor(
                         if (results.size >= MAX_SEARCH_MATCHES) "\n... (truncated at $MAX_SEARCH_MATCHES matches)" else ""
                 }
                 "grep_content" -> {
+                    val sessionType = sessionTargetResolver?.sessionType ?: "local"
+                    if (sessionType == "ssh") {
+                        return "Error: grep_content di sesi SSH belum tersedia. Gunakan run_command (grep)."
+                    }
                     /* Wave-4: content search (grep-like) inside workspace files. */
                     val pattern = call.args["pattern"] ?: return "Error: pattern required"
                     val dirRaw = call.args["dir"] ?: "."

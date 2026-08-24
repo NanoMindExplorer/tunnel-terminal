@@ -1,7 +1,6 @@
 package com.tunnel.terminal
 
 import org.junit.Assert.*
-import org.junit.Ignore
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
@@ -28,7 +27,6 @@ class TarGzipRootfsExtractorTest {
         assertTrue(TarGzipRootfsExtractor.rootfsLooksValid(root))
     }
 
-    @Ignore("Java tar impl fails on CI - works on device")
     @Test
     fun `extract regular file dir and symlink`() {
         val tarGz = tmp.newFile("mini.tar.gz")
@@ -40,13 +38,13 @@ class TarGzipRootfsExtractorTest {
         assertTrue(File(dest, "etc").isDirectory)
         assertTrue(File(dest, "usr/bin/bash").isFile)
         assertEquals("#!/bin/bash\necho hi\n", File(dest, "usr/bin/bash").readText())
-        /* bin -> usr/bin */
         val bin = File(dest, "bin")
         assertTrue("bin should exist as symlink or dir", bin.exists())
+        val link = java.nio.file.Files.readSymbolicLink(bin.toPath()).toString()
+        assertEquals("usr/bin", link)
         assertTrue(TarGzipRootfsExtractor.rootfsLooksValid(dest))
     }
 
-    @Ignore("Java tar impl fails on CI - works on device")
     @Test
     fun `extract rejects path escape`() {
         val tarGz = tmp.newFile("evil.tar.gz")
@@ -71,7 +69,6 @@ class TarGzipRootfsExtractorTest {
         assertTrue(File(root, "etc/resolv.conf").parentFile!!.isDirectory || File(root, "etc").isDirectory)
     }
 
-    @Ignore("Java tar impl fails on CI - works on device")
     @Test
     fun `normalize skips device-only archives still succeeds empty-ish`() {
         /* Archive with only a directory — not valid rootfs but must not crash. */

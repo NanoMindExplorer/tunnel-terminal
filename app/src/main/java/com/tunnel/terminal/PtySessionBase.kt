@@ -36,6 +36,10 @@ abstract class PtySessionBase(
     @Volatile
     protected var readThread: Thread? = null
 
+    /** True when [destroy] was requested (tab close / restart) — not a crash. */
+    @Volatile
+    protected var closedByClient: Boolean = false
+
     protected val fdClosed = AtomicBoolean(false)
 
     override val id: Int = globalIdCounter.incrementAndGet()
@@ -89,12 +93,14 @@ abstract class PtySessionBase(
 
     /** Message shown when the process exits naturally. */
     protected open fun processExitMessage(): String =
-        "\n\u001B[33m[Process exited. Tap screen to restart — history will be kept.]\u001B[0m\n"
+        if (closedByClient) ""
+        else "\n\u001B[33m[Process exited. Tap screen to restart — history will be kept.]\u001B[0m\n"
 
     protected fun resetSessionBuffers() {
         synchronized(outputLock) { outputBuffer.setLength(0) }
         _lastCommandOutput.value = ""
         fdClosed.set(false)
+        closedByClient = false
     }
 
     protected fun adoptMasterAndStartReader(pid: Int, fd: Int, threadName: String) {
@@ -222,6 +228,7 @@ abstract class PtySessionBase(
 
     override fun destroy() {
         if (!isAlive && masterFd < 0 && childPid < 0 && readThread == null) return
+        closedByClient = true
         isAlive = false
         screenDirtyThrottle.cancel()
 

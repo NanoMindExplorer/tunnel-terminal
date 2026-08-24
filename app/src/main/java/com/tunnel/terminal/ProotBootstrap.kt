@@ -416,10 +416,11 @@ class ProotBootstrap(private val context: Context) {
         val libPath = hostLibraryPath()
         val tmp = File(baseDir, "tmp").apply { mkdirs() }.absolutePath
         val attempts = mutableListOf<List<String>>()
-        attempts.add(listOf(bin.absolutePath, "--version"))
+        /* Same order as prootSpawn: linker64 first, then direct exec. */
         resolveLinker()?.let { lk ->
             attempts.add(listOf(lk, bin.absolutePath, "--version"))
         }
+        attempts.add(listOf(bin.absolutePath, "--version"))
         if (prootBin.absolutePath != bin.absolutePath) {
             resolveLinker()?.let { lk ->
                 attempts.add(listOf(lk, prootBin.absolutePath, "--version"))

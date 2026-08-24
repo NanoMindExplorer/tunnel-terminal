@@ -372,7 +372,7 @@ class StorageManager(private val context: Context) {
                 target = parent.createFile(mime, fileName)
                     ?: return Result.failure(IllegalStateException("Gagal buat file: $fileName"))
             }
-            resolver.openOutputStream(target.uri, "wt")?.use { out ->
+            resolver.openOutputStream(target.uri, "w")?.use { out ->
                 out.write(bytes)
                 out.flush()
             } ?: return Result.failure(IllegalStateException("Tidak bisa buka output stream"))

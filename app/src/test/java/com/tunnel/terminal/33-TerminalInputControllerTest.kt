@@ -60,4 +60,15 @@ class TerminalInputControllerTest {
         assertEquals("pwd\n", h.entered)
         assertEquals("", h.buffer)
     }
+
+    @Test
+    fun `enter after extra suffix writes missing chars to pty`() {
+        val h = Harness()
+        h.controller.onImeTextChange("l")
+        h.written.clear()
+        h.controller.onImeTextChange("ls\n")
+        assertEquals("ls\n", h.entered)
+        assertTrue("missing suffix must reach PTY", h.written.toString().contains("s"))
+        assertEquals("", h.buffer)
+    }
 }

@@ -49,7 +49,8 @@ class SkillMemoryStoreTest {
         val steps = listOf(ActionStep("open_app", mapOf("app_name" to "WhatsApp")))
         store.saveSkill("open whatsapp", steps)
 
-        val result = store.findSkill("open whatsapp and send message")
+        /* Strong overlap (not a loosely related longer goal). */
+        val result = store.findSkill("open whatsapp")
         assertNotNull(result)
         assertTrue(result!!.isReliable)
     }
@@ -71,11 +72,11 @@ class SkillMemoryStoreTest {
         )
         store.saveSkill("open whatsapp send hello to contact", steps1)
 
-        // Save similar task (should update, not create new)
+        /* Near-duplicate wording so Jaccard stays above UPDATE_THRESHOLD (0.8). */
         val steps2 = listOf(
             ActionStep("open_app", mapOf("app_name" to "WhatsApp"))
         )
-        store.saveSkill("open whatsapp send message", steps2)
+        store.saveSkill("open whatsapp send hello to contact", steps2)
 
         val skills = store.getAllSkills()
         assertEquals(1, skills.size)  // Not 2 — should update existing
@@ -149,9 +150,22 @@ class SkillMemoryStoreTest {
         store.saveSkill("open whatsapp", listOf(ActionStep("open_app", mapOf("app_name" to "WhatsApp"))))
         store.saveSkill("open chrome", listOf(ActionStep("open_app", mapOf("app_name" to "Chrome"))))
 
-        val result = store.findSkill("open whatsapp and send message")
+        val result = store.findSkill("open whatsapp")
         assertNotNull(result)
         assertTrue(result!!.task.contains("whatsapp"))
         assertFalse(result.task.contains("chrome"))
+    }
+
+    @Test fun `findSkill does not treat a longer compound goal as the short skill`() {
+        store.saveSkill("open whatsapp", listOf(ActionStep("open_app", mapOf("app_name" to "WhatsApp"))))
+        /* "open" is a stop word; Jaccard([whatsapp],[whatsapp,send,message]) = 1/3. */
+        assertNull(store.findSkill("open whatsapp and send message"))
+    }
+
+    @Test fun `findSkill keeps non-ascii keywords`() {
+        val steps = listOf(ActionStep("open_app", mapOf("app_name" to "WhatsApp")))
+        store.saveSkill("buka whatsapp kirim pesan", steps)
+        val result = store.findSkill("buka whatsapp kirim pesan")
+        assertNotNull(result)
     }
 }

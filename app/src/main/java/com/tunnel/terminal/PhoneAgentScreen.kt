@@ -66,7 +66,7 @@ fun PhoneAgentScreen(
     LaunchedEffect(Unit) {
         while (true) {
             a11yEnabled = AgentAccessibilityService.isRunning()
-            kotlinx.coroutines.delay(2000)
+            kotlinx.coroutines.delay(3000)
         }
     }
 
@@ -102,6 +102,7 @@ fun PhoneAgentScreen(
                     is AgentActionExecutor.AgentEvent.Error -> {
                         logEntries.add(0, "❌ ${event.message}" to Color(0xFFFF5252))
                         isRunning = false
+                        isPaused = false
                     }
                 }
                 // Auto-scroll to top (newest)
@@ -118,7 +119,10 @@ fun PhoneAgentScreen(
     }
 
     AlertDialog(
-        onDismissRequest = onDismiss,
+        onDismissRequest = {
+            executor?.cancel()
+            onDismiss()
+        },
         modifier = Modifier.fillMaxSize(0.95f).background(theme.uiBg, RoundedCornerShape(8.dp)),
         title = {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -312,7 +316,10 @@ fun PhoneAgentScreen(
             }
         },
         confirmButton = {
-            TextButton(onClick = onDismiss) {
+            TextButton(onClick = {
+                executor?.cancel()
+                onDismiss()
+            }) {
                 Text("Close", color = theme.uiAccent, fontFamily = FontFamily.Monospace)
             }
         }
@@ -373,7 +380,16 @@ private fun startTask(
     isRunning(true)
     isPaused(false)
     scope.launch {
-        val result = executor.executeTask(goal)
-        logEntries.add(0, "📋 Result: $result" to Color(0xFF2196F3))
+        try {
+            val result = executor.executeTask(goal)
+            logEntries.add(0, "📋 Result: $result" to Color(0xFF2196F3))
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            logEntries.add(0, "❌ ${e.message ?: e.javaClass.simpleName}" to Color(0xFFFF5252))
+        } finally {
+            isRunning(false)
+            isPaused(false)
+        }
     }
 }

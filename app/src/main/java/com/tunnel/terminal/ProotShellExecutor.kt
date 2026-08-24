@@ -50,6 +50,7 @@ class ProotShellExecutor(
     }
 
     override fun processExitMessage(): String {
+        if (closedByClient) return ""
         val uptime = System.currentTimeMillis() - startTime
         return if (uptime in 1 until 2000) {
             buildString {
@@ -57,8 +58,9 @@ class ProotShellExecutor(
                 lastStartError?.let {
                     append("\u001B[33mDetail: $it\u001B[0m\n")
                 }
-                if (!disableSeccomp) {
-                    append("\u001B[33mMencoba ulang dengan PROOT_NO_SECCOMP=1…\u001B[0m\n")
+                if (!disableSeccomp && !bootstrap.getSeccompFallbackEnabled()) {
+                    bootstrap.setSeccompFallbackEnabled(true)
+                    append("\u001B[33mFlag PROOT_NO_SECCOMP disimpan. Tap layar untuk restart dengan fallback.\u001B[0m\n")
                 } else {
                     append("\u001B[33mPROOT_NO_SECCOMP=1 sudah aktif. Cek:\u001B[0m\n")
                     append("\u001B[33m• Library host: libtalloc.so.2 + libandroid-shmem.so di filesDir/linux/lib\u001B[0m\n")
@@ -130,6 +132,7 @@ class ProotShellExecutor(
                 bootstrap.appContext.filesDir, "workspace"
             ).apply { mkdirs() }.absolutePath
 
+            var useNoSeccomp = disableSeccomp || bootstrap.getSeccompFallbackEnabled()
             val envp = mutableListOf(
                 "LD_LIBRARY_PATH=$libPath",
                 "PROOT_TMP_DIR=$tmpHost",
@@ -138,7 +141,7 @@ class ProotShellExecutor(
                 "TERM=xterm-256color",
                 "PATH=/system/bin:/system/xbin:/vendor/bin"
             )
-            if (disableSeccomp) {
+            if (useNoSeccomp) {
                 envp.add("PROOT_NO_SECCOMP=1")
                 Log.i(tag, "Spawn dengan PROOT_NO_SECCOMP=1")
             }
@@ -181,10 +184,13 @@ class ProotShellExecutor(
             if (pid <= 0 || fd < 0) {
                 firstByteLatch = null
                 lastStartError = "createSessionExec pid=$pid fd=$fd"
+                if (!useNoSeccomp) bootstrap.setSeccompFallbackEnabled(true)
                 failStart("Gagal membuat sesi proot (pid=$pid).")
                 emulator.process("\u001B[33m${bootstrap.listRuntimeDiagnostics()}\u001B[0m\n")
-                if (!disableSeccomp) {
-                    emulator.process("\u001B[33mCoba restart — sistem akan retry dengan PROOT_NO_SECCOMP=1.\u001B[0m\n")
+                if (!useNoSeccomp) {
+                    emulator.process(
+                        "\u001B[33mFlag PROOT_NO_SECCOMP disimpan. Tap layar untuk restart dengan fallback.\u001B[0m\n"
+                    )
                 }
                 return@withContext
             }
@@ -199,10 +205,10 @@ class ProotShellExecutor(
             } catch (_: InterruptedException) {
                 Log.w(tag, "Interrupted menunggu proot readiness")
             }
-            /* If already dead, surface diagnostics immediately. */
+            /* If already dead, readLoop already printed processExitMessage
+             * (and persisted the SECCOMP fallback). Do not respawn here. */
             if (!isAlive) {
-                lastStartError = "process exited before first prompt"
-                emulator.process(processExitMessage())
+                lastStartError = lastStartError ?: "process exited before first prompt"
                 triggerScreenUpdate()
                 return@withContext
             }

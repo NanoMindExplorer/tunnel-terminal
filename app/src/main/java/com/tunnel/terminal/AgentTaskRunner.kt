@@ -284,12 +284,12 @@ class AgentTaskRunner(
                             val argsJson = org.json.JSONObject()
                             call.args.forEach { (k, v) -> argsJson.put(k, v) }
                             val text = mcpManager.invokeTool(parts[0], parts[1], argsJson.toString())
-                            text to toolResultLooksSuccessful(text)
+                            text to AiToolResult.looksSuccessful(text)
                         }
                     }
                     else -> {
                         val text = toolExecutor.execute(call)
-                        text to toolResultLooksSuccessful(text)
+                        text to AiToolResult.looksSuccessful(text)
                     }
                 }
 
@@ -335,13 +335,24 @@ class AgentTaskRunner(
         }
         if (call.tool == "delete_file") {
             val path = call.args["path"] ?: ""
-            /* Wave-2: Prefer canonical sandbox check when path is absolute. */
             if (path.startsWith("/")) {
+                val sessionType = toolExecutor.activeSessionType()
+                if (sessionType == "ssh") {
+                    return "Menghapus file remote (SSH): $path"
+                }
                 try {
                     val file = toolExecutor.resolvePathForAccess(path)
-                    val workspace = toolExecutor.workspaceRootFile().canonicalPath
-                    if (!SessionTargetResolver.isPathInside(file.canonicalPath, workspace)) {
-                        return "Menghapus file di luar workspace project: $path"
+                    if (sessionType == "ubuntu") {
+                        val systemPrefix = path == "/" ||
+                            path.startsWith("/etc") || path.startsWith("/usr") ||
+                            path.startsWith("/bin") || path.startsWith("/sbin") ||
+                            path.startsWith("/lib")
+                        if (systemPrefix) return "Menghapus file sistem Ubuntu: $path"
+                    } else {
+                        val workspace = toolExecutor.workspaceRootFile().canonicalPath
+                        if (!SessionTargetResolver.isPathInside(file.canonicalPath, workspace)) {
+                            return "Menghapus file di luar workspace project: $path"
+                        }
                     }
                 } catch (e: Exception) {
                     return "Menghapus file di luar workspace project: $path (${e.message})"
@@ -349,26 +360,6 @@ class AgentTaskRunner(
             }
         }
         return null
-    }
-
-    /**
-     * v9.4.0: Structured success for non-marker tools.
-     * Fail on Error/Ditolak/Exception prefixes and empty failure markers.
-     * Success when starts with OK: or clear positive outcome strings.
-     */
-    private fun toolResultLooksSuccessful(text: String): Boolean {
-        val t = text.trim()
-        if (t.isEmpty()) return false
-        val failPrefixes = listOf(
-            "Error", "ERROR", "Ditolak", "DITOLAK", "MCP error", "MCP invoke error",
-            "Exception", "SecurityException", "failed", "Failed", "FAIL"
-        )
-        if (failPrefixes.any { t.startsWith(it) }) return false
-        if (t.contains("permission denied", ignoreCase = true) && t.startsWith("Error")) return false
-        /* Prefer explicit OK from ToolExecutor. */
-        if (t.startsWith("OK:") || t.startsWith("OK ") || t.startsWith("✓")) return true
-        /* Neutral list/read outputs without Error prefix count as success. */
-        return !t.startsWith("Error:")
     }
 
     /** Eksekusi run_command via MarkerExecutor dengan ExecutionOutcome handling.
