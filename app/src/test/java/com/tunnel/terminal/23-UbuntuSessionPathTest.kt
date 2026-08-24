@@ -60,4 +60,14 @@ class UbuntuSessionPathTest {
         val r = SessionTargetResolver("ubuntu", workspace, rootfs)
         assertEquals("/root", r.guestHome)
     }
+
+    @Test
+    fun `host absolute path under rootfs is not wrapped again`() {
+        val r = SessionTargetResolver("ubuntu", workspace, rootfs)
+        val host = File(rootfs, "root/demo.py")
+        host.parentFile?.mkdirs()
+        host.writeText("ok")
+        val f = r.resolvePhysicalPath(host.absolutePath)
+        assertEquals(host.canonicalPath, f.canonicalPath)
+    }
 }

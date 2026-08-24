@@ -23,8 +23,9 @@ class SkillMemoryStore(context: Context) {
     companion object {
         private const val TAG = "SkillMemoryStore"
         private const val FILE_NAME = "agent_skills.jsonl"
-        private const val SIMILARITY_THRESHOLD = 0.5
-        private const val UPDATE_THRESHOLD = 0.5
+        /* Match comments / private-agent: replay only on strong Jaccard. */
+        private const val SIMILARITY_THRESHOLD = 0.6
+        private const val UPDATE_THRESHOLD = 0.8
         private val STOP_WORDS = setOf(
             "to", "and", "the", "a", "in", "of", "for", "on", "with", "at", "by", "from",
             "go", "turn", "open"
@@ -169,7 +170,7 @@ class SkillMemoryStore(context: Context) {
 
     private fun extractKeywords(text: String): List<String> {
         val words = text.lowercase()
-            .replace(Regex("[^a-z0-9\\s]"), "")
+            .replace(Regex("[^\\p{L}\\p{N}\\s]"), "")
             .split(Regex("\\s+"))
         return words.filter { it.isNotEmpty() && it !in STOP_WORDS }
     }
@@ -180,12 +181,11 @@ class SkillMemoryStore(context: Context) {
         val setB = b.toSet()
         val intersection = setA.intersect(setB).size
         val union = setA.union(setB).size
-        val jaccard = intersection.toDouble() / union
-        // Containment boost: short saved skill should match longer query.
-        val containmentA = intersection.toDouble() / setA.size
-        val containmentB = intersection.toDouble() / setB.size
-        val containment = maxOf(containmentA, containmentB)
-        return maxOf(jaccard, containment)
+        if (union == 0) return 0.0
+        /* Pure Jaccard. A containment boost made "open whatsapp" match
+         * "open whatsapp and send message" at 1.0, so replay opened the
+         * app and marked the whole task complete. */
+        return intersection.toDouble() / union
     }
 
     private fun persist() {

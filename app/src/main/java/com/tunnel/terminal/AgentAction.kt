@@ -32,7 +32,8 @@ data class AgentAction(
                         val keys = paramsObj.keys()
                         while (keys.hasNext()) {
                             val key = keys.next()
-                            map[key] = paramsObj.optString(key)
+                            /* LLM often emits x/y as numbers; optString can yield "". */
+                            map[key] = jsonScalarToString(paramsObj.opt(key))
                         }
                         map
                     } ?: emptyMap(),
@@ -42,6 +43,14 @@ data class AgentAction(
             } catch (e: Exception) {
                 null
             }
+        }
+
+        /** LLM often emits x/y as numbers; JSONObject.optString then yields "". */
+        internal fun jsonScalarToString(value: Any?): String = when (value) {
+            is Number -> value.toString()
+            is Boolean -> value.toString()
+            null, JSONObject.NULL -> ""
+            else -> value.toString()
         }
 
         /** All supported actions in the task loop. */
@@ -112,7 +121,7 @@ data class ActionStep(
                 val keys = paramsObj.keys()
                 while (keys.hasNext()) {
                     val key = keys.next()
-                    params[key] = paramsObj.optString(key)
+                    params[key] = AgentAction.jsonScalarToString(paramsObj.opt(key))
                 }
             }
             return ActionStep(json.optString("action"), params)
@@ -138,7 +147,11 @@ data class SavedSkill(
 ) {
     /** Reliable if at least 1 success AND fail-rate < 30%. */
     val isReliable: Boolean
-        get() = successCount >= 1 && failCount.toDouble() / (successCount + failCount) < 0.3
+        get() {
+            val total = successCount + failCount
+            if (successCount < 1 || total <= 0) return false
+            return failCount.toDouble() / total < 0.3
+        }
 
     fun toJson(): JSONObject {
         return JSONObject()

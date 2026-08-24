@@ -294,19 +294,26 @@ class AgentAccessibilityService : AccessibilityService() {
 
     private fun clickNodeOrParent(node: AccessibilityNodeInfo): Boolean {
         var clickTarget: AccessibilityNodeInfo? = node
-        while (clickTarget != null && !clickTarget.isClickable) {
-            clickTarget = clickTarget.parent
-        }
-        if (clickTarget?.performAction(AccessibilityNodeInfo.ACTION_CLICK) == true) {
-            return true
-        }
+        val acquiredParents = mutableListOf<AccessibilityNodeInfo>()
+        try {
+            while (clickTarget != null && !clickTarget.isClickable) {
+                val parent = clickTarget.parent
+                if (parent != null) acquiredParents.add(parent)
+                clickTarget = parent
+            }
+            if (clickTarget?.performAction(AccessibilityNodeInfo.ACTION_CLICK) == true) {
+                return true
+            }
 
-        val rect = Rect()
-        node.getBoundsInScreen(rect)
-        return !rect.isEmpty && clickAtCoordinates(
-            rect.centerX().toFloat(),
-            rect.centerY().toFloat()
-        )
+            val rect = Rect()
+            node.getBoundsInScreen(rect)
+            return !rect.isEmpty && clickAtCoordinates(
+                rect.centerX().toFloat(),
+                rect.centerY().toFloat()
+            )
+        } finally {
+            acquiredParents.forEach { it.recycle() }
+        }
     }
 
     /** Click at specific coordinates using gesture. */
@@ -321,6 +328,7 @@ class AgentAccessibilityService : AccessibilityService() {
 
     /** Type text into the first (or hinted) editable field. */
     fun typeText(text: String, fieldHint: String? = null): Boolean {
+        if (text.isEmpty()) return false
         for (window in windows) {
             val root = window.root ?: continue
             if (root.packageName?.toString() == ownPackageName) {
@@ -344,6 +352,7 @@ class AgentAccessibilityService : AccessibilityService() {
                     AccessibilityNodeInfo.ACTION_SET_TEXT,
                     args
                 )
+                if (editNode !== root) editNode.recycle()
                 root.recycle()
                 return success
             }
@@ -433,7 +442,10 @@ class AgentAccessibilityService : AccessibilityService() {
         for (i in 0 until node.childCount) {
             val child = node.getChild(i) ?: continue
             val found = findEditableNode(child, hint)
-            if (found != null) return found
+            if (found != null) {
+                if (found !== child) child.recycle()
+                return found
+            }
             child.recycle()
         }
         return null
@@ -480,7 +492,10 @@ class AgentAccessibilityService : AccessibilityService() {
         for (i in 0 until node.childCount) {
             val child = node.getChild(i) ?: continue
             val found = findScrollableNode(child, targetText)
-            if (found != null) return found
+            if (found != null) {
+                if (found !== child) child.recycle()
+                return found
+            }
             child.recycle()
         }
         return null

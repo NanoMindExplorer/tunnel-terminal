@@ -2503,9 +2503,18 @@ class MainActivity : ComponentActivity() {
                 val emu = activeExecutor.emulator
                 val ansiCode: String = when (key) {
                     "ESC" -> "\u001B"
-                    "TAB" -> "\t"
-                    "↑" -> emu.cursorKey('A')
-                    "↓" -> emu.cursorKey('B')
+                    "TAB" -> {
+                        imeLineCursorAtEnd = false
+                        "\t"
+                    }
+                    "↑" -> {
+                        imeLineCursorAtEnd = false
+                        emu.cursorKey('A')
+                    }
+                    "↓" -> {
+                        imeLineCursorAtEnd = false
+                        emu.cursorKey('B')
+                    }
                     "→" -> {
                         /* Moving right may still not be at EOL — only End/^E sets true. */
                         imeLineCursorAtEnd = false
@@ -2857,7 +2866,12 @@ class MainActivity : ComponentActivity() {
             /**
              * v9.4.0: Delegate to [TerminalInputController] (unit-testable).
              */
-            fun applyImeValueChange(newValue: String) {
+            fun applyImeValueChange(tv: TextFieldValue) {
+                val newValue = tv.text
+                if (!newValue.contains('\n') && !newValue.contains('\r')) {
+                    /* One-shot: hardware Enter / ImeAction.Go must not skip the next line. */
+                    enterHandledByKeyEvent = false
+                }
                 val controller = TerminalInputController(
                     sessionType = { activeExecutor.sessionType },
                     getBuffer = { activeExecutor.currentCommandBuffer },
@@ -2884,14 +2898,18 @@ class MainActivity : ComponentActivity() {
                     setImeLast = { imeFieldLast = it },
                     pinIme = { t ->
                         imeFieldLast = t
-                        imeFieldValue = TextFieldValue(t, selection = TextRange(t.length))
+                        imeFieldValue = if (t == tv.text) {
+                            /* Keep composition so the IME does not drop prior glyphs. */
+                            tv.copy(selection = TextRange(t.length))
+                        } else {
+                            TextFieldValue(t, selection = TextRange(t.length))
+                        }
                     },
                     onEnterLine = { line -> processInput(line) },
                     isEnterHandledByKey = { enterHandledByKeyEvent },
                     clearEnterHandled = { enterHandledByKeyEvent = false }
                 )
                 controller.onImeTextChange(newValue)
-                pinImeCaretToEnd()
             }
 
             /* Wave-27: ASCII, no autocorrect/suggestions — fewer IME replace/shrink glitches.
@@ -2905,12 +2923,13 @@ class MainActivity : ComponentActivity() {
             )
             val terminalImeKeyboardActions = KeyboardActions(
                 onGo = {
-                    /* Soft-keyboard Enter (maxLines=1) — same as Key.Enter path. */
+                    /* Soft-keyboard Enter (maxLines=1). Keep the flag set so a
+                     * following onValueChange("…\n") does not submit twice. */
+                    if (enterHandledByKeyEvent) return@KeyboardActions
                     enterHandledByKeyEvent = true
                     processInput(activeExecutor.currentCommandBuffer + "\n")
                     activeExecutor.currentCommandBuffer = ""
                     clearImeLine()
-                    enterHandledByKeyEvent = false
                 }
             )
 
@@ -3028,6 +3047,12 @@ class MainActivity : ComponentActivity() {
                                 else -> '\u0000'
                             }
                             if (ch != '\u0000') {
+                                if (ch.code == 1) imeLineCursorAtEnd = false
+                                if (ch.code == 5) imeLineCursorAtEnd = true
+                                if (ch.code == 3 || ch.code == 21 || ch.code == 26) {
+                                    activeExecutor.currentCommandBuffer = ""
+                                    clearImeLine()
+                                }
                                 activeExecutor.writeRaw(ch.toString())
                                 return true
                             }
@@ -3066,11 +3091,17 @@ class MainActivity : ComponentActivity() {
                         syncImeLine(activeExecutor.currentCommandBuffer)
                         return true
                     }
-                    Key.Tab -> { activeExecutor.writeRaw("\t"); return true }
+                    Key.Tab -> {
+                        imeLineCursorAtEnd = false
+                        activeExecutor.writeRaw("\t")
+                        return true
+                    }
                     Key.DirectionUp -> {
+                        imeLineCursorAtEnd = false
                         activeExecutor.writeRaw(activeExecutor.emulator.cursorKey('A')); return true
                     }
                     Key.DirectionDown -> {
+                        imeLineCursorAtEnd = false
                         activeExecutor.writeRaw(activeExecutor.emulator.cursorKey('B')); return true
                     }
                     Key.DirectionRight -> {
@@ -3212,9 +3243,7 @@ class MainActivity : ComponentActivity() {
                                 BasicTextField(
                                     value = imeFieldValue,
                                     onValueChange = { tv ->
-                                        applyImeValueChange(tv.text)
-                                        /* Re-pin caret to end even if IME tried selection at 0. */
-                                        pinImeCaretToEnd()
+                                        applyImeValueChange(tv)
                                     },
                                     textStyle = TextStyle(color = Color.Transparent),
                                     cursorBrush = SolidColor(Color.Transparent),
@@ -3303,8 +3332,7 @@ class MainActivity : ComponentActivity() {
                             BasicTextField(
                                 value = imeFieldValue,
                                 onValueChange = { tv ->
-                                    applyImeValueChange(tv.text)
-                                    pinImeCaretToEnd()
+                                    applyImeValueChange(tv)
                                 },
                                 textStyle = TextStyle(color = Color.Transparent),
                                 cursorBrush = SolidColor(Color.Transparent),
@@ -3361,8 +3389,7 @@ class MainActivity : ComponentActivity() {
                         BasicTextField(
                             value = imeFieldValue,
                             onValueChange = { tv ->
-                                applyImeValueChange(tv.text)
-                                pinImeCaretToEnd()
+                                applyImeValueChange(tv)
                             },
                             textStyle = TextStyle(color = Color.Transparent),
                             cursorBrush = SolidColor(Color.Transparent),

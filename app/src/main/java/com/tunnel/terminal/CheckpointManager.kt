@@ -89,12 +89,7 @@ class CheckpointManager(private val context: Context) {
         // v9.1.0 fix (C-2): Tambah hash prefix ke sanitized filename untuk mencegah
         // collision antara paths yang share last 100 chars. Hash dari full path
         // menjamin uniqueness; sanitized name tetap untuk readability.
-        val sanitizedPath = filePath.replace("/", "_").replace("\\", "_").takeLast(80)
-        val pathHash = java.security.MessageDigest.getInstance("SHA-256")
-            .digest(filePath.toByteArray())
-            .joinToString("") { "%02x".format(it) }
-            .take(16)
-        val snapshotFile = File(turnDir, "${pathHash}_${sanitizedPath}")
+        val snapshotFile = File(turnDir, snapshotFileName(filePath))
         try {
             file.copyTo(snapshotFile, overwrite = true)
         } catch (e: Exception) {
@@ -141,11 +136,10 @@ class CheckpointManager(private val context: Context) {
      */
     fun restore(checkpoint: Checkpoint): Boolean {
         val file = File(checkpoint.filePath)
-        val sanitizedPath = checkpoint.filePath.replace("/", "_").replace("\\", "_").takeLast(100)
-        val snapshotFile = File(checkpoint.checkpointDir, sanitizedPath)
+        val snapshotFile = snapshotFileFor(checkpoint.filePath, checkpoint.checkpointDir)
 
-        if (!snapshotFile.exists()) {
-            Log.w(TAG, "Snapshot file tidak ditemukan: ${snapshotFile.absolutePath}")
+        if (snapshotFile == null || !snapshotFile.exists()) {
+            Log.w(TAG, "Snapshot file tidak ditemukan di ${checkpoint.checkpointDir.absolutePath}")
             return false
         }
 
@@ -161,6 +155,21 @@ class CheckpointManager(private val context: Context) {
             Log.e(TAG, "Gagal restore checkpoint: ${e.message}")
             return false
         }
+    }
+
+    private fun snapshotFileName(filePath: String): String {
+        val sanitizedPath = filePath.replace("/", "_").replace("\\", "_").takeLast(80)
+        val pathHash = java.security.MessageDigest.getInstance("SHA-256")
+            .digest(filePath.toByteArray())
+            .joinToString("") { "%02x".format(it) }
+            .take(16)
+        return "${pathHash}_${sanitizedPath}"
+    }
+
+    private fun snapshotFileFor(filePath: String, dir: File): File? {
+        val expected = File(dir, snapshotFileName(filePath))
+        if (expected.isFile) return expected
+        return dir.listFiles()?.firstOrNull { it.isFile && it.name != "manifest.json" }
     }
 
     /** Clear semua checkpoint (untuk cleanup). */

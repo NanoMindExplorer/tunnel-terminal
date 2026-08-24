@@ -5,8 +5,8 @@ import android.content.Intent
 import android.net.Uri
 import android.util.Log
 import kotlinx.coroutines.*
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.toList
 
 /**
@@ -118,8 +118,9 @@ Rules:
         data class Error(val message: String) : AgentEvent()
     }
 
-    private val _events = MutableStateFlow<AgentEvent?>(null)
-    val events = _events.asStateFlow()
+    /* SharedFlow so UI does not drop rapid steps (StateFlow only kept last). */
+    private val _events = MutableSharedFlow<AgentEvent>(extraBufferCapacity = 64)
+    val events = _events.asSharedFlow()
 
     @Volatile
     private var cancelled = false
@@ -149,31 +150,53 @@ Rules:
      * @return Success/failure summary string
      */
     suspend fun executeTask(userGoal: String, useUbuntu: Boolean = false): String {
+        val previous = job
+        if (previous?.isActive == true) {
+            cancelled = true
+            previous.cancel()
+            try {
+                previous.join()
+            } catch (_: Exception) {
+            }
+        }
         cancelled = false
         paused = false
+        job = currentCoroutineContext()[Job]
 
+        try {
+            return executeTaskInner(userGoal)
+        } catch (e: CancellationException) {
+            if (!cancelled) throw e
+            _events.tryEmit(AgentEvent.Complete(false, "Task cancelled by user."))
+            return "Task cancelled by user."
+        } finally {
+            if (job === currentCoroutineContext()[Job]) job = null
+        }
+    }
+
+    private suspend fun executeTaskInner(userGoal: String): String {
         // 1. Check accessibility service
         if (!AgentAccessibilityService.isRunning()) {
-            _events.value = AgentEvent.Error(
+            _events.emit(AgentEvent.Error(
                 "Accessibility Service is not enabled. Please enable it in Settings → Accessibility → Tunnel Terminal Agent."
-            )
+            ))
             return "Error: Accessibility Service not enabled."
         }
 
         val service = AgentAccessibilityService.instance ?: run {
-            _events.value = AgentEvent.Error("Accessibility Service instance is null.")
+            _events.emit(AgentEvent.Error("Accessibility Service instance is null."))
             return "Error: Service not available."
         }
 
         // 2. Skill memory lookup
         val existingSkill = skillMemoryStore.findSkill(userGoal)
         if (existingSkill != null && existingSkill.isReliable) {
-            _events.value = AgentEvent.SkillReplay(existingSkill.task, 0, existingSkill.steps.size)
+            _events.emit(AgentEvent.SkillReplay(existingSkill.task, 0, existingSkill.steps.size))
             val replayResult = replaySkill(service, existingSkill)
             if (replayResult) {
                 taskHistoryLogger.logTask(userGoal, "Success", 0, existingSkill.steps.size,
                     listOf("Skill replayed: ${existingSkill.task}"))
-                _events.value = AgentEvent.Complete(true, "Task completed via skill replay: ${existingSkill.task}")
+                _events.emit(AgentEvent.Complete(true, "Task completed via skill replay: ${existingSkill.task}"))
                 return "Task completed via saved skill: ${existingSkill.task}"
             } else {
                 skillMemoryStore.recordFailure(existingSkill.id)
@@ -188,7 +211,7 @@ Rules:
             if (shortcutResult) {
                 taskHistoryLogger.logTask(userGoal, "Success", 0, shortcut.size,
                     listOf("Navigation shortcut: ${shortcut.size} steps"))
-                _events.value = AgentEvent.Complete(true, "Task completed via shortcut")
+                _events.emit(AgentEvent.Complete(true, "Task completed via shortcut"))
                 return "Task completed via shortcut."
             }
         }
@@ -235,7 +258,7 @@ Rules:
                 "Error reading screen."
             }
 
-            _events.value = AgentEvent.ScreenRead(screenContent.take(500))
+            _events.emit(AgentEvent.ScreenRead(screenContent.take(500)))
             results.add("Step $step: Screen read (${screenContent.length} chars)")
 
             // Build prompt
@@ -276,9 +299,11 @@ Rules:
             // Check completion
             if (agentAction.isComplete || agentAction.action == "done") {
                 results.add("Step $step: Task complete — ${agentAction.reasoning}")
-                skillMemoryStore.saveSkill(userGoal, executedSteps)
+                if (executedSteps.isNotEmpty()) {
+                    skillMemoryStore.saveSkill(userGoal, executedSteps)
+                }
                 taskHistoryLogger.logTask(userGoal, "Success", totalTokens, step, results)
-                _events.value = AgentEvent.Complete(true, agentAction.reasoning)
+                _events.emit(AgentEvent.Complete(true, agentAction.reasoning))
                 return "Task completed: ${agentAction.reasoning}"
             }
 
@@ -291,7 +316,7 @@ Rules:
                 continue
             }
 
-            _events.value = AgentEvent.Step(step, MAX_STEPS, agentAction.action, agentAction.reasoning)
+            _events.emit(AgentEvent.Step(step, MAX_STEPS, agentAction.action, agentAction.reasoning))
 
             // Repeat-limit enforcement
             if (agentAction.action == lastAction) {
@@ -299,8 +324,9 @@ Rules:
                 val limit = getRepeatLimit(agentAction.action)
                 if (sameActionCount > limit) {
                     results.add("Step $step: Repeat limit ($limit) exceeded for ${agentAction.action}")
-                    consecutiveFailures = 3
+                    consecutiveFailures++
                     lastAction = agentAction.action
+                    if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) break
                     continue
                 }
             } else {
@@ -309,7 +335,7 @@ Rules:
 
             // Execute action
             val success = executeAction(service, agentAction)
-            _events.value = AgentEvent.ActionResult(agentAction.action, success, agentAction.displayText)
+            _events.emit(AgentEvent.ActionResult(agentAction.action, success, agentAction.displayText))
 
             if (success) {
                 consecutiveFailures = 0
@@ -334,7 +360,7 @@ Rules:
 
                 // Recovery engine
                 val recovery = RecoveryEngine().diagnose(agentAction.action, screenContent)
-                _events.value = AgentEvent.Recovery(recovery.description)
+                _events.emit(AgentEvent.Recovery(recovery.description))
                 results.add("Recovery: ${recovery.description}")
 
                 when (recovery.action) {
@@ -357,7 +383,7 @@ Rules:
         }
 
         taskHistoryLogger.logTask(userGoal, if (cancelled) "Cancelled" else "Failed", totalTokens, step, results)
-        _events.value = AgentEvent.Complete(false, summary)
+        _events.emit(AgentEvent.Complete(false, summary))
         return summary
     }
 
@@ -365,16 +391,21 @@ Rules:
     private fun executeAction(service: AgentAccessibilityService, action: AgentAction): Boolean {
         return try {
             when (action.action) {
-                "click_text" -> service.clickByText(action.params["text"] ?: "")
-                "click_at" -> {
-                    val x = action.params["x"]?.toFloatOrNull() ?: 0f
-                    val y = action.params["y"]?.toFloatOrNull() ?: 0f
-                    if (x > 0 && y > 0) service.clickAtCoordinates(x, y) else false
+                "click_text" -> {
+                    val t = action.params["text"].orEmpty()
+                    if (t.isBlank()) false else service.clickByText(t)
                 }
-                "type_text" -> service.typeText(
-                    action.params["text"] ?: "",
-                    action.params["field_hint"]
-                )
+                "click_at" -> {
+                    val x = action.params["x"]?.toFloatOrNull()
+                    val y = action.params["y"]?.toFloatOrNull()
+                    if (x != null && y != null && x >= 0f && y >= 0f) {
+                        service.clickAtCoordinates(x, y)
+                    } else false
+                }
+                "type_text" -> {
+                    val typed = action.params["text"].orEmpty()
+                    if (typed.isEmpty()) false else service.typeText(typed, action.params["field_hint"])
+                }
                 "press_enter" -> service.pressEnter()
                 "scroll" -> service.scroll(action.params["direction"] ?: "down")
                 "swipe" -> {
@@ -399,36 +430,35 @@ Rules:
         }
     }
 
-    /** Open an app by name using Intent. */
+    /** Open an app by name using Intent. Never treat "not installed" as success. */
     private fun openApp(appName: String): Boolean {
+        val trimmed = appName.trim()
+        if (trimmed.isEmpty()) return false
         return try {
             val pm = context.packageManager
-            val intent = pm.getLaunchIntentForPackage(appName)
-            if (intent != null) {
-                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                context.startActivity(intent)
-                true
-            } else {
-                // Try to match by label
-                val apps = pm.getInstalledApplications(0)
-                val match = apps.find {
-                    pm.getApplicationLabel(it).toString().equals(appName, ignoreCase = true)
-                }
-                if (match != null) {
-                    val launchIntent = pm.getLaunchIntentForPackage(match.packageName)
-                    launchIntent?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    context.startActivity(launchIntent)
-                    true
-                } else {
-                    // Fallback: open Play Store search
-                    val playIntent = Intent(Intent.ACTION_VIEW, Uri.parse("market://search?q=$appName"))
-                    playIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    context.startActivity(playIntent)
-                    true
-                }
+            val direct = pm.getLaunchIntentForPackage(trimmed)
+            if (direct != null) {
+                direct.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                context.startActivity(direct)
+                return true
             }
+            val apps = pm.getInstalledApplications(0)
+            val match = apps.find {
+                pm.getApplicationLabel(it).toString().equals(trimmed, ignoreCase = true)
+            } ?: run {
+                Log.w(TAG, "App not installed: $trimmed")
+                return false
+            }
+            val launchIntent = pm.getLaunchIntentForPackage(match.packageName)
+            if (launchIntent == null) {
+                Log.w(TAG, "No launch intent for $trimmed (${match.packageName})")
+                return false
+            }
+            launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            context.startActivity(launchIntent)
+            true
         } catch (e: Exception) {
-            Log.w(TAG, "Failed to open app '$appName': ${e.message}")
+            Log.w(TAG, "Failed to open app '$trimmed': ${e.message}")
             false
         }
     }
@@ -437,7 +467,7 @@ Rules:
     private suspend fun replaySkill(service: AgentAccessibilityService, skill: SavedSkill): Boolean {
         for ((index, step) in skill.steps.withIndex()) {
             if (cancelled) return false
-            _events.value = AgentEvent.SkillReplay(skill.task, index + 1, skill.steps.size)
+            _events.emit(AgentEvent.SkillReplay(skill.task, index + 1, skill.steps.size))
 
             // Adaptive delay
             delay(getDelay(step.action))
@@ -514,11 +544,21 @@ Rules:
             )
         }
 
-        // Simple "open X" — app launch shortcut
-        val openMatch = Regex("^open\\s+([a-zA-Z0-9 ]+)", RegexOption.IGNORE_CASE).find(goal)
+        /* Only a bare "open AppName" is a shortcut. "open WhatsApp and send …"
+         * must go through the AI loop — otherwise we mark the whole task done. */
+        val openMatch = Regex(
+            "^open\\s+([A-Za-z0-9][A-Za-z0-9+._ -]{0,40}?)\\s*$",
+            RegexOption.IGNORE_CASE
+        ).find(goal.trim())
         if (openMatch != null) {
             val appName = openMatch.groupValues[1].trim()
-            return listOf(ActionStep("open_app", mapOf("app_name" to appName)))
+            val words = appName.split(Regex("\\s+")).filter { it.isNotEmpty() }
+            val looksCompound = appName.contains(" and ", ignoreCase = true) ||
+                appName.contains(" then ", ignoreCase = true) ||
+                words.size > 3
+            if (appName.isNotEmpty() && !looksCompound) {
+                return listOf(ActionStep("open_app", mapOf("app_name" to appName)))
+            }
         }
 
         return null

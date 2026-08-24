@@ -10,6 +10,14 @@ import org.junit.Before
  */
 class AgentActionTest {
 
+    @Test fun `fromJson parses numeric click_at params`() {
+        val json = """{"action":"click_at","params":{"x":540,"y":960.5},"reasoning":"tap","is_complete":false}"""
+        val action = AgentAction.fromJson(json)
+        assertNotNull(action)
+        assertEquals("540", action!!.params["x"])
+        assertEquals("960.5", action.params["y"])
+    }
+
     @Test fun `fromJson parses valid JSON`() {
         val json = """{"action":"click_text","params":{"text":"OK"},"reasoning":"click button","is_complete":false}"""
         val action = AgentAction.fromJson(json)
@@ -169,6 +177,15 @@ class AgentActionTest {
         val restored = ActionStep.fromJson(json)
         assertEquals(step.action, restored.action)
         assertEquals(step.params["text"], restored.params["text"])
+    }
+
+    @Test fun `ActionStep fromJson keeps numeric click_at params`() {
+        val json = org.json.JSONObject(
+            """{"action":"click_at","params":{"x":540,"y":960.5}}"""
+        )
+        val step = ActionStep.fromJson(json)
+        assertEquals("540", step.params["x"])
+        assertEquals("960.5", step.params["y"])
     }
 
     // ─── SavedSkill tests ───

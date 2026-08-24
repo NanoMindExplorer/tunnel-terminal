@@ -162,15 +162,29 @@ object TarGzipRootfsExtractor {
     private fun writeSymlink(dest: File, target: String) {
         dest.parentFile?.let { ensureDir(it, ownerWritable = true) }
         if (dest.exists()) {
-            if (dest.isDirectory) {
-                /* Do not replace a real directory with a symlink. */
-                return
+            val isSymlink = try {
+                Files.isSymbolicLink(dest.toPath())
+            } catch (_: Throwable) {
+                false
             }
-            dest.delete()
+            if (dest.isDirectory && !isSymlink) {
+                val children = dest.list()
+                if (children != null && children.isNotEmpty()) {
+                    /* Populated dir — keep contents; do not replace with a link. */
+                    return
+                }
+                dest.delete()
+            } else {
+                dest.delete()
+            }
         }
-        /* Prefer NIO (works on host unit tests + Android 26+); Os.symlink for older API. */
+        /* Store the tar link target verbatim. File(target).toPath() would resolve a
+         * relative "usr/bin" against the JVM cwd and break Ubuntu usr-merge
+         * (bin → /usr/bin on the host, guest loader missing → proot dies in ~20ms). */
+        val destPath = dest.toPath()
+        val targetPath = destPath.fileSystem.getPath(target)
         try {
-            Files.createSymbolicLink(dest.toPath(), File(target).toPath())
+            Files.createSymbolicLink(destPath, targetPath)
             return
         } catch (_: Throwable) {
         }
@@ -355,9 +369,11 @@ object TarGzipRootfsExtractor {
             if (f.isFile) chmodBestEffort(f, 0x1ED)
         }
 
-        /* Host-side proot + libs must be executable by the app. */
+        /* Host-side proot must stay 0555 — 0755 is owner-writable and hits W^X EACCES 13. */
         if (prootBin != null && prootBin.isFile) {
-            chmodBestEffort(prootBin, 0x1ED)
+            chmodBestEffort(prootBin, 0x16D)
+            prootBin.setReadable(true, false)
+            prootBin.setWritable(false, false)
             prootBin.setExecutable(true, false)
         }
         if (libDir != null && libDir.isDirectory) {

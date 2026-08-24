@@ -25,9 +25,9 @@ Thumbs.db
 .cxx/
 .externalNativeBuild/
 
-# Phase 41 fix (CRIT-03): proot binary — obtain manually, lihat
-# app/src/main/assets/proot/README.md untuk cara mendapatkannya.
-# Jangan commit binary native ke repo publik (lisensi + ukuran).
+# Phase 41 / v9.5.6: proot binary lives under the full flavor.
+# obtain-proot.sh writes here; do not add *new* untracked native blobs.
+# Already-tracked files under app/src/full/assets/proot/ stay in git.
 app/src/main/assets/proot/proot
 app/src/main/assets/proot/*.so
 app/src/main/assets/proot/*.so.*
