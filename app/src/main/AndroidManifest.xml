@@ -1,12 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- Foreground service permissions (basic + typed for Android 14+) -->
+    <!-- ── Keep-alive (anti-kill) ──────────────────────────────── -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
-    <!-- Storage permissions (legacy, for older Android; SAF is preferred on 11+) -->
+    <!-- ── Storage (legacy + SAF + optional all-files) ─────────── -->
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
         android:maxSdkVersion="32" />
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
@@ -14,24 +18,37 @@
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
     <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
     <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
-    <!-- Wave-19: optional all-files access so shell can use real /sdcard paths after user grants it -->
+    <uses-permission android:name="android.permission.READ_MEDIA_VISUAL_USER_SELECTED" />
     <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
 
-    <!-- Network permission for AI API calls -->
+    <!-- ── Network (AI, SSH, MCP, Ubuntu download) ─────────────── -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
 
-    <!-- Wave-10: short haptic when long AI response finishes -->
+    <!-- ── UX ──────────────────────────────────────────────────── -->
     <uses-permission android:name="android.permission.VIBRATE" />
 
-    <!-- v9.5.0 Phase 1: Agent Mode — Accessibility Service for UI automation -->
-    <!-- No extra permission needed — BIND_ACCESSIBILITY_SERVICE is declared on the service itself -->
+    <!-- Phone Agent: resolve launcher labels without QUERY_ALL_PACKAGES (Play-safe). -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="https" />
+        </intent>
+    </queries>
 
     <application
         android:name=".TunnelApp"
         android:allowBackup="false"
         android:icon="@mipmap/ic_launcher"
         android:label="Tunnel Terminal"
+        android:largeHeap="true"
+        android:networkSecurityConfig="@xml/network_security_config"
+        android:requestLegacyExternalStorage="true"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@style/Theme.TunnelTerminal">
@@ -39,9 +56,13 @@
         <service
             android:name=".TerminalForegroundService"
             android:exported="false"
-            android:foregroundServiceType="dataSync" />
+            android:foregroundServiceType="dataSync|specialUse"
+            android:stopWithTask="false">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Persistent PTY, SSH, and Linux (proot) terminal sessions that must stay alive while the user switches apps." />
+        </service>
 
-        <!-- v9.5.0 Phase 1: Agent Accessibility Service -->
         <service
             android:name=".AgentAccessibilityService"
             android:exported="false"
@@ -54,6 +75,16 @@
                 android:name="android.accessibilityservice"
                 android:resource="@xml/agent_accessibility_service_config" />
         </service>
+
+        <receiver
+            android:name=".BootKeepAliveReceiver"
+            android:enabled="true"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.QUICKBOOT_POWERON" />
+            </intent-filter>
+        </receiver>
 
         <activity
             android:name=".MainActivity"

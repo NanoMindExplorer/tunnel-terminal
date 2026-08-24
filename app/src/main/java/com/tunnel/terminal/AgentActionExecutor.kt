@@ -453,17 +453,18 @@ Rules:
                 context.startActivity(direct)
                 return true
             }
-            val apps = pm.getInstalledApplications(0)
-            val match = apps.find {
-                pm.getApplicationLabel(it).toString().equals(trimmed, ignoreCase = true)
-            } ?: apps.filter {
-                val label = pm.getApplicationLabel(it).toString()
-                trimmed.length >= 3 && label.contains(trimmed, ignoreCase = true)
-            }.minByOrNull { pm.getApplicationLabel(it).length } ?: run {
+            val launcher = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+            val resolved = pm.queryIntentActivities(launcher, 0)
+            val matchInfo = resolved.find {
+                it.loadLabel(pm).toString().equals(trimmed, ignoreCase = true)
+            } ?: resolved.filter {
+                trimmed.length >= 3 && it.loadLabel(pm).toString().contains(trimmed, ignoreCase = true)
+            }.minByOrNull { it.loadLabel(pm).length }
+            if (matchInfo == null) {
                 Log.w(TAG, "App not installed: $trimmed")
                 return false
             }
-            val launchIntent = pm.getLaunchIntentForPackage(match.packageName)
+            val launchIntent = pm.getLaunchIntentForPackage(matchInfo.activityInfo.packageName)
             if (launchIntent == null) {
                 Log.w(TAG, "No launch intent for $trimmed (${match.packageName})")
                 return false
