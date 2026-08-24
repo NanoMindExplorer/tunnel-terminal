@@ -5,20 +5,22 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
+import android.os.PowerManager
+import android.util.Log
 import androidx.core.app.NotificationCompat
+import androidx.core.app.ServiceCompat
 
 /**
- * TerminalForegroundService - Foreground service agar shell tetap hidup
- * saat app di-background (anti-kill oleh OS).
+ * Foreground service so PTY / SSH / Ubuntu stay alive in the background.
  *
- * Phase 17:
- * - Notification dengan action "Stop" agar user bisa stop service manual
- * - PendingIntent ke MainActivity agar notifikasi bisa dibuka
- * - Type `dataSync` untuk Android < 14, `specialUse` opsional untuk 14+
- *
- * Foreground service keeping shell alive when app is backgrounded.
+ * v9.5.8:
+ *  - WAKE_LOCK (partial) so the CPU is not frozen under Doze
+ *  - FGS type dataSync|specialUse — Android 15 caps dataSync at 6h
+ *  - stopWithTask=false + restart after swipe-from-recents
+ *  - START_STICKY
  */
 class TerminalForegroundService : Service() {
 
@@ -29,27 +31,74 @@ class TerminalForegroundService : Service() {
         const val ACTION_UPDATE_SESSIONS = "com.tunnel.terminal.UPDATE_SESSIONS"
         private const val EXTRA_SESSION_COUNT = "session_count"
         private const val EXTRA_SESSION_LABELS = "session_labels"
+        private const val TAG = "TerminalFgs"
+        private const val WAKELOCK_TAG = "TunnelTerminal:Fgs"
     }
 
-    /* v8.6.0 fix (M9): Track session labels untuk per-session notification.
-     * Sebelumnya: notification text static "Sesi terminal berjalan di latar belakang".
-     * Sekarang: "3 sessions: local, SSH user@host, Ubuntu" — user tahu apa yang aktif. */
     @Volatile
     private var sessionCount: Int = 0
     @Volatile
     private var sessionLabels: List<String> = emptyList()
 
+    private var wakeLock: PowerManager.WakeLock? = null
+
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
-        /* C2 fix: Gunakan startForeground dengan FOREGROUND_SERVICE_TYPE_DATA_SYNC
-         * untuk Android 14+ (targetSdk=34). Tanpa type → crash di beberapa OEM. */
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            startForeground(NOTIFICATION_ID, buildNotification(),
-                android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
-        } else {
-            startForeground(NOTIFICATION_ID, buildNotification())
+        acquireWakeLock()
+        val notification = buildNotification()
+        val types = foregroundTypes()
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                ServiceCompat.startForeground(
+                    this, NOTIFICATION_ID, notification, types
+                )
+            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                startForeground(
+                    NOTIFICATION_ID, notification,
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+                )
+            } else {
+                startForeground(NOTIFICATION_ID, notification)
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "startForeground typed failed, fallback: ${e.message}")
+            try {
+                startForeground(NOTIFICATION_ID, notification)
+            } catch (e2: Exception) {
+                Log.e(TAG, "startForeground failed: ${e2.message}")
+            }
         }
+    }
+
+    private fun foregroundTypes(): Int {
+        var types = ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            types = types or ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+        }
+        return types
+    }
+
+    private fun acquireWakeLock() {
+        if (wakeLock?.isHeld == true) return
+        try {
+            val pm = getSystemService(POWER_SERVICE) as PowerManager
+            wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, WAKELOCK_TAG).apply {
+                setReferenceCounted(false)
+                acquire()
+            }
+            Log.i(TAG, "PARTIAL_WAKE_LOCK acquired")
+        } catch (e: Exception) {
+            Log.w(TAG, "WAKE_LOCK gagal: ${e.message}")
+        }
+    }
+
+    private fun releaseWakeLock() {
+        try {
+            if (wakeLock?.isHeld == true) wakeLock?.release()
+        } catch (_: Exception) {
+        }
+        wakeLock = null
     }
 
     private fun buildNotification(): android.app.Notification {
@@ -69,9 +118,6 @@ class TerminalForegroundService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        /* v8.6.0 fix (M9): Per-session notification text.
-         * v9.3.0 fix (H-8): Use sessionCount (actual) not sessionLabels.size (capped).
-         * Show "+N more" when labels truncated. */
         val contentText = if (sessionCount > 0) {
             val shown = sessionLabels.joinToString(", ")
             if (sessionCount == 1) {
@@ -90,17 +136,17 @@ class TerminalForegroundService : Service() {
             .setContentTitle("Tunnel Terminal Aktif")
             .setContentText(contentText)
             .setSmallIcon(android.R.drawable.ic_dialog_info)
-            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
             .setOngoing(true)
+            .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
             .setContentIntent(openPi)
             .addAction(android.R.drawable.ic_menu_close_clear_cancel, "Stop", stopPi)
             .build()
     }
 
-    /** v8.6.0 fix (M9): Update notification dengan session labels terbaru. */
     fun updateSessions(count: Int, labels: List<String>) {
         sessionCount = count
-        sessionLabels = labels.take(5)  // cap di 5 supaya notifikasi tidak terlalu panjang
+        sessionLabels = labels.take(5)
         val notification = buildNotification()
         val manager = getSystemService(NotificationManager::class.java)
         manager?.notify(NOTIFICATION_ID, notification)
@@ -111,10 +157,11 @@ class TerminalForegroundService : Service() {
             val channel = NotificationChannel(
                 CHANNEL_ID,
                 "Tunnel Terminal Service",
-                NotificationManager.IMPORTANCE_LOW
+                NotificationManager.IMPORTANCE_DEFAULT
             ).apply {
                 description = "Menjaga sesi terminal tetap aktif di background"
                 setShowBadge(false)
+                setSound(null, null)
             }
             val manager = getSystemService(NotificationManager::class.java)
             manager.createNotificationChannel(channel)
@@ -124,12 +171,12 @@ class TerminalForegroundService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_STOP -> {
+                releaseWakeLock()
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
                 return START_NOT_STICKY
             }
             ACTION_UPDATE_SESSIONS -> {
-                /* v8.6.0 fix (M9): Update notification dengan session info terbaru. */
                 val count = intent.getIntExtra(EXTRA_SESSION_COUNT, 0)
                 val labels = intent.getStringArrayListExtra(EXTRA_SESSION_LABELS) ?: arrayListOf()
                 updateSessions(count, labels)
@@ -141,9 +188,18 @@ class TerminalForegroundService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onTaskRemoved(rootIntent: Intent?) {
-        /* Saat user swipe app dari recents, jangan auto-destroy service
-         * karena shell mungkin masih berjalan.
-         * On swipe from recents, don't auto-destroy (shell may be running). */
+        /* Swipe from recents must not kill the FGS — restart ourselves. */
+        try {
+            KeepAliveManager.startForegroundSafely(applicationContext)
+            Log.i(TAG, "onTaskRemoved — FGS re-asserted")
+        } catch (e: Exception) {
+            Log.w(TAG, "onTaskRemoved restart: ${e.message}")
+        }
         super.onTaskRemoved(rootIntent)
+    }
+
+    override fun onDestroy() {
+        releaseWakeLock()
+        super.onDestroy()
     }
 }

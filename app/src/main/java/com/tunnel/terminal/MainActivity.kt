@@ -452,20 +452,8 @@ class MainActivity : ComponentActivity() {
         /* H1 fix: Request notification permission SETELAH setContent.
          * Old code: requestNotificationPermission() di onCreate sebelum setContent
          * → permission dialog muncul sebelum window siap → crash di beberapa device. */
+        /* v9.5.8: Notifikasi dulu (wajib FGS di API 33+), lalu FGS + battery exemption. */
         requestNotificationPermission()
-
-        /* C2+H2 fix: Start foreground service setelah UI siap + notification permission.
-         * Di Android 13+, startForeground tanpa POST_NOTIFICATIONS permission granted
-         * bisa crash di beberapa OEM. Delay 500ms agar permission dialog selesai. */
-        lifecycleScope.launch {
-            delay(500)
-            try {
-                val serviceIntent = Intent(this@MainActivity, TerminalForegroundService::class.java)
-                startForegroundService(serviceIntent)
-            } catch (_: Exception) {
-                /* Jika gagal, tidak fatal — app tetap jalan tanpa foreground service. */
-            }
-        }
 
         /* Buat tab pertama — HANYA kalau belum ada (Phase 49 F-3: Activity recreate
          * tidak buat tab baru, pakai yang sudah ada di Application scope). */
@@ -1132,7 +1120,13 @@ class MainActivity : ComponentActivity() {
      * Old code: registerForActivityResult di dalam if di method — IllegalStateException risk. */
     private val notifPermLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
-    ) { _ -> }
+    ) { _ ->
+        KeepAliveManager.startForegroundSafely(this)
+        lifecycleScope.launch {
+            delay(800)
+            KeepAliveManager.maybePromptBatteryOnce(this@MainActivity)
+        }
+    }
 
     private fun requestNotificationPermission() {
         if (Build.VERSION.SDK_INT >= 33) {
@@ -1141,7 +1135,13 @@ class MainActivity : ComponentActivity() {
             ) == PackageManager.PERMISSION_GRANTED
             if (!granted) {
                 notifPermLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                return
             }
+        }
+        KeepAliveManager.startForegroundSafely(this)
+        lifecycleScope.launch {
+            delay(800)
+            KeepAliveManager.maybePromptBatteryOnce(this@MainActivity)
         }
     }
 
@@ -1831,6 +1831,15 @@ class MainActivity : ComponentActivity() {
                     }
                 })
                 /* Settings. */
+                add(PaletteItem("keep_alive", "Keep-alive / izin sistem", "Setting", Icons.Default.Shield, PaletteCategory.SETTING) {
+                    shellExecutors.find { it.id == activeExecutorId }?.let { exec ->
+                        exec.emulator.process(
+                            "\u001B[36m${KeepAliveManager.statusReport(this@MainActivity)}\u001B[0m\n"
+                        )
+                        exec.triggerScreenUpdate()
+                    }
+                    KeepAliveManager.maybePromptBatteryOnce(this@MainActivity)
+                })
                 add(PaletteItem("open_settings", "Open AI Settings", "Setting", Icons.Default.Settings, PaletteCategory.SETTING) {
                     openAiPanel(3)
                 })
@@ -2619,6 +2628,7 @@ class MainActivity : ComponentActivity() {
                     StorageCommands.isStorageCommand(cmd) ||
                     cmd == "ssh-reset-hostkeys" || cmd == "ssh-list-hostkeys" ||
                     cmd == "system-info" ||
+                    KeepAlivePolicy.isKeepAliveCommand(cmd) ||
                     cmd == "history" || cmd == "history-clear" ||
                     cmd == "export-output" || cmd == "export-chat" || cmd == "ai-metrics" ||
                     cmd == "font-reset" ||
@@ -2707,6 +2717,20 @@ class MainActivity : ComponentActivity() {
                         exportChat()
                         activeExecutor.emulator.process("\u001B[32m[Export] Chat export requested (see toast).\u001B[0m\n")
                         activeExecutor.triggerScreenUpdate()
+                    }
+                    KeepAlivePolicy.isKeepAliveCommand(cmd) -> {
+                        KeepAliveManager.handleCommand(
+                            cmd = cmd,
+                            activity = this@MainActivity,
+                            print = { msg ->
+                                activeExecutor.emulator.process(msg)
+                                activeExecutor.triggerScreenUpdate()
+                            },
+                            requestNotifications = { requestNotificationPermission() }
+                        )
+                        if (blockMode) {
+                            blockManager.completeRunning("(keep-alive)", CommandBlock.BlockStatus.SUCCESS)
+                        }
                     }
                     cmd == "system-info" -> {
                         val info = SystemInfo.buildMotd(this@MainActivity)
@@ -3768,6 +3792,12 @@ class MainActivity : ComponentActivity() {
         - storage-rm <p>    Hapus file di folder SAF
         - storage-reset     Cabut grant & reset setup
         - system-info       Tampilkan info sistem (MOTD)
+        - izin-status       Status izin notifikasi / baterai / accessibility
+        - keep-alive        Sama dengan izin-status
+        - keep-alive battery   Minta pengecualian optimasi baterai
+        - keep-alive autostart Buka autostart OEM (Xiaomi/Oppo/Vivo/…)
+        - keep-alive notif     Minta izin notifikasi (wajib FGS)
+        - keep-alive boot on|off  Hidupkan FGS setelah reboot
         - open <file>       Edit file di Tunnel Editor UI
         - ssh-list-hostkeys List TOFU fingerprints
         - ssh-reset-hostkeys Reset TOFU host key fingerprints
