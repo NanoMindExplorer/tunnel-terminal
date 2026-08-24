@@ -32,7 +32,8 @@ object TarGzipRootfsExtractor {
         destDir: File,
         onProgress: (percent: Int) -> Unit = {}
     ) {
-        if (!tarball.isFile || tarball.length() < 512) {
+        /* Gzip header is 10+ bytes; the 15MB Ubuntu floor lives in ProotBootstrap. */
+        if (!tarball.isFile || tarball.length() < 18L) {
             throw IOException("Tarball tidak valid: ${tarball.absolutePath}")
         }
         destDir.mkdirs()
