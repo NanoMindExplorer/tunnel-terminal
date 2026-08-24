@@ -466,7 +466,7 @@ Rules:
             }
             val launchIntent = pm.getLaunchIntentForPackage(matchInfo.activityInfo.packageName)
             if (launchIntent == null) {
-                Log.w(TAG, "No launch intent for $trimmed (${match.packageName})")
+                Log.w(TAG, "No launch intent for $trimmed (${matchInfo.activityInfo.packageName})")
                 return false
             }
             launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
